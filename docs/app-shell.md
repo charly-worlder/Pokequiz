@@ -1,64 +1,66 @@
-# App Shell & Navigation
+# App-Shell & Navigation
 
-> The app-wide map of **the frame every feature is shown inside** — navigation, layout regions, and the patterns each page repeats.
+> Die app-weite Karte **des Rahmens, in dem jedes Feature gezeigt wird** — Navigation, Layout-Regionen und die Muster, die jede Seite wiederholt.
 >
-> - Created by `/init` (the first holistic pass: top-level areas + layout).
-> - Refined by `/architecture` as each feature is designed.
-> - **Altitude:** structure, not styling. Which areas exist, where they live, who sees them, what every page shares. Colors, fonts, and component styling belong in `docs/design-system.md`; a single page's internals belong in that feature's `design.md`.
+> - Erstellt von `/init` (der erste ganzheitliche Durchgang: Top-Level-Bereiche + Layout).
+> - Verfeinert von `/architecture`, sobald ein Feature entworfen wird.
+> - **Flughöhe:** Struktur, nicht Gestaltung. Welche Bereiche es gibt, wo sie liegen, wer sie sieht, was jede Seite teilt. Farben, Schriften und Komponenten-Styling gehören in `docs/design-system.md`; die Interna einer einzelnen Seite in das `design.md` ihres Features.
 >
-> Without this map the shell grows by accretion — every feature adds a nav item and a header variant in its own `design.md`, and nobody owns the whole. Rebuilding it later is then expensive, because no acceptance criterion says what it is supposed to do.
+> Ohne diese Karte wächst der Rahmen durch Anlagerung — jedes Feature ergänzt einen Navigationseintrag und eine Kopfzeilen-Variante in seinem eigenen `design.md`, und niemandem gehört das Ganze.
 
-## Owning feature
+## Besitzendes Feature
 
-_The feature whose `spec.md` carries the shell's acceptance criteria (e.g. `PROJ-1 App Shell & Navigation`), or "none — shell is trivial" for a single-screen app. Changes to the shell are refined there, not invented per feature._
+Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen und dem Standard-Auth-Unterschied „Login-Seite vs. App" wäre das Zeremonie. Der Rahmen gehört deshalb zu dem Feature, das den Hauptbildschirm baut.
 
-Owner: _PROJ-X — always a feature: the App Shell feature if one exists, otherwise the feature that builds the screen the frame sits on. Changes to the frame go through `/refine` on this feature._
+**Owner: PROJ-2 — Pokémon-Quiz.** Verhaltensänderungen am Rahmen laufen über `/refine PROJ-2`, nie direkt in das `design.md` eines anderen Features.
 
-## Top-Level Areas
+## Top-Level-Bereiche
 
-_The places a user can navigate to. One row per nav entry — not one row per page._
+| Bereich | Route | Was man dort tut | Sichtbar für | Feature |
+|---------|-------|------------------|--------------|---------|
+| Anmeldung | `/login` | Registrieren oder anmelden | nur ausgeloggt | PROJ-1 |
+| Spiel | `/` | Runde starten, spielen, Ergebnis sehen | nur angemeldet | PROJ-2 |
+| Weltrangliste | `/leaderboard` | Die globale Top-5 ansehen | nur angemeldet | PROJ-3 |
+| Rechtliches | `/privacy`, `/imprint` | Datenschutzerklärung, Impressum | **alle**, auch ausgeloggt | PROJ-4 |
 
-| Area | What the user does there | Visible to | Owning feature |
-|------|--------------------------|------------|----------------|
-| _Dashboard_ | _Overview after login_ | _signed-in users_ | _PROJ-2_ |
-| _..._ | _..._ | _..._ | _..._ |
+**Start, Quiz und Ergebnis bleiben eine Route.** Es ist ein durchgehender Spielfluss; ein Reload mitten in der Runde verliert den Zustand ohnehin, und drei Routen würden vortäuschen, er sei wiederherstellbar. Ob der Fluss intern als Client-State oder anders abgebildet wird, entscheidet `/architecture`.
 
-## Layout Regions
+## Layout-Regionen
 
-_The fixed frame. Name each region and what belongs in it._
+- **Kopfzeile:** durchgehend über allen Screens, leicht transparent mit Blur und dünner Trennlinie nach unten. Links das in CSS gezeichnete Ball-Motiv plus Wortmarke „Pokémon QUIZ". Rechts auth-abhängiger Inhalt (siehe Auth-Zustände).
+- **Inhalt:** füllt die restliche Höhe. Die innere Aufteilung gehört dem jeweiligen Screen.
+- **Fußzeile:** schlank, nur Links zu Datenschutz und Impressum. Auf jeder Seite, auch ausgeloggt.
+- **Mobil (unter `md`, 768px):** kein Burger-Menü. Bei zwei Bereichen passt beides in die Kopfzeile — der Nutzer-Chip reduziert sich unter `sm` auf die Initiale. Die Inhalte stapeln sich von selbst, weil das Design durchgehend `auto-fit / minmax` verwendet.
 
-- **Sidebar:** _the top-level areas, logo at the top, account menu at the bottom_
-- **Header:** _page title, primary action for that page_
-- **Content:** _the feature's own UI_
-- **Mobile:** _how the sidebar behaves below `md` (burger / drawer / bottom bar)_
+## Seiten-Muster
 
-## Page Pattern
+- **Seitenkopf:** Die Screens tragen ihren Titel im Inhaltsbereich, nicht in der Kopfzeile — die Kopfzeile bleibt über alle Screens identisch und trägt nur Marke und Kontoinformation.
+- **Ladezustand:** Skelettflächen in der Größe des erwarteten Inhalts, mit sanftem Puls. **Kein nackter Spinner** — das Quiz lädt Bilder von extern, und ein Skelett in Bildgröße verhindert, dass das Layout springt, wenn das Bild eintrifft.
+- **Leerer Zustand:** gedämpftes Ball-Motiv, ein Satz in `--muted-foreground`, darunter die naheliegende Aktion als Primär-Button.
+- **Fehlerzustand:** Ist die PokeAPI nicht erreichbar, wird das **innerhalb** der betroffenen Karte gezeigt, mit einer „Erneut versuchen"-Aktion — nie als ganzseitiger Fehler, der die laufende Serie visuell wegwirft.
+- **Rückmeldung:** direkt am Ort der Handlung (die Antwortoption färbt sich, die Karte reagiert mit `pop` oder `nudge`), nicht über Toasts. Toasts gibt es in diesem Produkt nicht.
 
-_What every page repeats, so features don't each invent their own. `/build` follows this instead of guessing._
+## Auth-Zustände
 
-- **Page header:** _title, optional subtitle, primary action on the right_
-- **Loading state:** _skeleton / spinner, and where_
-- **Empty state:** _what an area with no data shows_
-- **Error state:** _how a failed load is presented_
-- **Toasts / feedback:** _where confirmations appear_
+- **Ausgeloggt:** Erreichbar sind nur `/login` sowie `/privacy` und `/imprint`. Jeder andere Aufruf leitet auf `/login`. Die Kopfzeile zeigt rechts die Zeile „Deutsche Namen · Serie · Weltrangliste".
+- **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Button „Bestenliste" und den Nutzer-Chip mit Initiale und Trainername.
+- **Rollen:** keine. Alle angemeldeten Nutzer sind gleichberechtigt.
 
-## Auth States
+## Shell-Komponenten
 
-_The shell usually differs by who is looking. Say how._
+Die genauen Dateipfade legt `/architecture` fest; die Aufteilung steht hier, damit kein Feature einen zweiten Rahmen baut.
 
-- **Signed out:** _which areas are reachable, what the shell shows_
-- **Signed in:** _..._
-- **Roles (if any):** _which areas each role sees_
+| Komponente | Zweck |
+|------------|-------|
+| Kopfzeile | Marke, Bestenlisten-Zugang, Nutzer-Chip — die einzige Navigation der App |
+| Wortmarke | Ball-Motiv (CSS-gezeichnet) plus Schriftzug, auch als Motiv in leeren Zuständen |
+| Fußzeile | Datenschutz- und Impressums-Links |
+| Seitenrahmen | Kopfzeile + Inhalt + Fußzeile, die gemeinsame Hülle jedes Screens |
 
-## Shell Components
+## Lücke gegenüber dem Design
 
-_The shared building blocks and where they live, so nothing gets rebuilt per feature._
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| _AppSidebar_ | _`src/components/app-sidebar.tsx`_ | _top-level navigation_ |
-| _..._ | _..._ | _..._ |
+Die Design-Canvas kennt **keine Fußzeile** und keinen Weg zu Datenschutzerklärung und Impressum. Beides muss von jeder Seite aus erreichbar sein, auch im ausgeloggten Zustand, bevor die App öffentlich gehen kann. Die Fußzeile oben schließt diese Lücke: Der Rahmen gehört zu PROJ-2, die Inhalte der beiden Seiten zu PROJ-4.
 
 ---
 
-_This is a living document. When `/architecture` designs a feature that adds a nav entry, a layout region, or a new page pattern, it updates this map first, so later features build against an accurate frame. Behavior changes to the shell go through `/refine` on the owning feature — never straight into a feature's `design.md`._
+_Dies ist ein lebendes Dokument. Wenn `/architecture` ein Feature entwirft, das einen Navigationseintrag, eine Layout-Region oder ein neues Seiten-Muster hinzufügt, aktualisiert es zuerst diese Karte. Verhaltensänderungen am Rahmen gehen über `/refine` auf das besitzende Feature — nie direkt in das `design.md` eines Features._
