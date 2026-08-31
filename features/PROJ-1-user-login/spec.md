@@ -52,6 +52,8 @@
 ## Open Questions
 - [ ] Braucht es einen Hinweis, der Minderjährige davon abhält, ihren echten Namen als Trainernamen zu verwenden? Die Kontoerstellung läuft über Vertrag (Art. 6(1)(b) DSGVO), nicht über Einwilligung — greift Art. 8 DSGVO hier überhaupt, oder ist die relevante Frage die Geschäftsfähigkeit nach BGB? (siehe `docs/privacy.md` → Für einen Anwalt)
 - [ ] Hosting-Anbieter (Vercel/Hostinger) noch nicht entschieden — betrifft die Verarbeitung von Server-Logs, wird bei `/deploy` festgelegt
+- [ ] AC-8 (Supabases eingebautes Rate-Limit) ließ sich lokal nicht auslösen — 150 Fehlversuche gegen die lokale Supabase-Instanz lösten kein 429 aus, vermutlich eine Lücke im lokalen Supabase-CLI-Stack (siehe design.md → Technical Decisions). Nach dem ersten `/deploy` gegen das gehostete Projekt erneut prüfen, bevor die App öffentlich geht
+- [ ] AC-11/AC-12 (Passwort-Reset-Link): Die Lösung — Sitzung wird clientseitig aus dem URL-Fragment gelesen, keine Server-seitige Code-Exchange — hängt von der aktuellen lokalen `flow_type`-Konfiguration ab und muss nach dem ersten Cloud-Deploy erneut verifiziert werden, zusammen mit dem AC-8-Test. Außerdem müssen Site URL und Redirect URLs im gehosteten Supabase-Projekt auf die echte Domain gesetzt werden (siehe design.md → Settings the user makes) — sonst tritt derselbe Bug wie lokal erneut auf
 
 ## Decision Log
 
