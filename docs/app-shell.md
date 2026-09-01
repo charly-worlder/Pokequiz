@@ -18,7 +18,8 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 
 | Bereich | Route | Was man dort tut | Sichtbar für | Feature |
 |---------|-------|------------------|--------------|---------|
-| Anmeldung | `/login` | Registrieren oder anmelden | nur ausgeloggt | PROJ-1 |
+| Anmeldung | `/login` | Registrieren, anmelden, Passwort-Reset anfordern | nur ausgeloggt | PROJ-1 |
+| Neues Passwort | `/reset-password` | Neues Passwort setzen, nur über den E-Mail-Link erreichbar (nicht verlinkt) | ausgeloggt und eingeloggt | PROJ-1 |
 | Spiel | `/` | Runde starten, spielen, Ergebnis sehen | nur angemeldet | PROJ-2 |
 | Weltrangliste | `/leaderboard` | Die globale Top-5 ansehen | nur angemeldet | PROJ-3 |
 | Rechtliches | `/privacy`, `/imprint` | Datenschutzerklärung, Impressum | **alle**, auch ausgeloggt | PROJ-4 |
@@ -42,7 +43,7 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 
 ## Auth-Zustände
 
-- **Ausgeloggt:** Erreichbar sind nur `/login` sowie `/privacy` und `/imprint`. Jeder andere Aufruf leitet auf `/login`. Die Kopfzeile zeigt rechts die Zeile „Deutsche Namen · Serie · Weltrangliste".
+- **Ausgeloggt:** Erreichbar sind nur `/login`, `/reset-password`, `/privacy` und `/imprint`. Jeder andere Aufruf leitet auf `/login`. Die Kopfzeile zeigt rechts die Zeile „Deutsche Namen · Serie · Weltrangliste".
 - **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Button „Bestenliste" und den Nutzer-Chip mit Initiale und Trainername.
 - **Rollen:** keine. Alle angemeldeten Nutzer sind gleichberechtigt.
 

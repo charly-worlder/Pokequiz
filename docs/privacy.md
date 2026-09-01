@@ -1,72 +1,61 @@
-# Privacy Record — what this product does with personal data
+# Privacy Record — was dieses Produkt mit personenbezogenen Daten macht
 
-> The honest overview of which personal data this product processes, why, and for how long.
+> Die ehrliche Übersicht, welche personenbezogenen Daten dieses Produkt verarbeitet, warum, und wie lange.
 >
-> - Created and kept current by `/dsgvo`, one entry per processing purpose.
-> - Grows with the product: when a feature changes what is stored, its entry changes too.
-> - **Altitude:** purposes, legal bases, retention, and who else sees the data. Field-level detail lives in `docs/data-model.md` and the feature designs.
+> - Erstellt und aktuell gehalten von `/dsgvo`, ein Eintrag pro Verarbeitungszweck.
+> - Wächst mit dem Produkt: Ändert ein Feature, was gespeichert wird, ändert sich auch dieser Eintrag.
+> - **Flughöhe:** Zwecke, Rechtsgrundlagen, Aufbewahrung, wer die Daten sonst sieht. Feld-Details leben in `docs/data-model.md` und den Feature-Designs.
 >
-> This maps closely onto the record of processing activities (*Verarbeitungsverzeichnis*, Art. 30 GDPR; Art. 12 Swiss DSG) — but it is an engineering document, not a legal filing. A lawyer or your data protection officer / advisor has the final word on whether it is complete for your situation.
+> Dies bildet das Verarbeitungsverzeichnis (Art. 30 DSGVO) eng nach — ist aber ein technisches Dokument, keine rechtliche Einreichung. Ein Anwalt oder Datenschutzbeauftragter hat das letzte Wort, ob es für die konkrete Situation vollständig ist.
 
-**Applicable law:** _GDPR (EU/DE) · DSG (CH) · both — from `.ai-eng-kit` → `law`; the rules are in `docs/law/`_
-**Data protection stance:** _lean | standard | strict — set in `docs/PRD.md` → Constraints_
-**Controller (Verantwortlicher):** _your company / your name and address — the legal entity behind the product_
-**Last reviewed:** _YYYY-MM-DD_
+**Anwendbares Recht:** DSGVO (EU/DE)
+**Datenschutz-Haltung:** standard (siehe `docs/PRD.md` → Rahmenbedingungen)
+**Verantwortlicher:** _noch offen — wird bei PROJ-4 (Impressum) ergänzt_
+**Zuletzt geprüft:** 2026-08-31
 
 ---
 
-## Processing activities
+## Verarbeitungstätigkeiten
 
-_One row per purpose, not per table. "Run user accounts" is a purpose; "the profiles table" is not._
+| Zweck | Daten | Wessen | Warum rechtmäßig | Aufbewahrung | Beteiligte Verarbeiter |
+|-------|-------|--------|-------------------|---------------|------------------------|
+| Nutzerkonten betreiben (Registrierung, Login) | E-Mail-Adresse, Passwort-Hash, Trainername | Registrierte Nutzer | Art. 6(1)(b) DSGVO — Vertrag (Konto ist die Grundlage für das Spiel) | Bis zur Kontolöschung (Mechanismus: PROJ-4) | Supabase (eu-central-1, Frankfurt) |
+| Login-/Registrierungs-Missbrauch verhindern (Supabases eingebaute IP-Rate-Limit-Regel) | IP-Adresse, Zeitpunkt der Versuche | Jeder, der einen Login- oder Registrierungsversuch unternimmt | Art. 6(1)(f) DSGVO — berechtigtes Interesse (Schutz vor automatisiertem Durchprobieren) | Kurzfristig — Sperrfenster (5 Minuten), danach verworfen | Supabase (eu-central-1, Frankfurt) |
 
-| Purpose | Data | Whose | Why it is lawful | Retention | Processors involved |
-|---------|------|-------|------------------|-----------|---------------------|
-| _Run user accounts_ | _Email, password hash, display name_ | _Registered users_ | _GDPR: Art. 6(1)(b) contract · DSG: expected purpose, no justification needed_ | _Until account deletion_ | _Supabase (EU)_ |
-| _..._ | _..._ | _..._ | _..._ | _..._ | _..._ |
+## Sensible Daten
 
-## Sensitive data
+- keine
 
-_Health, biometrics, genetics, ethnicity, political opinion, religion, trade union membership, sex life or orientation, criminal matters — and, under the Swiss DSG, social-assistance measures and administrative proceedings (Art. 9 GDPR · Art. 5 lit. c DSG). These carry much stricter rules — usually explicit consent. List them separately so nobody overlooks them, or write "none"._
+## Verarbeiter (Auftragsverarbeiter)
 
-- _none_
+| Dienst | Was verarbeitet wird | Region | AVV unterschrieben | Außerhalb der angemessenen Länder? |
+|--------|----------------------|--------|---------------------|--------------------------------------|
+| Supabase | Alle Anwendungsdaten (Auth, `profiles`, `runs`) | eu-central-1 (Frankfurt) | ☐ | US-Unternehmen, EU-Hosting — Transfermechanismus prüfen |
+| Hosting (Vercel/Hostinger) | Anfragen, Server-Logs | noch nicht entschieden (`deploy` in `.ai-eng-kit` ist `null`) | ☐ | wird bei `/deploy` festgelegt |
 
-## Processors (Auftragsverarbeiter · Auftragsbearbeiter)
+## Betroffenenrechte — wie sie bedient werden
 
-_Every external service that touches personal data on your behalf (Art. 28 GDPR · Art. 9 DSG). Each needs a data processing agreement (AVV / DPA) — normally a checkbox or a downloadable document in the provider's dashboard. Under the DSG the countries you export to also have to be named in the privacy policy._
+| Recht | DSGVO | Wie dieses Produkt es liefert |
+|-------|-------|-------------------------------|
+| Auskunft / Kopie | Art. 15 | _noch nicht gebaut — Kandidat für PROJ-4_ |
+| Berichtigung | Art. 16 | E-Mail/Passwort über Supabase Auth änderbar; Trainername ist bewusst nicht änderbar (Produktentscheidung PROJ-1) |
+| Löschung | Art. 17 | _noch nicht gebaut — PROJ-4 (Datenschutz & Kontolöschung)_ |
+| Datenübertragbarkeit | Art. 20 | _noch nicht gebaut — Kandidat für PROJ-4_ |
+| Widerspruch | Art. 21 | Betrifft hier v. a. die berechtigte-Interesse-Verarbeitung (Login-Drosselung) — faktisch durch Konto-Nichtnutzung/-Löschung wahrnehmbar |
 
-| Service | What it processes | Region | DPA signed | Outside the adequate countries? |
-|---------|-------------------|--------|------------------|----------------|
-| _Supabase_ | _All application data_ | _eu-central-1 (Frankfurt)_ | _☐_ | _US company, EU hosting_ |
-| _Vercel_ | _Requests, logs_ | _..._ | _☐_ | _..._ |
-| _Sentry_ | _Error reports (scrubbed)_ | _..._ | _☐_ | _..._ |
+> Frist: **ein Kalendermonat** (Art. 12(3) DSGVO, um zwei weitere verlängerbar bei komplexen Fällen, wenn die Person innerhalb der ersten Frist informiert wird).
 
-## Data subject rights — how they are served
+## Offene Punkte
 
-_Which part of the app actually delivers each right. "By email, manually" is a valid answer for a small product; leaving it blank is not._
+- [ ] AVV mit Supabase abschließen (Checkbox im Dashboard)
+- [ ] Hosting-Anbieter (Vercel/Hostinger) bei `/deploy` festlegen und hier als Verarbeiter nachtragen
+- [ ] Verantwortlicher (Name/Anschrift) bei PROJ-4 ergänzen
+- [ ] Auskunfts-, Berichtigungs- und Löschprozess bauen (PROJ-4)
 
-| Right | GDPR | DSG | How this product delivers it |
-|-------|------|-----|------------------------------|
-| Access / copy | Art. 15 | Art. 25 | _..._ |
-| Rectification | Art. 16 | Art. 32 | _..._ |
-| Erasure | Art. 17 | Art. 32 / Art. 6 Abs. 4 | _..._ |
-| Portability | Art. 20 | Art. 28 (narrower) | _..._ |
-| Objection | Art. 21 | Art. 30 Abs. 2 | _..._ |
+## Für einen Anwalt / Datenschutzbeauftragten
 
-> Deadline: **one calendar month** under the GDPR (Art. 12(3), extendable by two for complex cases if the person is told within the first), **30 days** under the DSG (Art. 25 Abs. 7).
-
-## Open points
-
-_What is still unresolved, and who resolves it. `/dsgvo` adds items here; they leave when they are actually done._
-
-- [ ] _e.g. AVV with Sentry not yet signed_
-- [ ] _e.g. Retention period for uploaded files never decided_
-
-## For a lawyer / data protection officer or advisor
-
-_Questions that need a human. Keep the context with each question so it can be asked without re-explaining the product._
-
-- _e.g. Our free tier keeps analytics data for 24 months on legitimate interest — is that defensible for a B2C product with no login requirement?_
+- Das Produkt richtet sich an ein öffentliches Publikum, das absehbar auch Minderjährige einschließt, und macht den Trainernamen dauerhaft und für alle angemeldeten Nutzer öffentlich sichtbar. Die Kontoerstellung läuft über Vertrag (Art. 6(1)(b)), nicht über Einwilligung — greift Art. 8 DSGVO (Einwilligung von Kindern) hier überhaupt, oder ist die relevante Frage stattdessen die Geschäftsfähigkeit nach BGB? Braucht es einen Hinweis, der Minderjährige davon abhält, ihren echten Namen als Trainernamen zu verwenden?
 
 ---
 
-_Run `/dsgvo` to create the first version of this record, and again whenever a feature changes what personal data the product holds._
+_Führe `/dsgvo` erneut aus, sobald ein Feature ändert, welche personenbezogenen Daten das Produkt hält._
