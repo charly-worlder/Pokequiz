@@ -1,0 +1,379 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { getNextQuestion, repairImageUrl, type Question } from '@/lib/quiz/question-action'
+import { saveRun, type PersonalBest } from '@/lib/quiz/run-actions'
+import { POOL_SIZE } from '@/lib/validation/quiz'
+import { ImageProbe } from './pokemon-image'
+import { StartView } from './start-view'
+import { QuestionView } from './question-view'
+import { LoadErrorCard } from './load-error-card'
+import { ResultView, type SaveState } from './result-view'
+
+/**
+ * The round's state machine (design.md → Component Structure). Every transition
+ * lives here; the views are presentation only.
+ *
+ *   ready --start--> loading --question ready--> open
+ *   loading --failed--> error
+ *   open --correct--> (brief green) --> open        (next question, usually preloaded)
+ *   open --wrong--> resolved --click--> finished
+ *   open --pool empty--> finished (winner)
+ *   error --retry ok--> open      error --end round--> finished
+ *   finished --play again--> ready
+ *
+ * There is no path from `finished` back to `open`: a finished round is
+ * immutable, exactly like its row in the database.
+ */
+type Phase = 'ready' | 'loading' | 'open' | 'resolved' | 'error' | 'finished'
+
+/** spec.md EC-10 — three discarded questions in a row is a broken source, not bad luck. */
+const MAX_CONSECUTIVE_DISCARDS = 3
+
+/** How long the green stays visible before the next question replaces it (AC-4). */
+const CORRECT_FEEDBACK_MS = 350
+
+export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: PersonalBest | null }) {
+  const router = useRouter()
+
+  const [phase, setPhase] = useState<Phase>('ready')
+  const [personalBest, setPersonalBest] = useState(initialPersonalBest)
+
+  const [current, setCurrent] = useState<Question | null>(null)
+  /** Validated and waiting — what makes the swap free of a loading state (AC-10). */
+  const [reserve, setReserve] = useState<Question | null>(null)
+  /** Fetched, image not yet proven loadable. */
+  const [probing, setProbing] = useState<Question | null>(null)
+
+  const [chosenIndex, setChosenIndex] = useState<number | null>(null)
+  const [streak, setStreak] = useState(0)
+  const [poolCleared, setPoolCleared] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [saveState, setSaveState] = useState<SaveState>('saving')
+  const [isPersonalBest, setIsPersonalBest] = useState(false)
+  /** The stopped time, frozen into state so the result screen never reads a ref while rendering. */
+  const [finalDurationMs, setFinalDurationMs] = useState(0)
+
+  const seenIdsRef = useRef<number[]>([])
+  const discardsRef = useRef(0)
+  const repairedRef = useRef<Set<number>>(new Set())
+  const roundIdRef = useRef<string>('')
+  const fetchingRef = useRef(false)
+  /**
+   * Mirrors `current` so fetchQuestion can tell "the player is waiting for this
+   * question" from "this was only a prefetch". A prefetch failure must never
+   * interrupt a question the player is still answering.
+   */
+  const hasCurrentRef = useRef(false)
+  useEffect(() => {
+    hasCurrentRef.current = current !== null
+  }, [current])
+
+  // --- Clock: starts with the first visible picture (AC-2), stands still while
+  // the error card is up (AC-16), resumes on recovery (AC-17) ----------------
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const accumulatedRef = useRef(0)
+  const startedAtRef = useRef<number | null>(null)
+
+  const startClock = useCallback(() => {
+    if (startedAtRef.current === null) startedAtRef.current = performance.now()
+  }, [])
+
+  const pauseClock = useCallback(() => {
+    if (startedAtRef.current !== null) {
+      accumulatedRef.current += performance.now() - startedAtRef.current
+      startedAtRef.current = null
+    }
+    setElapsedMs(accumulatedRef.current)
+  }, [])
+
+  useEffect(() => {
+    const tick = window.setInterval(() => {
+      if (startedAtRef.current !== null) {
+        setElapsedMs(accumulatedRef.current + (performance.now() - startedAtRef.current))
+      }
+    }, 100)
+    return () => window.clearInterval(tick)
+  }, [])
+
+  /** spec.md EC-7 — session gone mid-round: the round is dropped, never reassigned. */
+  const bailToLogin = useCallback(() => router.push('/login'), [router])
+
+  // --- Ending the round -----------------------------------------------------
+
+  const finishRound = useCallback(
+    async (finalStreak: number, cleared: boolean) => {
+      pauseClock()
+      setPoolCleared(cleared)
+      setPhase('finished')
+      setSaveState('saving')
+
+      const durationMs = Math.round(accumulatedRef.current)
+      setFinalDurationMs(durationMs)
+
+      const result = await saveRun({
+        streak: finalStreak,
+        durationMs,
+        clientRoundId: roundIdRef.current,
+      })
+
+      if (result.status === 'unauthenticated') return bailToLogin()
+      if (result.status === 'saved') {
+        setSaveState('saved')
+        setIsPersonalBest(result.isPersonalBest)
+        if (result.isPersonalBest) setPersonalBest({ streak: finalStreak, durationMs })
+        return
+      }
+      // spec.md EC-3 — result stays on screen, with a retry.
+      setSaveState('failed')
+    },
+    [pauseClock, bailToLogin]
+  )
+
+  // --- Fetching -------------------------------------------------------------
+
+  const fetchQuestion = useCallback(async () => {
+    if (fetchingRef.current) return
+    fetchingRef.current = true
+    try {
+      const result = await getNextQuestion(seenIdsRef.current)
+
+      if (result.status === 'unauthenticated') {
+        bailToLogin()
+        return
+      }
+
+      if (result.status === 'pool-empty') {
+        // Only ends the round if the player is actually waiting for this
+        // question; during a prefetch it just means there is nothing left to
+        // preload, and answer() ends the round after the last correct answer.
+        if (!hasCurrentRef.current) {
+          await finishRound(streak, true)
+        }
+        return
+      }
+
+      if (result.status === 'unavailable') {
+        // A failed *prefetch* is invisible: the player is still answering the
+        // current question. The error card appears only when the next question
+        // is genuinely due (spec.md AC-16).
+        if (!hasCurrentRef.current) {
+          pauseClock()
+          setPhase('error')
+        }
+        return
+      }
+
+      seenIdsRef.current = [...seenIdsRef.current, result.question.pokemonId]
+      setProbing(result.question)
+    } catch {
+      if (!hasCurrentRef.current) {
+        pauseClock()
+        setPhase('error')
+      }
+    } finally {
+      fetchingRef.current = false
+    }
+  }, [bailToLogin, finishRound, pauseClock, streak])
+
+  /** The probe loaded the picture — promote the question (AC-10). */
+  const onProbeOk = useCallback(() => {
+    const pending = probing
+    if (!pending) return
+
+    discardsRef.current = 0
+    setProbing(null)
+
+    if (hasCurrentRef.current) {
+      setReserve(pending)
+      return
+    }
+
+    // This question becomes the visible one. The ref is set here rather than
+    // waiting for the effect, so the prefetch below is correctly treated as a
+    // prefetch and not as "the player is waiting".
+    hasCurrentRef.current = true
+    setCurrent(pending)
+    setPhase('open')
+
+    // spec.md AC-10 — start loading the *next* question straight away, while
+    // this one is still being answered. Without this the reserve is never
+    // filled and every question shows a loading state.
+    void fetchQuestion()
+  }, [probing, fetchQuestion])
+
+  /** spec.md EC-11 → EC-6 → EC-10: repair, else discard, else admit the source is broken. */
+  const onProbeFail = useCallback(async () => {
+    const failed = probing
+    if (!failed) return
+
+    if (!repairedRef.current.has(failed.pokemonId)) {
+      repairedRef.current.add(failed.pokemonId)
+      const repaired = await repairImageUrl(failed.pokemonId)
+      if (repaired) {
+        setProbing({ ...failed, imageUrl: repaired })
+        return
+      }
+    }
+
+    setProbing(null)
+    discardsRef.current += 1
+
+    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS && !hasCurrentRef.current) {
+      pauseClock()
+      setPhase('error')
+      return
+    }
+    void fetchQuestion()
+  }, [probing, pauseClock, fetchQuestion])
+
+  // --- Round lifecycle ------------------------------------------------------
+
+  const startRound = useCallback(() => {
+    if (starting) return // spec.md EC-9 — repeated clicks start exactly one round
+    setStarting(true)
+
+    seenIdsRef.current = []
+    discardsRef.current = 0
+    repairedRef.current = new Set()
+    roundIdRef.current = crypto.randomUUID()
+    accumulatedRef.current = 0
+    startedAtRef.current = null
+    hasCurrentRef.current = false
+
+    setElapsedMs(0)
+    setStreak(0)
+    setChosenIndex(null)
+    setCurrent(null)
+    setReserve(null)
+    setProbing(null)
+    setPoolCleared(false)
+    setIsPersonalBest(false)
+    setPhase('loading')
+
+    void fetchQuestion().finally(() => setStarting(false))
+  }, [starting, fetchQuestion])
+
+  const advance = useCallback(() => {
+    setChosenIndex(null)
+    if (reserve) {
+      setCurrent(reserve)
+      setReserve(null)
+      setPhase('open')
+      void fetchQuestion()
+      return
+    }
+    // Nothing preloaded — the player waits, so a failure now is visible.
+    hasCurrentRef.current = false
+    setCurrent(null)
+    setPhase('loading')
+    void fetchQuestion()
+  }, [reserve, fetchQuestion])
+
+  const answer = useCallback(
+    (index: number) => {
+      if (chosenIndex !== null || !current) return // spec.md EC-1
+      setChosenIndex(index)
+
+      if (index !== current.correctIndex) {
+        pauseClock()
+        setPhase('resolved')
+        return
+      }
+
+      const nextStreak = streak + 1
+      setStreak(nextStreak)
+
+      // spec.md EC-2 — every Pokémon in the pool answered correctly.
+      if (seenIdsRef.current.length >= POOL_SIZE && !reserve) {
+        window.setTimeout(() => void finishRound(nextStreak, true), CORRECT_FEEDBACK_MS)
+        return
+      }
+      window.setTimeout(advance, CORRECT_FEEDBACK_MS)
+    },
+    [chosenIndex, current, streak, reserve, pauseClock, advance, finishRound]
+  )
+
+  /** spec.md AC-17 — unlimited manual retries; the streak and clock are untouched. */
+  const retryAfterError = useCallback(() => {
+    setRetrying(true)
+    discardsRef.current = 0
+    void fetchQuestion().finally(() => setRetrying(false))
+  }, [fetchQuestion])
+
+  /** spec.md AC-2 — the clock runs from the moment the picture is on screen. */
+  const onPictureVisible = useCallback(() => {
+    if (phase === 'open') startClock()
+  }, [phase, startClock])
+
+  // --- Render ---------------------------------------------------------------
+
+  const probe = probing ? (
+    <ImageProbe src={probing.imageUrl} onOk={onProbeOk} onFail={() => void onProbeFail()} />
+  ) : null
+
+  if (phase === 'finished') {
+    return (
+      <ResultView
+        streak={streak}
+        durationMs={finalDurationMs}
+        poolCleared={poolCleared}
+        isPersonalBest={isPersonalBest}
+        saveState={saveState}
+        onRetrySave={() => void finishRound(streak, poolCleared)}
+        onPlayAgain={() => setPhase('ready')}
+      />
+    )
+  }
+
+  if (phase === 'ready') {
+    return (
+      <>
+        {probe}
+        <StartView personalBest={personalBest} starting={starting} onStart={startRound} />
+      </>
+    )
+  }
+
+  if (phase === 'error') {
+    return (
+      <>
+        {probe}
+        <LoadErrorCard
+          streak={streak}
+          retrying={retrying}
+          onRetry={retryAfterError}
+          onEndRound={() => void finishRound(streak, false)}
+        />
+      </>
+    )
+  }
+
+  if (!current) {
+    return (
+      <>
+        {probe}
+        <p className="py-16 text-center text-[15px] text-muted-foreground">
+          Runde wird vorbereitet …
+        </p>
+      </>
+    )
+  }
+
+  return (
+    <>
+      {probe}
+      <QuestionView
+        question={current}
+        streak={streak}
+        elapsedMs={elapsedMs}
+        chosenIndex={chosenIndex}
+        onAnswer={answer}
+        onContinue={() => void finishRound(streak, false)}
+        onPictureVisible={onPictureVisible}
+      />
+    </>
+  )
+}

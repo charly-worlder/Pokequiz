@@ -193,3 +193,28 @@ Ein Hinweis fürs spätere `/deploy`, keine Aufgabe: Die serverseitige Bild-Opti
 
 - [ ] Der Bild-Zwischenspeicher des Frameworks liegt beim Hoster und überlebt ein neues Deploy je nach Anbieter nicht. Nach dem ersten `/deploy` einmal prüfen, ob nach einer Neuveröffentlichung die ersten Fragen spürbar langsamer sind — falls ja, ist die Ablaufzeit der richtige Hebel, nicht der Aufbau.
 - [ ] AC-31 ist auf Anfragen zur PokeAPI hin gebaut, nicht auf Datenmengen. Sollte die Bild-Optimierung auf dem gewählten Tarif doch abgerechnet werden, ist das bei `/deploy` zu prüfen — die Obergrenze von 386 Bildern insgesamt steht oben.
+
+---
+
+## Notizen aus dem Build (2026-09-01)
+
+Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb des genehmigten Designs:
+
+**Die Bildadresse wird nicht serverseitig geprüft.** Der Entwurf ließ offen, wo Stufe 1 der Leiter validiert wird. Serverseitig hätte es eine Anfrage pro Frage im Normalfall gekostet und das Bild doppelt geladen (einmal zur Prüfung, einmal durch die Bild-Optimierung). Stattdessen lädt eine unsichtbare Vorlade-Komponente das Bild **über dieselbe Bild-Optimierung** wie die sichtbare Anzeige — dadurch ist der Wechsel ein Cache-Treffer, ein kaputtes Bild fällt vor der Anzeige auf, und es geht weiterhin keine Anfrage aus dem Browser an das CDN (AC-20). Das rohe CDN direkt vorzuladen wäre einfacher gewesen und hätte AC-20 gebrochen.
+
+**`server-only` wurde nicht ergänzt.** Der Entwurf sagt „keine neuen Pakete"; der PokeAPI-Client trägt deshalb einen Kommentar zur Importgrenze statt der Paket-Absicherung.
+
+**Die Zeit des beendeten Laufs liegt in einem State, nicht nur im Ref.** Das Ergebnis würde sonst während des Renderns aus einem Ref lesen, was die React-Regeln des Projekts (ESLint) zu Recht verbieten.
+
+### Was im Build verifiziert wurde
+
+| Prüfung | Ergebnis |
+|---|---|
+| RLS und Grenzwerte über PostgREST, zwei echte Konten | 12/12 — fremde Runden nicht lesbar, fremdes Profil nicht beschreibbar, doppeltes Runden-Kennzeichen abgelehnt, Ändern und Löschen abgelehnt |
+| Rundenablauf im Browser (Registrierung → Runde → Ergebnis → neue Runde) | 19/19 |
+| Responsivität 1440 / 768 / 375 px, ausgeloggter Zustand, Tastaturfokus | 15/15 — kein horizontales Scrollen, kein Burger-Menü, Chip reduziert sich unter 640 px |
+| **AC-31 im Server-Action-Kontext** | belegt: wiederholte Namensabfrage als `cache hit` in 0 ms im Server-Log — nicht nur in einem Route Handler |
+| AC-20 hart geprüft | keine einzige Browser-Anfrage an einen fremden Host während einer ganzen Runde |
+| `npm run build`, `npm run lint`, `npm test` | grün; 25 bestehende Tests weiterhin bestanden |
+
+**Ein Bug wurde dabei gefunden und behoben:** Das Vorladen aus AC-10 feuerte nie — nach der ersten Frage füllte nichts die Reserve, jede Frage hätte einen Ladezustand gezeigt. Sichtbar wurde das erst im Server-Log (nur ein `getNextQuestion`-Aufruf pro Runde statt mehrerer), nicht in der Oberfläche. Nach der Korrektur: 8 Aufrufe.

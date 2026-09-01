@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Outfit } from "next/font/google";
+import { PageFrame } from "@/components/shell/page-frame";
 import "./globals.css";
 
 // docs/design-system.md: Outfit via next/font/google, never a <link> tag —
@@ -23,7 +24,10 @@ export default function RootLayout({
   return (
     <html lang="de" className={outfit.variable}>
       <body className="antialiased font-sans">
-        {children}
+        {/* The app shell belongs to PROJ-2 (docs/app-shell.md → Besitzendes
+            Feature). It sits here so every route carries the same header and
+            footer — spec.md AC-21 to AC-23. */}
+        <PageFrame>{children}</PageFrame>
       </body>
     </html>
   );
