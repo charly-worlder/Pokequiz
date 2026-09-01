@@ -13,7 +13,7 @@ _Jede Entität ist eine Art von Ding, das die App speichert. Ein Satz zum Zweck,
 | Entität | Was sie darstellt | Wem sie gehört / wer sie sieht |
 |---------|-------------------|-------------------------------|
 | `profiles` | Das Trainerprofil zu einem Konto — trägt den eindeutigen, öffentlichen Trainernamen | Gehört dem Nutzer. Der Trainername ist für alle angemeldeten Nutzer lesbar, die E-Mail bleibt beim Auth-System und wird nie öffentlich |
-| `runs` | Eine abgeschlossene Quiz-Runde — erreichte Serie und benötigte Zeit | Gehört dem Spieler, der sie gespielt hat. Von allen angemeldeten Nutzern lesbar (das ist die Rangliste), aber nur vom Eigentümer schreibbar |
+| `runs` | Eine abgeschlossene Quiz-Runde — erreichte Serie und benötigte Zeit | Gehört dem Spieler, der sie gespielt hat. **Nur der Eigentümer liest und schreibt seine Runden**; verändert oder einzeln gelöscht werden sie von niemandem. Die Rangliste greift nicht auf die Tabelle zu, sondern auf eine Abfrage, die pro Spieler ausschließlich den besten Lauf herausgibt (PROJ-3) |
 
 ## Beziehungen
 
@@ -29,7 +29,7 @@ Diese drei Festlegungen prägen jedes Feature, das auf dem Modell aufbaut:
 
 **Die Rangliste ist eine Abfrage, keine Tabelle.** Die globale Top-5 ergibt sich als „bester Lauf pro Spieler" über `runs`, sortiert nach Serie absteigend und bei Gleichstand nach Zeit aufsteigend. Eine zweite Tabelle daneben wäre eine Kopie, die sofort auseinanderläuft.
 
-**Schlechte Runden sind privat.** Die Rangliste zeigt pro Spieler ausschließlich seinen besten Lauf — alle anderen liegen in der Datenbank, ohne dass sie jemand zu sehen bekommt.
+**Schlechte Runden sind privat — und zwar in der Datenbank, nicht erst in der Oberfläche.** Die Rangliste zeigt pro Spieler ausschließlich seinen besten Lauf. Damit das keine bloße Anzeigezusage bleibt, darf niemand die Runden eines anderen Spielers lesen; die Rangliste bezieht ihre Zeilen über eine eigens dafür gebaute Abfrage, die nur den jeweils besten Lauf herausgibt. Wäre die Tabelle für alle Angemeldeten lesbar, könnte jeder die vollständige Historie jedes anderen abrufen (festgelegt in PROJ-2 → `design.md`).
 
 ## Was bewusst *nicht* gespeichert wird
 

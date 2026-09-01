@@ -30,7 +30,7 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 
 - **Kopfzeile:** durchgehend über allen Screens, leicht transparent mit Blur und dünner Trennlinie nach unten. Links das in CSS gezeichnete Ball-Motiv plus Wortmarke „Pokémon QUIZ". Rechts auth-abhängiger Inhalt (siehe Auth-Zustände).
 - **Inhalt:** füllt die restliche Höhe. Die innere Aufteilung gehört dem jeweiligen Screen.
-- **Fußzeile:** schlank, nur Links zu Datenschutz und Impressum. Auf jeder Seite, auch ausgeloggt.
+- **Fußzeile:** schlank, nur Links zu Datenschutz und Impressum. Auf jeder Seite, auch ausgeloggt. Sie führt eine Liste der tatsächlich vorhandenen Rechts-Seiten und zeigt einen Link erst, wenn seine Zielseite existiert — bis PROJ-4 sie baut, bleibt die Leiste ohne Link statt mit einem toten.
 - **Mobil (unter `md`, 768px):** kein Burger-Menü. Bei zwei Bereichen passt beides in die Kopfzeile — der Nutzer-Chip reduziert sich unter `sm` auf die Initiale. Die Inhalte stapeln sich von selbst, weil das Design durchgehend `auto-fit / minmax` verwendet.
 
 ## Seiten-Muster
