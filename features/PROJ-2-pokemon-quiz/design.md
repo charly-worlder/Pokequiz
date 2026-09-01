@@ -218,3 +218,11 @@ Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb de
 | `npm run build`, `npm run lint`, `npm test` | grün; 25 bestehende Tests weiterhin bestanden |
 
 **Ein Bug wurde dabei gefunden und behoben:** Das Vorladen aus AC-10 feuerte nie — nach der ersten Frage füllte nichts die Reserve, jede Frage hätte einen Ladezustand gezeigt. Sichtbar wurde das erst im Server-Log (nur ein `getNextQuestion`-Aufruf pro Runde statt mehrerer), nicht in der Oberfläche. Nach der Korrektur: 8 Aufrufe.
+
+### Nachtrag (2026-09-01, nach Review)
+
+**`server-only` wurde doch ergänzt — als bewusste, abgesprochene Ausnahme von „keine neuen Pakete".** Der ursprüngliche Kommentar zur Importgrenze erzwang nichts: Ein versehentlicher Client-Import des PokeAPI-Clients hätte die Abfragen in den Browser verlagert und AC-31 und AC-20 lautlos gebrochen — genau die Fehlerklasse, gegen die dieses Feature sonst überall absichert. Verifiziert durch einen absichtlich eingebauten Client-Import: Der Build bricht mit „'server-only' cannot be imported from a Client Component module" ab.
+
+**Regressionstest für das Vorladen (`quiz-screen.test.tsx`).** Der Bug war in der Oberfläche unsichtbar und nur im Server-Log erkennbar; eine einmalige Beobachtung sichert nichts für die Zukunft. Zwei Tests: dass nach der ersten sichtbaren Frage sofort eine zweite geladen wird, und dass eine richtige Antwort die vorgeladene Frage ohne Ladezustand zeigt. **Beide wurden rot geprüft**, indem ausschließlich die eine wiederhergestellte Bug-Zeile entfernt wurde (die fünf anderen `fetchQuestion`-Aufrufe blieben intakt) — sie fangen also genau diesen Fehler und nicht irgendeinen.
+
+Damit weicht dieses Feature bewusst von der Konvention ab, dass Tests ausschließlich `/qa` schreibt: Für einen Bug, der beim Anschauen nicht auffällt, gehört der Test zum Fix.

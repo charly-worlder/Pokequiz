@@ -1,13 +1,16 @@
+// Fails the build if this module is ever pulled into a client bundle. That is
+// not decoration: the caching options below are Next *server* options and are
+// inert in the browser, so an accidental client import would move these fetches
+// into the browser and break AC-31 (and AC-20) silently — the exact class of
+// failure this feature guards against everywhere else. design.md said "no new
+// packages"; this one is a deliberate, approved exception, because a comment
+// enforces nothing.
+import 'server-only'
+
 /**
  * Access to the PokeAPI. Everything here runs on the server — never in the
  * browser — so no player's IP address ever reaches a non-EU service
  * (spec.md AC-20 and, beyond it, design.md → Behaviors & Access).
- *
- * Only the Server Actions in src/lib/quiz/ import this module. It is not marked
- * with the `server-only` package because design.md rules out adding
- * dependencies; the caching options below are Next server options and would be
- * inert in a client bundle, so a stray client import would break AC-31 quietly
- * rather than loudly. Keep the import boundary.
  */
 
 const API_BASE = 'https://pokeapi.co/api/v2'
