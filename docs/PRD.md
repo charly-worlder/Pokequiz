@@ -33,7 +33,7 @@ Bewusst später: alles, was das Spiel variabler macht (Generationen-Auswahl, Sch
 - **Data protection law:** DSGVO (EU/DE)
 - **Data protection stance:** `standard` — begründet durch ein öffentliches Publikum, das absehbar auch Minderjährige einschließt (Art. 8 DSGVO), und durch Trainernamen, die für alle Nutzer sichtbar sind
 - **Design system:** siehe `docs/design-system.md` — abgeleitet aus dem Claude-Design-Projekt, Richtung „Fangball · Premium"
-- **Externe Datenquelle:** PokeAPI (kein API-Key, kostenlos). Abfrage live pro Frage, nur für die vier gezeigten Pokémon — Fair-Use-Policy der API
+- **Externe Datenquelle:** PokeAPI (kein API-Key, kostenlos). Abgefragt wird nur für die vier in einer Frage gezeigten Pokémon, nie der Bestand auf Vorrat. Bereits Abgerufenes wird zwischengespeichert und nicht erneut angefragt — beides verlangt die Fair-Use-Policy der API, die seit 2018 kein Rate-Limit mehr kennt, sondern um Caching und geringe Anfragehäufigkeit bittet
 - **Externe Bild-Auslieferung:** Sprites kommen von einem Nicht-EU-CDN. Die dabei übertragene IP-Adresse ist ein DSGVO-Sachverhalt und wird als Anforderung behandelt, nicht als Randnotiz
 - **Team:** eine Person, nebenbei. Kein Budget über die kostenlosen Tiers hinaus
 

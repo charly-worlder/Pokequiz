@@ -33,7 +33,9 @@ Diese drei Festlegungen prägen jedes Feature, das auf dem Modell aufbaut:
 
 ## Was bewusst *nicht* gespeichert wird
 
-- **Keine Pokémon-Daten.** Bilder und deutsche Namen kommen bei jeder Frage live von der PokeAPI. Es gibt keine `pokemon`-Tabelle und keinen vorab gecachten Pool — genau das verlangt die Fair-Use-Policy der API, und es hält die Namen automatisch aktuell.
+- **Keine Pokémon-Daten als Entität.** Bilder und deutsche Namen kommen von der PokeAPI, abgefragt jeweils nur für die vier in einer Frage gezeigten Pokémon. Es gibt keine `pokemon`-Tabelle und keinen auf Vorrat heruntergeladenen Pool; die Namen bleiben dadurch automatisch aktuell.
+
+  **Das schließt einen Zwischenspeicher ausdrücklich nicht aus** — im Gegenteil: Die Fair-Use-Policy der PokeAPI bittet als erste ihrer Regeln darum, bereits abgerufene Ressourcen lokal zwischenzuspeichern („Locally cache resources whenever you request them"), und kennt seit November 2018 kein Rate-Limit mehr. Ein Cache ist ein jederzeit verwerfbares Abbild, keine Entität mit eigener Wahrheit, und taucht deshalb hier nicht auf. Verbindlich geregelt ist er in PROJ-2, AC-31.
 - **Keine Fragen und keine Antworten.** Eine Runde hinterlässt nur ihr Ergebnis, nicht ihren Verlauf.
 - **Keine `leaderboard`-Entität** — siehe Speicher-Entscheidungen oben.
 
