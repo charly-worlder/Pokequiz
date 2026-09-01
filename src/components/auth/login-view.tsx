@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { loginSchema } from '@/lib/validation/auth'
 import { loginAction, type ActionState } from '@/lib/auth/actions'
+import { runAuthAction } from '@/lib/auth/run-action'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -39,7 +40,7 @@ export function LoginView({
     formData.set('password', values.password)
 
     startTransition(async () => {
-      const result: ActionState = await loginAction({}, formData)
+      const result: ActionState = await runAuthAction(() => loginAction({}, formData))
       if (result.error) setServerError(result.error)
       if (result.fieldErrors) {
         for (const [name, message] of Object.entries(result.fieldErrors)) {

@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { requestPasswordResetSchema } from '@/lib/validation/auth'
 import { requestPasswordResetAction, type ActionState } from '@/lib/auth/actions'
+import { runAuthAction } from '@/lib/auth/run-action'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -33,7 +34,9 @@ export function ForgotPasswordView({ onBackToLogin }: { onBackToLogin: () => voi
     formData.set('email', values.email)
 
     startTransition(async () => {
-      const result: ActionState = await requestPasswordResetAction({}, formData)
+      const result: ActionState = await runAuthAction(() =>
+        requestPasswordResetAction({}, formData)
+      )
       if (result.error) setServerError(result.error)
       if (result.message) setConfirmation(result.message)
       if (result.fieldErrors) {
