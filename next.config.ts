@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
   // back to a native submit. That is how BUG-4 was discovered. The `method`
   // attribute on the auth forms is the actual fix; this only removes one way of
   // triggering it and makes testing from a phone possible at all.
-  allowedDevOrigins: ['192.168.0.165', '*.local'],
+  allowedDevOrigins: ['192.168.0.165'],
 };
 
 export default nextConfig;
