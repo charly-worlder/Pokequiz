@@ -32,22 +32,30 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // getClaims() verifies the JWT locally against the project's signing key —
-  // no network round trip to Supabase Auth on every request, unlike getUser().
-  // Next.js's own guidance is to keep Proxy to an optimistic check and leave
-  // heavier work to Server Components/Actions; RLS and the page-level
-  // getUser() calls (e.g. src/app/page.tsx) remain the actual authority.
-  const { data: claims } = await supabase.auth.getClaims()
+  // BUG-3 (PROJ-2/qa-report.md): this used to be getClaims(), which only checks
+  // the JWT's signature locally. A revoked session — or one whose account was
+  // deleted — still passes that check, so the proxy considered the visitor
+  // signed in while src/app/page.tsx, which asks the auth server via getUser(),
+  // considered them signed out. The two redirected at each other until the
+  // browser gave up with ERR_TOO_MANY_REDIRECTS.
+  //
+  // There is now exactly ONE authority for "is this visitor signed in", and it
+  // is the auth server. Next.js's guidance to keep the proxy light still holds,
+  // but a cheap check that can disagree with the expensive one is worse than a
+  // slower check that cannot: the disagreement is what produced the loop.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
   const { pathname } = request.nextUrl
 
-  if (!claims && !isPublicPath(pathname)) {
+  if (!user && !isPublicPath(pathname)) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  if (claims && pathname === '/login') {
+  if (user && pathname === '/login') {
     const url = request.nextUrl.clone()
     url.pathname = '/'
     return NextResponse.redirect(url)
