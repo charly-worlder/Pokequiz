@@ -146,3 +146,26 @@ Routenschutz (Proxy `src/proxy.ts`, appweit)
 
 ## Open Questions
 - Keine — alle im Interview offenen Punkte sind in `spec.md` → Open Questions erfasst (betreffen Recht/Deploy, nicht die Technik dieses Designs).
+
+---
+
+## Nachtrag 2026-09-02 — BUG-3 und BUG-4 aus dem manuellen Test
+
+**Der Proxy prüft die Sitzung jetzt mit `getUser()` statt `getClaims()`** (BUG-3). Die ursprüngliche Entscheidung für `getClaims()` war für sich richtig begründet — lokale Signaturprüfung ohne Netzwerkaufruf, wie es die Next-Doku für den Proxy empfiehlt. Sie wurde aber gefährlich, sobald PROJ-2 in `page.tsx` eine zweite, strengere Prüfung mit `getUser()` einführte: Eine widerrufene Sitzung besteht die Signaturprüfung weiterhin und fällt bei der Serverprüfung durch, also schickten sich Proxy und Seite gegenseitig im Kreis (`ERR_TOO_MANY_REDIRECTS`, 19 Weiterleitungen).
+
+Es gibt jetzt **genau eine maßgebliche Quelle** für den Anmeldestatus, und das ist der Auth-Server. Eine billige Prüfung, die der teuren widersprechen kann, ist schlechter als eine langsamere, die es nicht kann.
+
+**Gemessene Kosten** (lokal, Supabase im Docker auf demselben Rechner, je 12 angemeldete Navigationen auf `/`):
+
+| Variante | Median | Mittel |
+|---|---|---|
+| `getClaims()` | 144 ms | 139,2 ms |
+| `getUser()` | 166 ms | 168,8 ms |
+
+Rund **25 ms mehr pro Navigation**, etwa +20 %. In Produktion liegt der Auth-Server eine echte Netzwerkstrecke entfernt (eu-central-1), dort ist mit mehr zu rechnen — grob 50–100 ms. Der Aufschlag trifft auch Prefetches, weil der Matcher sie erfasst. Für eine App mit zwei navigierbaren Bereichen ist das vertretbar; sollte es je stören, wäre die Alternative **nicht**, zu `getClaims()` zurückzukehren, sondern die ungültigen Cookies zu löschen, sobald `getUser()` sie ablehnt — dann verschwindet der Widerspruch an der Wurzel statt durch eine zweite Wahrheit.
+
+**Die vier Auth-Formulare tragen jetzt `method="post"`** (BUG-4). Ohne dieses Attribut fielen sie bei fehlender Hydration auf das HTML-Standardverhalten zurück — ein natives GET mit E-Mail und Passwort in der Adresszeile. `onSubmit` mit `preventDefault()` sieht regelkonform aus und schützt nur, solange das JavaScript läuft. Nachgewiesen mit abgeschaltetem JavaScript: ohne das Attribut `GET /login?email=…&password=…`, mit ihm `POST /login`.
+
+`allowedDevOrigins` in `next.config.ts` ist ergänzt, damit das JavaScript beim Testen über die LAN-Adresse überhaupt lädt. Das beseitigt nur **einen** Auslöser; die Absicherung ist das `method`-Attribut.
+
+**Bekannte Einschränkung:** Ohne JavaScript sendet das Formular zwar sicher per POST, die Anmeldung funktioniert dann aber nicht — die Seite hat keinen Server-Action-Endpunkt für einen nativen POST. Das ist bewusst so: Ziel war, das Leck zu schließen, nicht die App ohne JavaScript lauffähig zu machen. Ein fehlgeschlagener Login ist ungleich besser als ein durchgereichtes Passwort.
