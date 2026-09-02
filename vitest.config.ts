@@ -15,6 +15,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
+      // `server-only` throws on import unless the bundler resolves the
+      // "react-server" condition, which Vitest does not set. Point it at the
+      // package's own empty module — the same file Next resolves on the server
+      // — so server modules can be unit tested. This does not weaken the
+      // guard: the real check happens in `next build` (PROJ-2, design.md).
+      'server-only': resolve(__dirname, './node_modules/server-only/empty.js'),
     },
   },
 })
