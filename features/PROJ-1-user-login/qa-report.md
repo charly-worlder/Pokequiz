@@ -142,3 +142,86 @@ Umfang der zweiten Runde — bewusst nicht der volle AC-Sweep, sondern der Fix p
 - **Recommendation:** Deploy möglich. Zwei Dinge müssen aber direkt nach dem ersten `/deploy` gegen das gehostete Projekt geprüft werden, bevor die App öffentlich geht: **AC-8/EC-4** (Rate-Limit, lokal nicht auslösbar) und **AC-11/AC-12** (Reset-Link, hängt an Site-URL/Redirect-URLs des gehosteten Projekts) — beide Prüfpläne stehen in `design.md`.
 
 > „Production Ready: YES" heißt hier ausschließlich: **kein offener Critical- oder High-Bug**. Es heißt *nicht*, dass alles geprüft wurde. Offen bleiben AC-8/EC-4 (erst hosted prüfbar), Cross-Browser, responsives Layout und ein dedizierter Barrierefreiheits-Durchgang — siehe „Not Verified In This Run".
+
+---
+
+## Nachlauf — 2026-09-02, nach BUG-3 und BUG-4
+
+**Anlass:** Zwei Fehler aus dem manuellen Test des Nutzers wurden in PROJ-1 behoben (`791c786`) — die Weiterleitungsschleife und die Zugangsdaten in der URL. Dieser Lauf prüft die Fixes und die vom Nutzer geforderte Erweiterung des Sitzungs-Testfalls („Cookie da, Sitzung serverseitig ungültig").
+
+### Der erweiterte Sitzungs-Testfall
+
+Genau dieser Fall fehlte bisher in jeder Suite: Alle bisherigen Prüfungen simulierten eine *fehlende* Sitzung. Der reale Fall ist ein **vorhandenes, signatur-gültiges Cookie zu einer serverseitig widerrufenen Sitzung** — und nur der erzeugte die Schleife.
+
+- [x] **BUG-3 im Browser** — angemeldet, Konto über die Admin-API gelöscht, Cookie belassen, dann F5: **kein `ERR_TOO_MANY_REDIRECTS`, genau 1 Weiterleitung, Ziel `/login`** (vorher: 19 Weiterleitungen, Abbruch)
+- [x] **BUG-3 als dauerhafter Regressionstest** — `src/proxy.test.ts`, 7 Tests. Beide Hälften der Schleife sind festgehalten: die ungültige Sitzung *muss* nach `/login`, und auf `/login` darf sie *nicht* zurückgeschickt werden. Dazu eine ausdrückliche Zusicherung, dass der Proxy `getUser()` benutzt und `getClaims()` **nicht** mehr aufruft
+- [x] **Rot-Nachweis, präzise** — der Proxy wurde auf `getClaims()` zurückgestellt **und** der Mock so gesetzt, dass die Signaturprüfung eine gültige Sitzung meldet, während der Auth-Server ablehnt: also exakt der Fehlerzustand. Ergebnis: **5 von 7 Tests rot**, darunter beide Schleifen-Hälften; die zwei Tests für eine echte Sitzung blieben grün. Die Tests fangen also den Fehler, nicht bloß eine Codeänderung
+
+### Acceptance Criteria — in diesem Lauf geprüft
+
+- [x] **AC-1** Registrierung ohne E-Mail-Bestätigung, sofort eingeloggt — Browser-Lauf
+- [x] **AC-1/AC-11** Passwort-Mindestlänge greift serverseitig — 7 Zeichen: **422 „Password should be at least 8 characters"**, 8 Zeichen: 200
+- [x] **AC-2** Trainername eindeutig, unabhängig von Groß-/Kleinschreibung — beide Varianten abgelehnt
+- [x] **AC-3** Bereits registrierte E-Mail-Adresse gibt kein zweites Konto — 422
+- [x] **AC-4** Login mit korrekten Daten führt auf `/` — Browser-Lauf
+- [x] **AC-5** Sitzung überlebt einen neuen Seitenaufruf — Browser-Lauf
+- [x] **AC-6** Abmelden beendet die Sitzung und führt auf `/login` — Browser-Lauf, über den **neuen** Abmelden-Button in PROJ-2s Kopfzeile
+- [x] **AC-7** Identische Fehlermeldung für falsches Passwort und unbekannte Adresse — beide „Invalid login credentials", gleicher Status
+- [x] **AC-10** Gleiche Bestätigungsmeldung für bekannte und unbekannte Adresse — Browser-Lauf
+- [x] **AC-11** Passwort-Reset **vollständig durchgespielt**: Link aus der echten E-Mail (Mailpit) → Formular erscheint → neues Passwort gesetzt → direkt eingeloggt → Login mit dem neuen Passwort funktioniert → **das alte Passwort funktioniert nicht mehr**
+- [x] **AC-12** Bereits verwendeter Link gibt kein Passwortformular mehr her (0 Felder) und zeigt „Dieser Link …" als Fehlermeldung
+- [x] **AC-13** Leeres Formular zeigt Validierungsfehler ohne Neuladen — Browser-Lauf
+- [x] **AC-14** Datenschutz-Hinweis im Registrierungsformular sichtbar — Browser-Lauf
+- [!] **AC-8** Drosselung nach wiederholten Fehlversuchen — **NICHT VERIFIZIERT.** 30 falsche Passwörter gegen dasselbe Konto lösten **kein 429** aus, ebenso 10 Konten mit demselben Passwort. Das bestätigt die bekannte Open Question in `spec.md`: Supabases eingebautes Limit ist im lokalen CLI-Stack nicht aktiv. **Prüfbar erst gegen das gehostete Projekt**, mit demselben Verfahren
+
+### Edge Cases
+
+- [x] **EC-1** Trainername doppelt (auch mit anderer Schreibweise) → abgelehnt
+- [x] **EC-2** Ausgeloggt auf geschützte Route → `/login`; **erweitert** um den Fall „Cookie da, Sitzung ungültig" (siehe oben)
+- [x] **EC-3** Reset für unbekannte Adresse → dieselbe Meldung
+- [!] **EC-4** Verhalten am erreichten IP-Limit — **NICHT VERIFIZIERT**, gleiche Ursache wie AC-8
+- [x] **EC-5** Ungültige Trainernamen (zu kurz, zu lang, Leerzeichen, Emoji) → alle abgelehnt
+- [!] **EC-6** Netzwerkfehler beim Absenden — **NICHT VERIFIZIERT in diesem Lauf**; abgedeckt durch `src/lib/auth/run-action.test.ts` aus dem Erstlauf
+
+### Security
+
+- [x] **Zugangsdaten nie in der URL (BUG-4)** — mit abgeschaltetem JavaScript sendet das Formular `POST /login`, die URL bleibt sauber. **Durch Mutation belegt:** ohne `method="post"` erscheint wieder `GET /login?email=…&password=…`
+- [x] **Keine Kontoexistenz-Preisgabe** — siehe AC-7
+- [x] **Authentifizierung** — `/` ohne Sitzung: 307 nach `/login`
+- [x] **Autorisierung / Datenschicht** — Sicherheitsdurchgang 19/19 (fremde Runden nicht lesbar, fremdes Profil nicht beschreibbar, Injection abgewiesen, `profiles` gibt keine E-Mail heraus)
+- [!] **Brute-Force-Schutz** — nicht auslösbar, siehe AC-8. **Das ist keine bestandene Prüfung**, sondern eine offene
+- [!] **Massen-Registrierung** — 5 von 5 Konten per Skript angelegt. Bewusste Produktentscheidung (kein CAPTCHA im MVP, `spec.md` → Out of Scope), hier nur festgehalten
+
+### Bugs
+
+#### BUG-5: Zwei verschachtelte `<main>`-Elemente auf `/login` und `/reset-password`
+
+- **Severity:** Low
+- **Ursache:** PROJ-2s `PageFrame` bringt ein `<main>` mit (`page-frame.tsx:13`), PROJ-1s Seiten haben bereits eines (`login/page.tsx:5`, `reset-password/page.tsx:16`). Das ausgelieferte HTML enthält **zwei** — geprüft mit `curl`
+- **Wirkung:** Ungültiges HTML; Screenreader finden zwei „main"-Landmarken statt einer, was die Landmarken-Navigation unbrauchbar macht. Keine funktionale Einschränkung
+- **Regression aus PROJ-2:** Vor der Shell gab es nur das innere `<main>`
+- **Fix:** Das innere `<main>` in den beiden Seiten zu einem `<div>` machen. Eine Zeile je Datei
+- **Priorität:** Vor dem Deploy, aber nicht blockierend
+
+#### Offene `[user]`-Aufgabe: T4 (Passwort-Mindestlänge im Dashboard)
+
+`tasks.md` → T4 ist offen: *Supabase Dashboard → Authentication → Sign In / Providers → Email → Minimum password length: 8*. Sie liegt auf einem Zugangsdaten-Pfad (AC-1, AC-11).
+
+**Einordnung:** Die Aufgabe ist ausdrücklich für das **gehostete** Projekt ab dem ersten Deploy formuliert, und das existiert noch nicht. Der lokale Spiegel in `supabase/config.toml` ist gesetzt und in diesem Lauf **verifiziert** (7 Zeichen → 422). Sie ist damit kein Fehler im jetzigen Stand, aber ein **echter Blocker für `/deploy`** — ohne sie akzeptiert das Produktivsystem kürzere Passwörter als zugesagt.
+
+### Die drei Prüfungen — einzeln gelaufen
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **92 bestanden** (85 + 7 neue Proxy-Tests) |
+| Lint | `npm run lint` | **grün**, keine Befunde |
+| Build | `npm run build` | **grün**, „Finished TypeScript" |
+
+### Verdikt
+
+- **Acceptance Criteria:** **12 von 13 verifiziert**, 1 nicht verifiziert (AC-8, lokal nicht auslösbar)
+- **Edge Cases:** 4 von 6 verifiziert, 2 nicht verifiziert (EC-4 gleiche Ursache wie AC-8; EC-6 aus dem Erstlauf abgedeckt)
+- **Bugs:** BUG-3 und BUG-4 **behoben und verifiziert**; **BUG-5 neu (Low)**
+- **Security:** 4 von 6 Prüfungen verifiziert, 2 offen (Brute Force, Massen-Registrierung)
+- **Production Ready:** **JA für diesen Stand** — kein kritischer oder hoher Fehler offen. Mit zwei Auflagen, die vor dem öffentlichen Start zu erledigen sind: **AC-8 gegen das gehostete Projekt prüfen** und **T4 im Dashboard setzen**
+- **Weiterhin ungeprüft:** Firefox und Safari — in keinem Lauf getestet, alles lief in Chromium
