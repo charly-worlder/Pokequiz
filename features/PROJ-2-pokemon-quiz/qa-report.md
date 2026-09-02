@@ -212,3 +212,64 @@ Ein gescheiterter Build veröffentlicht nichts — er ist ein Tor, kein Zustand.
 - **Empfehlung:** BUG-1 über `/build` beheben (ein `useEffect`), dann `/qa` erneut. BUG-2 bewusst zurückstellen
 
 > „Production Ready" ist eine Aussage über **gefundene Fehler**, nicht über Abdeckung. Cross-Browser wurde in keinem Lauf geprüft, und die Responsivität stammt aus dem `/build`-Durchgang, nicht aus diesem.
+
+---
+
+## Nachtrag — 2026-09-02, Funde aus dem manuellen Test des Nutzers
+
+Der Nutzer hat nach der Freigabe manuell getestet und drei Dinge gemeldet. Alle drei wurden hier reproduziert bzw. gegen die Spec geprüft. **Zwei davon sind echte Fehler, einer ist keiner.** Die Freigabe oben ist damit hinfällig — PROJ-2 geht zurück auf *In Review*, PROJ-1 ebenfalls.
+
+### BUG-3 — Weiterleitungsschleife bei ungültiger Sitzung (High)
+
+**Reproduziert.** Anmelden, Runde starten, die Sitzung serverseitig ungültig machen (Nutzer über die Admin-API gelöscht, Cookie im Browser belassen), dann F5: **`ERR_TOO_MANY_REDIRECTS`, 19 Weiterleitungen bei einem einzigen Aufruf.**
+
+**Ursache — zwei Prüfungen, die einander widersprechen:**
+
+- `src/proxy.ts:40` benutzt `getClaims()`. Das prüft nur die **Signatur** des Tokens, lokal, ohne Rückfrage beim Auth-Server. Eine widerrufene oder zu einem gelöschten Konto gehörende Sitzung besteht diese Prüfung weiterhin → der Proxy hält den Nutzer für angemeldet und leitet `/login` → `/`.
+- `src/app/page.tsx:20` benutzt `getUser()`. Das fragt den Auth-Server und bekommt **403** → die Seite hält den Nutzer für abgemeldet und leitet `/` → `/login`.
+
+Zwischen diesen beiden Antworten pendelt der Browser, bis er abbricht. Das erklärt auch das zweite Symptom des Nutzers: wiederholte `GET /auth/v1/user` mit 403, gefolgt von `GET / 307`.
+
+**Eingeführt hat das PROJ-2.** Vor diesem Feature stand in `page.tsx` `return null` statt `redirect('/login')` (`git show 6b9ecf6:src/app/page.tsx`) — ohne die zweite Weiterleitung gab es keine Schleife. Die Entscheidung für `getClaims()` im Proxy stammt aus PROJ-1 (`design.md` → Technical Decisions) und ist für sich genommen richtig begründet; erst die Kombination beider Prüfungen erzeugt den Fehler.
+
+**Warum es zählt:** Der Nutzer kommt aus der Schleife nicht heraus, ohne selbst die Cookies zu löschen — die App bietet keinen Ausweg. Der Fall tritt bei jeder widerrufenen Sitzung auf und wird mit PROJ-4 (Kontolöschung) zum Regelfall: Wer sein Konto löscht und einen offenen Tab hat, landet darin.
+
+**Warum QA es nicht gefunden hat:** Die EC-7-Prüfungen simulierten eine fehlende Sitzung, indem die Server Action `unauthenticated` zurückgab. Der reale Fall — Cookie vorhanden, Signatur gültig, Sitzung serverseitig weg — kam in keinem Test vor. Das ist eine echte Lücke im Testansatz, nicht nur ein übersehener Fall.
+
+### BUG-4 — Zugangsdaten im Klartext in der URL (Critical)
+
+**Reproduziert, und zwar unabhängig von der LAN-IP.** Mit abgeschaltetem JavaScript (`javaScriptEnabled: false`) sendet das Login-Formular nativ:
+
+```
+GET /login?email=opfer%40example.com&password=GeheimesPasswort123
+```
+
+**Ursache:** Die vier Auth-Formulare (`login-view.tsx:55`, `register-view.tsx:53`, `forgot-password-view.tsx:64`, `reset-password-form.tsx:97`) tragen **kein `method`-Attribut**. Sie verlassen sich vollständig auf `onSubmit={form.handleSubmit(...)}`. Läuft das JavaScript nicht, fällt der Browser auf das HTML-Standardverhalten zurück — und das ist GET mit allen Feldern in der Adresszeile.
+
+Der vom Nutzer beobachtete Auslöser (Zugriff über die LAN-IP) ist nur *ein* Weg dorthin: `allowedDevOrigins` ist in `next.config.ts` **nicht gesetzt**, deshalb blockiert Next die `/_next/*`-Ressourcen als Cross-Origin und das JavaScript lädt nicht. Aber jeder andere Hydrationsfehler — Netzabbruch, CSP-Problem, blockierendes Add-on — führt in Produktion zum selben Ergebnis.
+
+**Verstößt gegen** `.claude/rules/security.md` → „Auth forms must submit via POST, never GET" (dort ausdrücklich als harte Regel geführt) und gegen PROJ-1 → Technical Requirements.
+
+**Warum QA es nicht gefunden hat:** Im Erstlauf habe ich „Keine Zugangsdaten in der URL" abgehakt mit dem Nachweis „alle Formulare senden über Server Action oder `handleSubmit`". Das war die **falsche Art von Nachweis** — ich habe den Code gelesen, statt das Formular ohne JavaScript abzuschicken. Genau davor warnt die Regel: Ein `preventDefault()` im Handler sieht regelkonform aus und schützt nicht, wenn der Handler nie läuft.
+
+**Nebenbefund, dringend:** Im Dev-Log dieses Rechners steht aus dem manuellen Test eine echte Anmeldung im Klartext (`GET /login?email=chris%40chros.de&password=…`). Das Passwort ist als kompromittiert zu behandeln.
+
+### Kein Bug — vertikales Scrollen bei 375 px
+
+Geprüft in `spec.md`, `design.md`, `docs/app-shell.md` und `docs/design-system.md`: **Kein Dokument verlangt, dass alle vier Antwortoptionen ohne Scrollen sichtbar sind.**
+
+- **AC-24** betrifft ausschließlich die Kopfzeile: kein Burger-Menü, Nutzer-Chip unter 640 px auf die Initiale reduziert. Über den Inhaltsbereich sagt es nichts.
+- **AC-25** betrifft Skelettflächen, nicht die Sichtbarkeit.
+- `docs/app-shell.md:34` sagt für Mobil ausdrücklich: „Die Inhalte stapeln sich von selbst" — vertikales Stapeln *ist* das vorgesehene Verhalten.
+
+Verboten ist nur **horizontales** Scrollen, und das wurde geprüft (kein horizontales Scrollen bei 375/768/1440 px).
+
+Wenn die vier Optionen ohne Scrollen sichtbar sein *sollen*, ist das eine Produktentscheidung und kein Fix: Sie gehört über `/refine PROJ-2` als neues AC in die Spec, nicht als stille Änderung in den Code.
+
+### Offene Statuszeile
+
+| | |
+|---|---|
+| **PROJ-2** | Approved → **In Review** (BUG-3) |
+| **PROJ-1** | Approved → **In Review** (BUG-4, betrifft alle vier Auth-Formulare) |
+| Weiterhin ungeprüft | Firefox, Safari, 768 px und 1440 px abschließend |
