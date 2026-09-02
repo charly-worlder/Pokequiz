@@ -13,7 +13,8 @@ import {
 // and design.md → Technical Decisions for why.
 export default function ResetPasswordPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-6">
+    // BUG-5: siehe login/page.tsx — die App-Shell liefert seit PROJ-2 das main-Element.
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <Card className="w-full max-w-md rounded-card">
         <CardHeader>
           <CardTitle>Neues Passwort</CardTitle>
@@ -23,6 +24,6 @@ export default function ResetPasswordPage() {
           <ResetPasswordForm />
         </CardContent>
       </Card>
-    </main>
+    </div>
   )
 }
