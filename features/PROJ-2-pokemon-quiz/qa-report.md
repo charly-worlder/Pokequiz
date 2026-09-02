@@ -1,5 +1,54 @@
 # QA Test Results
 
+> **Dieser Bericht hat zwei Durchgänge.** Unten steht der vollständige Erstlauf, der BUG-1 gefunden hat; er bleibt unverändert stehen, weil ein Bericht, der nachträglich grün geschrieben wird, nichts mehr wert ist. Der **Nachlauf direkt hier drunter** trägt die gültige Freigabe.
+
+---
+
+## Nachlauf — 2026-09-02, nach dem Fix von BUG-1
+
+**Anlass:** BUG-1 behoben (`0567e53`). Zusätzlich zu prüfen: ob der zwischenzeitlich kaputte Build aus `30607f0` sonst etwas beeinflusst hat.
+
+### Hat der kaputte Build etwas berührt?
+
+**Nein — nachweislich nicht.** Der Fehler war eine TypeScript-Verletzung in *einer Testdatei* (`client.test.ts`), die `npm run build` scheitern ließ. Drei unabhängige Belege:
+
+- `git show --name-only 30607f0` außerhalb der Tests: **nur** `features/INDEX.md`, `features/PROJ-2-pokemon-quiz/qa-report.md`, `vitest.config.ts` — **keine Zeile Laufzeitcode**
+- `git diff --stat d6aba45..HEAD -- src/ ':!*.test.*'`: **eine einzige** geänderte Laufzeitdatei, `quiz-screen.tsx` (+19 Zeilen) — der AC-19-Fix, sonst nichts
+- Die einzige Konfigurationsänderung war der `server-only`-Alias in `vitest.config.ts`. Der könnte theoretisch die Import-Absicherung aushebeln, deshalb gegengeprüft: ein absichtlich eingebauter Client-Import lässt `npm run build` weiterhin mit „'server-only' cannot be imported from a Client Component module" abbrechen. Die Absicherung ist unverändert wirksam; der Alias wirkt nur in Vitest
+
+Ein gescheiterter Build veröffentlicht nichts — er ist ein Tor, kein Zustand. Da er kein Laufzeitverhalten berührte, war kein zuvor verifiziertes Kriterium betroffen.
+
+### AC-19 — neu bewertet
+
+- [x] **AC-19** Verlassen-Warnung ab Serie 1 — **im echten Browser an vier Zuständen geprüft**: Startbildschirm (keine Warnung), Serie 0 (keine Warnung), nach der ersten richtigen Antwort (**abgewehrt**), bei Serie 4 (weiterhin abgewehrt), nach dem Rundenende (keine Warnung mehr). Verfahren: echtes `beforeunload`-Ereignis auslösen und `defaultPrevented` auswerten. Dazu `src/components/quiz/quiz-screen.error-states.test.tsx` („AC-19"), **rot-geprüft**: Entfernt man nur diesen Effekt, fällt genau dieser Test um, die übrigen acht bleiben grün
+
+### Regression im Nachlauf
+
+- [x] **Rundenablauf** — 15/15 im Browser: Serie zählt auf 4, falsche Antwort beendet, Ergebnis-Screen, Bestleistung, „Nochmal spielen" (AC-4, AC-7, AC-8, AC-9, EC-3)
+- [x] **Rahmen und Grenzen** — keine Browser-Anfrage an einen fremden Host (AC-20), Trainername in der Kopfzeile (AC-21), kein toter Rechts-Link (AC-23), keine JS-Fehler
+- [x] **Datenschicht** — Sicherheitsdurchgang erneut vollständig gelaufen: **19/19** (Autorisierung über zwei Konten, Grenzwerte, Injection, sensible Daten)
+- [x] **AC-13** — `curl` auf `/` ohne Sitzung: **307** nach `/login`
+
+### Die drei Prüfungen — einzeln gelaufen, einzeln genannt
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **85 bestanden**, 0 ausgesetzt (9 Dateien) |
+| Lint | `npm run lint` | **grün**, keine Befunde |
+| Build | `npm run build` | **grün**, „Finished TypeScript" ohne Fehler |
+
+### Verdikt des Nachlaufs
+
+- **Acceptance Criteria:** **30 von 31 verifiziert**, 1 nicht verifiziert (AC-24, Responsivität)
+- **Edge Cases:** 11 von 11
+- **Bugs offen:** BUG-1 **behoben**; BUG-2 (Low) bewusst offen als Backlog-Punkt **B1** in `tasks.md`
+- **Production Ready:** **JA** — keine kritischen oder hohen Fehler
+- **Weiterhin ungeprüft:** Cross-Browser (Firefox, Safari) wurde in **keinem** Lauf getestet, alles lief in Chromium. AC-24 (375/768/1440 px) stammt aus dem `/build`-Durchgang, nicht aus einem QA-Lauf. Beides gehört zu `/e2e-tests` oder einem menschlichen Durchgang
+
+---
+
+## Erstlauf — 2026-09-02 (unverändert, führte zu BUG-1)
+
 **Getestet:** 2026-09-02
 **App-URL:** http://localhost:3000 (lokaler Dev-Server, lokale Supabase-Instanz)
 **Tester:** QA Engineer (AI)
