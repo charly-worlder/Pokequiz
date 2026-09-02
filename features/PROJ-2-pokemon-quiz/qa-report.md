@@ -164,6 +164,31 @@
 
 ---
 
+## Nachtrag — 2026-09-02, BUG-6 behoben und nachgemessen
+
+**Fix:** `src/components/quiz/quiz-screen.tsx` — `roundInFlight` schließt jetzt auch die Phase `loading` ein. Ein Term, sonst nichts. Der Abnahmetest „AC-19: die Warnung greift auch, während die nächste Frage noch lädt" ist nicht mehr ausgesetzt.
+
+**Gegenprobe im Browser — dieselbe Messung wie bei der Entdeckung** (`beforeunload` alle 40 ms ausgelöst, `defaultPrevented` ausgewertet, Runde mit 8 richtigen Antworten):
+
+| | vor dem Fix | nach dem Fix |
+|---|---|---|
+| Messpunkte ab Serie ≥ 1 | 193 (~7,7 s) | 193 (~7,7 s) |
+| davon „Runde wird vorbereitet …" | 10 | 5 |
+| davon geschützt | **0 von 10** | **5 von 5** |
+| **ohne Verlassen-Warnung** | **10 (~400 ms, 5,2 %)** | **0 (0 ms, 0 %)** |
+
+**Die Ränder verhalten sich weiterhin richtig** — der Fix macht die Warnung nicht pauschal:
+
+- Startbildschirm, Serie 0: **warnt nicht** (nichts zu verlieren)
+- Auflösung nach einer falschen Antwort: **warnt** (Runde noch nicht abgeschlossen)
+- Ergebnis-Screen, Runde vorbei und gespeichert: **warnt nicht**
+
+**Die drei Prüfungen, einzeln gelaufen:** `npm test` **93 bestanden, 0 ausgesetzt** (vorher 92 + 1 ausgesetzt) · `npm run lint` **grün** · `npm run build` **grün**, „Finished TypeScript" ohne Fehler.
+
+**Damit ist AC-19 vollständig erfüllt** und BUG-6 geschlossen. Offen bleibt allein **BUG-2** (Low, bewusst zurückgestellt als Backlog-Punkt **B1**). Unverändert ungeprüft: **Firefox und Safari** — alle Browser-Prüfungen dieses Projekts liefen in Chromium.
+
+---
+
 ## Nachlauf — 2026-09-02, nach dem Fix von BUG-1
 
 **Anlass:** BUG-1 behoben (`0567e53`). Zusätzlich zu prüfen: ob der zwischenzeitlich kaputte Build aus `30607f0` sonst etwas beeinflusst hat.

@@ -185,12 +185,12 @@ describe('QuizScreen — Fehlerpfade', () => {
     await waitFor(() => expect(fireBeforeUnload()).toBe(true))
   })
 
-  // Abnahmetest zu BUG-6 (qa-report.md, Lauf vom 2026-09-02): Die Warnung hängt an
-  // `roundInFlight`, das die Phase `loading` nicht einschließt. Ist die nächste Frage
-  // noch nicht vorgeladen, läuft die Runde zwar weiter, ist aber ungeschützt —
-  // gemessen ~400 ms je Runde. Ausgesetzt, damit die Suite nicht dauerhaft rot steht;
-  // `/build` entfernt das `.skip` zusammen mit dem Fix.
-  it.skip('AC-19: die Warnung greift auch, während die nächste Frage noch lädt', async () => {
+  // Abnahmetest zu BUG-6 (qa-report.md, Lauf vom 2026-09-02): Die Warnung hing an
+  // `roundInFlight`, das die Phase `loading` nicht einschloss. War die nächste Frage
+  // noch nicht vorgeladen, lief die Runde zwar weiter, war aber ungeschützt —
+  // gemessen ~400 ms je Runde. Der Test war zuerst rot, danach wurde die Phase
+  // ergänzt; er hält die Lücke ab jetzt geschlossen.
+  it('AC-19: die Warnung greift auch, während die nächste Frage noch lädt', async () => {
     const fireBeforeUnload = () => {
       const event = new Event('beforeunload', { cancelable: true })
       window.dispatchEvent(event)

@@ -108,8 +108,14 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
    * BUG-1 (qa-report.md): this was lost when the state machine was rewritten
    * during /build and shipped missing. `quiz-screen.error-states.test.tsx` is
    * its acceptance test.
+   *
+   * BUG-6 (qa-report.md): `loading` used to be missing here. It is the phase
+   * `advance` sets when the next question was not preloaded in time, so the
+   * round kept running with the full streak while the warning was off —
+   * measured at ~400ms per round, 5.2% of it.
    */
-  const roundInFlight = phase === 'open' || phase === 'resolved' || phase === 'error'
+  const roundInFlight =
+    phase === 'open' || phase === 'resolved' || phase === 'error' || phase === 'loading'
   useEffect(() => {
     if (!roundInFlight || streak < 1) return
     const warn = (event: BeforeUnloadEvent) => event.preventDefault()
