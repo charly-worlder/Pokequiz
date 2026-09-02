@@ -8,6 +8,12 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Unit- und Integrationstests liegen neben ihrer Quelldatei unter src/.
+    // `tests/` gehört Playwright: dessen Specs importieren `test` und `expect`
+    // aus @playwright/test und laufen unter Vitest nicht. Ohne diese Abgrenzung
+    // sammelt Vitest sie über sein Standardmuster `**/*.spec.ts` mit ein und
+    // `npm test` meldet fehlgeschlagene Dateien, obwohl kein Test defekt ist.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
     // A fresh scaffold ships no tests yet — `npm test` must not fail before
     // /build and /qa have written the first ones.
     passWithNoTests: true,

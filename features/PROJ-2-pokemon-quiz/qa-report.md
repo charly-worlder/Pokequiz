@@ -110,7 +110,34 @@
 
 ### E2E Tests
 
-- Status: **nicht ausgeführt** (`/e2e-tests` für die kritischen Abläufe)
+**Ausgeführt am 2026-09-02 — 4 kritische Journeys, 15 Läufe, alle grün** (`npm run test:e2e`).
+
+Die Suite läuft ab jetzt in **drei Browser-Projekten**. Firefox war in `playwright.config.ts` gar nicht konfiguriert — die Datei stammte unverändert aus dem Kit-Scaffold (`6910cd8`) und kannte nur Chromium und WebKit. Das Projekt `firefox` wurde ergänzt, Firefox und WebKit wurden installiert. **Damit ist die Lücke geschlossen, die jeder bisherige QA-Bericht als „nie geprüft" führen musste** — jedenfalls für diese vier Abläufe.
+
+| Journey | Datei | Deckt ab | chromium | firefox | Mobile Safari |
+|---|---|---|---|---|---|
+| Kernschleife: Runde spielen bis zum gespeicherten Ergebnis | `tests/PROJ-2-quiz-round.spec.ts` | AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-11, EC-1 | ✅ | ✅ | ✅ |
+| Zugangsschutz, ausgeloggt und nach dem Abmelden | `tests/PROJ-2-access-guard.spec.ts` | AC-13, AC-21, AC-22, AC-23 | ✅ | ✅ | ✅ |
+| Keine einzige Anfrage an einen fremden Host | `tests/PROJ-2-no-third-party.spec.ts` | AC-20, AC-29, AC-30 | ✅ | ✅ | ✅ |
+| Zweite Runde und persönliche Bestleistung | `tests/PROJ-2-personal-best.spec.ts` | AC-1, AC-8, AC-9 | ✅ | ✅ | ✅ |
+
+**Jede Journey wurde rot geprüft — durch Mutation des Anwendungscodes, nicht durch Verdrehen der Erwartung.** Ein E2E-Test, dessen Fehlschlag man nie gesehen hat, ist kein Regressionsnetz:
+
+| Mutation im Quellcode | Erwartetes Verhalten | Ergebnis |
+|---|---|---|
+| Routenschutz im Proxy deaktiviert | Zugangsschutz fällt | fiel an der `/leaderboard`-Zusicherung (Zeile 24) |
+| `unoptimized` an `next/image` — Browser lädt direkt vom CDN | Drittanbieter-Journey fällt | fiel mit „Das Pokémon-Bild muss über die eigene Domain kommen (AC-20)" und zeigte die durchgesickerte `raw.githubusercontent.com`-Adresse |
+| Vergleichsoperator der Rekordlogik gedreht (`>` → `<`) | Bestleistungs-Journey fällt | fiel an der AC-8-Zusicherung: Abzeichen gefunden, obwohl die Runde schlechter war |
+| `pauseClock()` bei falscher Antwort entfernt | Kernschleife fällt | fiel an der Uhr-Zusicherung (erwartet `0:03`, tatsächlich `0:09`) |
+
+**Zwei Befunde aus dem Rot-Nachweis, beide an den Tests selbst — kein Fehler in der Anwendung:**
+
+1. **Eine Abwesenheitsprüfung war wirkungslos.** „Die schlechtere Runde zeigt *kein* Bestleistungs-Abzeichen" war grün, bevor das Abzeichen überhaupt erscheinen konnte, und blieb deshalb auch bei absichtlich kaputter Rekordlogik grün. Auch `waitForLoadState('networkidle')` half nicht: Es löst auf, sobald das Netz gerade ruhig ist — unter Umständen also, bevor der Speicher-Aufruf startet. Nachgemessen: Nach `networkidle` fehlt das Abzeichen selbst dann, wenn es korrekt erscheinen müsste. Gelöst über `runSavedResponse()` in `tests/helpers.ts`, das gezielt auf die Antwort des Speicher-Aufrufs wartet (erkennbar am Runden-Kennzeichen im Rumpf). Danach fängt die Zusicherung die Mutation.
+2. **Das Vorladen aus AC-10 hängt ein zweites, unsichtbares Bild in den Baum** (`alt=""`, `aria-hidden`) — im DOM sogar **vor** dem sichtbaren. Ein `main img` hätte zeitweise die Nummer der *nächsten* Frage gelesen und den Test auf die falsche Lösung angesetzt. Die Helfer hängen deshalb am Alt-Text der sichtbaren Frage.
+
+**Anpassung außerhalb der Tests:** `vitest.config.ts` grenzt jetzt auf `src/**` ein. Vitest sammelt sonst über sein Standardmuster `**/*.spec.ts` die Playwright-Specs mit ein, die unter ihm nicht laufen — `npm test` meldete dadurch vier fehlgeschlagene Dateien, ohne dass ein Test defekt war. Beide Suiten zusammen: `npm run test:all` → **93 Unit-Tests und 15 E2E-Läufe grün**.
+
+**Was die Suite bewusst nicht abdeckt:** die Fehlerpfade der externen Datenquelle (AC-15 bis AC-18, EC-5, EC-6, EC-8, EC-10, EC-11). Der Ausfall der PokeAPI lässt sich von außen nicht auslösen, weil der *Server* sie aufruft — diese Pfade bleiben bei den Komponententests, wo die Server Action mockbar ist.
 
 ### Regression
 
@@ -121,7 +148,7 @@
 
 ### Not Verified In This Run
 
-- [!] **Cross-Browser (Firefox, Safari)** — **weiterhin in keinem Lauf geprüft.** Nur Chromium ist installiert; `/qa` lädt bewusst keinen weiteren Browser nach. Gehört zu `/e2e-tests` oder einem menschlichen Durchgang
+- [!] **Cross-Browser (Firefox, Safari)** — in **diesem QA-Lauf** nicht geprüft: Nur Chromium war installiert, und `/qa` lädt bewusst keinen weiteren Browser nach. **Nachträglich teilweise geschlossen:** Der `/e2e-tests`-Durchgang vom selben Tag installierte Firefox und WebKit und fährt die vier kritischen Journeys seitdem in allen drei Browsern (siehe E2E Tests oben). Ungeprüft in Firefox und Safari bleibt alles, was **außerhalb** dieser vier Journeys liegt
 - [!] **Rate Limiting der Server Actions** — nicht umgesetzt, siehe BUG-2 / B1
 - [!] **Verhalten unter echter Last / vieler gleichzeitiger Spieler** — nicht Gegenstand dieses Laufs
 - [!] **Zugriffslogs des Hosters** — offen bis `/deploy`, wie in `spec.md` → Open Questions vermerkt
@@ -158,7 +185,7 @@
 - **Security:** **8 von 10 Prüfungen verifiziert**, 2 nicht verifiziert — Rate Limiting (nicht umgesetzt, BUG-2) und Brute Force auf Zugangsdaten (entfällt, gehört zu PROJ-1)
 - **Neue Tests in diesem Lauf:** 1 (der ausgesetzte Abnahmetest zu BUG-6), rot-geprüft in beide Richtungen
 - **Production Ready:** **JA** — keine kritischen oder hohen Fehler
-- **Was weiterhin niemand geprüft hat:** Firefox und Safari. Alle Browser-Prüfungen dieses Projekts liefen ausschließlich in Chromium
+- **Was zum Zeitpunkt dieses Laufs niemand geprüft hatte:** Firefox und Safari. Alle Browser-Prüfungen liefen in Chromium. Der anschließende `/e2e-tests`-Durchgang hat das für die vier kritischen Journeys nachgeholt
 
 > „Production Ready" ist eine Aussage über **gefundene Fehler**, nicht über Abdeckung. Cross-Browser wurde in keinem Lauf dieses Projekts geprüft.
 
