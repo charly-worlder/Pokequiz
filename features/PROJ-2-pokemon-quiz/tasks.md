@@ -53,6 +53,16 @@
 
   · files: src/components/quiz/quiz-screen.tsx, src/app/page.tsx  · → AC-2, AC-4, AC-6, AC-9, AC-10, AC-13, AC-17, AC-18, AC-19, EC-1, EC-7, EC-9, EC-10
 
+## Backlog — bewusst offen
+
+Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht. Diese Punkte haben **kein Acceptance Criterion**; sie werden erst dann Aufgaben, wenn jemand sie ausdrücklich in die Spec holt (`/refine PROJ-2`).
+
+- [ ] **B1  Drosselung der Server Actions** (aus `qa-report.md` → BUG-2, Severity Low, am 2026-09-02 bewusst zurückgestellt)
+  `getNextQuestion` und `saveRun` haben keine Begrenzung; ein angemeldeter Nutzer kann sie in einer Schleife aufrufen.
+  **Warum es jetzt vertretbar ist:** Wiederholte Pokémon kommen aus dem Zwischenspeicher und erzeugen keine Last bei der PokeAPI (AC-31); `saveRun` kann ausschließlich eigene Zeilen anlegen und ist durch AC-12 begrenzt. Es gibt keinen Zugangsdaten-Pfad in diesem Feature.
+  **Wann es akut wird:** wenn die App öffentlich erreichbar ist. Über immer neue Nummern lassen sich weiterhin echte Anfragen an die PokeAPI auslösen — das arbeitet gegen deren Fair-Use-Bitte, um die dieses Feature sich sonst ausdrücklich bemüht.
+  **Nächster Schritt, wenn es angegangen wird:** vor dem öffentlichen Start neu bewerten; der Mechanismus steht in `docs/production/rate-limiting.md` und im Framework-Pack. Kein `[user]`-Task — es wäre Anwendungscode.
+
 ## Prüfhinweise für `/qa`
 
 Zwei Kriterien sind **unsichtbar, wenn sie fehlen** — bei allen anderen fällt der Fehler beim Anschauen auf. Sie brauchen deshalb eine bestimmte Methode, nicht nur Aufmerksamkeit:

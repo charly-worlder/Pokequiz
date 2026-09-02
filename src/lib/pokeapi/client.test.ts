@@ -30,16 +30,19 @@ describe('fetchGermanName', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('AC-31: fragt mit erzwungenem Zwischenspeicher und 30 Tagen Gültigkeit an', async () => {
-    const fetchMock = vi.fn(() => okJson({ names: [{ name: 'Pikachu', language: { name: 'de' } }] }))
+    type CacheInit = RequestInit & { next?: { revalidate?: number } }
+    const fetchMock = vi.fn((_url: string, _init?: CacheInit) =>
+      okJson({ names: [{ name: 'Pikachu', language: { name: 'de' } }] })
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     await fetchGermanName(25, signal())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { next?: { revalidate?: number } }]
+    const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('https://pokeapi.co/api/v2/pokemon-species/25')
-    expect(init.cache).toBe('force-cache')
-    expect(init.next?.revalidate).toBe(60 * 60 * 24 * 30)
+    expect(init?.cache).toBe('force-cache')
+    expect(init?.next?.revalidate).toBe(60 * 60 * 24 * 30)
   })
 
   it('liefert den deutschen Namen aus der Namensliste', async () => {
@@ -84,7 +87,7 @@ describe('resolveOfficialImageUrl (EC-11 — die Rückfallebene)', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('liest die offizielle Adresse aus /pokemon/{id}', async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string) =>
       okJson({
         sprites: { other: { 'official-artwork': { front_default: 'https://cdn.test/offiziell.png' } } },
       })

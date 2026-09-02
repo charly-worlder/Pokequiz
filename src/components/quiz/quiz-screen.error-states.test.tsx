@@ -159,12 +159,10 @@ describe('QuizScreen — Fehlerpfade', () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith('/login'))
   })
 
-  // BUG-1 (qa-report.md): AC-19 ist nicht umgesetzt — `beforeunload` kommt im
-  // gesamten Quellcode nicht vor. Der Test ist fertig und korrekt; er ist
-  // ausgesetzt, damit die Suite nicht dauerhaft rot steht und echte
-  // Regressionen verdeckt. **`/build` hebt das `.skip` beim Fix auf — der Test
-  // ist die Abnahme.** Ohne das `.skip` schlägt er fehl, wie es soll.
-  it.skip('AC-19: die Verlassen-Warnung greift erst ab Serie 1, nicht davor', async () => {
+  // Abnahmetest zu BUG-1 (qa-report.md): AC-19 fehlte vollständig — `beforeunload`
+  // kam im ganzen Quellcode nicht vor. Dieser Test war zuerst rot, danach wurde
+  // der Effekt ergänzt; er hält die Warnung ab jetzt fest.
+  it('AC-19: die Verlassen-Warnung greift erst ab Serie 1, nicht davor', async () => {
     // Statt addEventListener zu ersetzen (das greift auch in React ein) wird das
     // Ereignis wirklich ausgelöst: eine abgewehrte Navigation ist das Verhalten,
     // das AC-19 zusagt.

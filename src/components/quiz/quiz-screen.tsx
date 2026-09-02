@@ -98,6 +98,25 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     return () => window.clearInterval(tick)
   }, [])
 
+  /**
+   * spec.md AC-19 — warn before leaving a round that has something to lose.
+   * Only from a streak of 1: at 0 there is nothing to rescue, and a dialog on
+   * every reload would be noise. The round itself stays unrecoverable by
+   * design (docs/app-shell.md) — this saves the accidental F5, it does not
+   * pretend the state survives.
+   *
+   * BUG-1 (qa-report.md): this was lost when the state machine was rewritten
+   * during /build and shipped missing. `quiz-screen.error-states.test.tsx` is
+   * its acceptance test.
+   */
+  const roundInFlight = phase === 'open' || phase === 'resolved' || phase === 'error'
+  useEffect(() => {
+    if (!roundInFlight || streak < 1) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [roundInFlight, streak])
+
   /** spec.md EC-7 — session gone mid-round: the round is dropped, never reassigned. */
   const bailToLogin = useCallback(() => router.push('/login'), [router])
 

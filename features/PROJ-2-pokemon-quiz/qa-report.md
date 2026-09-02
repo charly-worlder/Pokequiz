@@ -135,8 +135,9 @@
   4. **Tatsächlich:** Die Seite wird kommentarlos verlassen, die Runde ist verloren
 - **Nachweis:** `grep -rn "beforeunload" src/` findet keinen Treffer im Quellcode; `git log --all -S "beforeunload" -- src/` liefert **keinen einzigen Commit**. Der Test dazu liegt fertig vor: `src/components/quiz/quiz-screen.error-states.test.tsx` („AC-19: die Verlassen-Warnung greift erst ab Serie 1") — er ist mit `.skip` ausgesetzt, damit die Suite nicht dauerhaft rot steht. **Ohne das `.skip` schlägt er fehl.** Gegenprobe: Ein eigener Listener setzt in derselben Umgebung `defaultPrevented` korrekt, der Fehler liegt also nicht am Testaufbau
 - **Ursache:** Die Zustandsmaschine wurde während `/build` einmal vollständig neu geschrieben; dabei ging der Effekt verloren, ohne dass es auffiel — die Aufgabe wurde trotzdem abgehakt
-- **Priorität:** Vor dem Deploy beheben. `/build` hebt beim Fix das `.skip` auf; der Test ist die Abnahme
+- **Priorität:** Vor dem Deploy beheben
 - **Umfang:** Ein `useEffect`, der ab Serie 1 einen `beforeunload`-Listener registriert
+- **Status: behoben am 2026-09-02** (`quiz-screen.tsx`, Effekt ergänzt; `.skip` am Test entfernt). Der Test ist rot-geprüft: ohne den Effekt fällt genau er um, die übrigen acht bleiben grün. **Die Gesamtbewertung dieses Berichts bleibt trotzdem stehen** — sie beschreibt den Lauf vom 2026-09-02 vor dem Fix. Ein erneuter `/qa`-Durchgang erteilt die neue Freigabe
 
 #### BUG-2: Keine Drosselung der Server Actions
 
@@ -147,6 +148,7 @@
   2. **Tatsächlich:** keine Begrenzung
 - **Wirkung:** Begrenzt. Wiederholte Pokémon werden aus dem Zwischenspeicher bedient, erzeugen also keine Last bei der PokeAPI; `saveRun` kann nur eigene Zeilen anlegen und wird durch AC-12 begrenzt. Ein entschlossener Nutzer könnte durch immer neue Nummern dennoch Anfragen an die PokeAPI auslösen und damit gegen deren Fair-Use-Bitte arbeiten
 - **Priorität:** Nice to have — vor dem öffentlichen Start neu bewerten, nicht vor diesem Deploy
+- **Status: bewusst offen.** Als Punkt **B1** im Backlog von `tasks.md` festgehalten, damit die Entscheidung nachlesbar bleibt
 
 ---
 
