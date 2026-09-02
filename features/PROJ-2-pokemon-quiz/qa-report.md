@@ -1,6 +1,166 @@
 # QA Test Results
 
-> **Dieser Bericht hat zwei Durchgänge.** Unten steht der vollständige Erstlauf, der BUG-1 gefunden hat; er bleibt unverändert stehen, weil ein Bericht, der nachträglich grün geschrieben wird, nichts mehr wert ist. Der **Nachlauf direkt hier drunter** trägt die gültige Freigabe.
+> **Dieser Bericht hat mehrere Durchgänge.** Der jeweils oberste trägt die gültige Bewertung; die älteren bleiben unverändert stehen, weil ein Bericht, der nachträglich grün geschrieben wird, nichts mehr wert ist.
+
+---
+
+## Dritter Lauf — 2026-09-02, nach den Fixes für BUG-3, BUG-4 und BUG-5
+
+**Anlass:** Der Nutzer hatte PROJ-2 nach einem manuellen Test wieder auf *In Review* gesetzt (BUG-3 Weiterleitungsschleife, BUG-4 Zugangsdaten in der URL). Beide sind mit `6d1e5e7` behoben, BUG-5 mit `3937e52`. Dieser Lauf prüft die Fixes nach **und rollt die Acceptance Criteria vollständig neu auf**, statt frühere Häkchen zu übernehmen.
+
+**Umgebung:** `npm run dev` auf `http://localhost:3000`, lokale Supabase-Instanz in Docker, Browser-Prüfungen in Chromium (bereits aus einem früheren Lauf installiert — es wurde nichts nachgeladen).
+
+> Legende: `[x]` in **diesem** Lauf verifiziert (Nachweis auf derselben Zeile) · `[ ] BUG` als defekt verifiziert · `[!] NICHT VERIFIZIERT` mit Grund.
+
+### Die drei Prüfungen — einzeln gelaufen, einzeln genannt
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **92 bestanden, 1 ausgesetzt** (10 Dateien) — das ausgesetzte ist der neue Abnahmetest zu BUG-6, siehe unten |
+| Lint | `npm run lint` | **grün**, keine Befunde |
+| Build | `npm run build` | **grün**, „Finished TypeScript" ohne Fehler |
+
+### Die drei gemeldeten Fehler — nachgeprüft
+
+- [x] **BUG-3 behoben** — Reproduktion exakt wie gemeldet: Konto über die Admin-API gelöscht, Sitzungs-Cookie im Client belassen, dann `GET /`. Ergebnis: **genau 1 Weiterleitung**, Endstatus 200 auf `/login` (vorher 19 Weiterleitungen und `ERR_TOO_MANY_REDIRECTS`). Ursache beseitigt: `src/proxy.ts:47` fragt jetzt `getUser()` statt `getClaims()` — eine einzige Autorität. Gültige Sitzung weiterhin korrekt: `/` → 200, `/login` → 307 auf `/`. Dazu 7 Regressionstests in `src/proxy.test.ts`
+- [x] **BUG-4 behoben** — nicht nur im Quelltext, sondern **im ausgelieferten HTML** geprüft: `curl http://localhost:3000/login` liefert `<form class="space-y-4" method="post">`. Genau das ist der Nachweis, der im Erstlauf gefehlt hat — dort wurde der Handler gelesen statt das Formular ohne JavaScript abgeschickt. Alle vier Auth-Formulare tragen das Attribut (`login-view.tsx:56`, `register-view.tsx:54`, `forgot-password-view.tsx:65`, `reset-password-form.tsx:98`)
+- [x] **BUG-5 behoben** — `<main>`-Elemente pro Seite: `/login` = 1, `/reset-password` = 1 (vorher 2 verschachtelte)
+
+### Acceptance Criteria Status
+
+#### Spielablauf
+
+- [x] **AC-1** Startbildschirm mit Wortmarke, Spielregel und „Runde starten" — Browser-Lauf; nach gespielten Runden erscheint zusätzlich „DEINE BESTLEISTUNG · Serie 3·0:03"
+- [x] **AC-2** Erste Frage in **1245 ms** (Grenze 3000 ms), gemessen vom Klick bis zum vollständig geladenen Bild (`naturalWidth > 0`); Uhrenstart am sichtbaren Bild: `quiz-screen.tsx:327` (`if (phase === 'open') startClock()`), ausgelöst aus `pokemon-image.tsx` `onLoad`
+- [x] **AC-3** Vier Optionen, alle verschieden, die richtige dabei — Browser-Lauf, Beispiel `["Dragoran","Octillery","Regirock","Muntier"]` zu #149; `question-action.test.ts` („AC-3: liefert genau vier verschiedene Namen")
+- [x] **AC-4** Richtige Antwort erhöht die Serie und die Uhr läuft weiter — Browser-Lauf: sechs richtige Antworten, Anzeige zählte auf `SERIE 6`, Uhr lief bis `0:04` durch
+- [x] **AC-5** Kein Pokémon zweimal je Runde — Browser-Lauf: #149, #203, #267, #174, #376, #177, alle verschieden; `question-action.test.ts` (mit 385 verbrauchten Nummern)
+- [x] **AC-6** Falsche Antwort: gewählte rot (`✕`), richtige grün (`✓`), Auflösung „Richtig wäre Aquana gewesen." bleibt stehen, „Weiter zum Ergebnis" statt Auto-Weiter — Browser-Lauf. **Uhr steht:** 0:04 vor und 1,6 s später unverändert 0:04
+- [x] **AC-7** Ergebnis mit Serie, Zeit, „Nochmal spielen" und „Zur Bestenliste" — Browser-Lauf: „RUNDE BEENDET | 6 | richtige Antworten in 0:04"
+- [x] **AC-8** Bestleistung **in beide Richtungen** geprüft — Browser-Lauf: bessere Runde zeigt „Neue persönliche Bestleistung", eine anschließende schlechtere Runde (Serie 0) zeigt sie **nicht**; Vergleichslogik zusätzlich in `run-actions.test.ts` (vier Fälle)
+- [x] **AC-9** „Nochmal spielen" führt auf den Startbildschirm mit Serie 0 und zurückgesetzter Uhr — Browser-Lauf
+- [x] **AC-10** Vorladen greift — Browser-Lauf: nach dem Fragenwechsel **0 Skelettflächen** im DOM, Wechseldauer 544 ms; `quiz-screen.test.tsx` (zwei rot-geprüfte Regressionstests)
+
+#### Speicherung und Schutz des Ergebnisses
+
+- [x] **AC-11** Jede beendete Runde wird gespeichert, auch Serie 0 — direkt in der Datenbank nachgesehen: `Qar1890 | 3 | 3011 ms` und `Qar1890 | 0 | 48 ms`, beide ohne Zutun des Nutzers geschrieben. Eine abgebrochene Runde (Browser geschlossen) erzeugte **keine** Zeile — wie AC-19 es vorsieht
+- [x] **AC-12** Plausibilitätsprüfung, **doppelt** — Datenbank über PostgREST: Serie 999, Serie −1, Dauer −1, Dauer 0 bei Serie 50 und Dauer 24999 bei Serie 50 alle **400**; die exakte Grenze 50 × 500 = 25000 **201**. Anwendung: `validation/quiz.test.ts` (10 Fälle) und `run-actions.test.ts`
+- [x] **AC-13** Ohne Sitzung `/` → **307** nach `/login`, ebenso `/leaderboard`; nach dem Abmelden im Browser landet ein Aufruf von `/` wieder auf `/login`
+- [x] **AC-14** Nur eigene Runden schreibbar — Konto B versuchte eine Runde auf Konto A anzulegen: **403**; `run-actions.test.ts` („schreibt immer für das Profil aus der Sitzung")
+- [x] **AC-27** Rundenzeile enthält nur `id, profile_id, streak, duration_ms, client_round_id, created_at` — tatsächliche Spalten aus der API abgefragt
+
+#### Fehlerverhalten der externen Datenquelle
+
+- [x] **AC-15** 5-Sekunden-Grenze, genau ein stiller Wiederholungsversuch — `client.test.ts`, vier Fälle inkl. „kein dritter Versuch" und „übergibt ein Abbruchsignal mit der 5-Sekunden-Grenze"
+- [x] **AC-16** Fehlerhinweis innerhalb der Quiz-Karte, beide Auswege, Serie bleibt — `quiz-screen.error-states.test.tsx` („AC-16")
+- [x] **AC-17** „Erneut versuchen" unbegrenzt, Runde läuft weiter — ebenda („AC-17")
+- [x] **AC-18** „Runde beenden" wertet und speichert — ebenda („AC-18")
+- [ ] **BUG-6 — AC-19 greift nicht, während die nächste Frage lädt.** Die Warnung hängt an `roundInFlight` (`quiz-screen.tsx:112`), das die Phase `loading` nicht einschließt. Gemessen: ~400 ms je Runde ungeschützt. Details unter Bugs
+
+#### Bild-Auslieferung
+
+- [x] **AC-20** Bilder ausschließlich über die eigene Domain — `src` ist `/_next/image?url=…` auf `localhost`; **in drei vollständigen Browser-Läufen ging keine einzige Anfrage an einen fremden Host** (jede Anfrage mitgeschnitten und gegen `localhost:3000` / `127.0.0.1:54321` geprüft)
+
+#### App-Rahmen
+
+- [x] **AC-21** Kopfzeile angemeldet: „Pokémon QUIZ | Bestenliste | Q | QaPlay9230 | Abmelden" — Browser-Lauf
+- [x] **AC-22** Kopfzeile ausgeloggt: „Pokémon QUIZ | DEUTSCHE NAMEN · SERIE · WELTRANGLISTE" — Browser-Lauf auf `/login`
+- [x] **AC-23** Fußzeile auf jeder Seite („Ein Fan-Quiz. Pokémon ist eine Marke ihrer jeweiligen Inhaber."), **0 Links** darin — kein toter Rechts-Link, bis PROJ-4 die Seiten liefert
+- [x] **AC-24** Mobilverhalten — **in diesem Lauf geprüft**, nicht aus `/build` übernommen: bei 1440, 768 und 375 px jeweils **kein horizontales Scrollen** und **kein Burger-Menü**; bei 375 px reduziert sich der Nutzer-Chip nachweislich auf die Initiale (Kopfzeile „Pokémon QUIZ | Bestenliste | Q | Abmelden" statt „… | Q | Qar1890 | …")
+- [x] **AC-25** Skelettfläche statt Spinner und gleichbreite Ziffern — 2 `.tabular`-Elemente in der Statusleiste; `pokemon-image.tsx:34` (Skelett in Bildgröße)
+
+#### Datenschutz
+
+- [x] **AC-26** Runden verschwinden mit dem Profil — `0002_runs.sql:9` (`on delete cascade`), `profiles.id` kaskadiert seinerseits von `auth.users` (`0001_profiles.sql:6`)
+- [x] **AC-27** siehe oben
+- [x] **AC-28** Kein Zwischenspeicher-Schlüssel enthält eine Nutzerkennung — `client.ts` (Schlüssel ist die Anfrage-URL), `next.config.ts` (Bild-Cache über URL und Größe); keine nutzerbezogene Tabelle oder Protokollierung im Code
+- [x] **AC-29** Keine Analyse-, Werbe- oder Tracking-Ressourcen — im Browser ausgewertet: **0 externe `script`/`link`/`img`-Quellen**. Gesetzte Cookies ausschließlich Supabase-Auth (`sb-127-auth-token` plus PKCE-Verifier) — betriebsnotwendig, daher kein Einwilligungsbanner
+- [x] **AC-30** Schriften von der eigenen Domain — **0 Anfragen** an `fonts.googleapis.com` oder `fonts.gstatic.com` über drei vollständige Browser-Läufe
+
+#### Umgang mit der externen Datenquelle
+
+- [x] **AC-31** Zwischenspeicher greift — **Wirkung diesmal in diesem Lauf belegt**, nicht aus `/build` übernommen: das Server-Log zeigt **91 `(cache hit)` gegen 133 `(cache skip)`**, darunter dieselbe Spezies mehrfach als Treffer (`pokemon-species/84`, `/83`, `/42` je zweimal) und **über verschiedene Spielerkonten hinweg**. Anweisung zusätzlich durch `client.test.ts` gesichert (`force-cache`, `revalidate: 2592000`)
+
+### Edge Cases Status
+
+- [x] **EC-1** Zweiter Klick wirkungslos — Browser-Lauf: nach der Antwort sind alle Optionen `disabled`; `quiz-screen.tsx:296` (`if (chosenIndex !== null || !current) return`)
+- [x] **EC-2** Pool erschöpft → Gewinner-Meldung — `question-action.test.ts` („EC-2: meldet einen leeren Pool"); Anzeige `result-view.tsx`
+- [x] **EC-3** Fehlgeschlagenes Speichern zeigt Ergebnis samt Wiederholung — `run-actions.test.ts` („EC-3"); im Browser trat kein Speicherfehler auf (Gegenprobe: „nicht gespeichert" erschien nicht)
+- [x] **EC-4** Doppelte Einreichung erzeugt nur eine Zeile — Datenschicht: dasselbe `client_round_id` zweimal → **201, dann 409**. Garantie ist der Unique-Index (`0002_runs.sql:14`), keine Prüfung im Anwendungscode
+- [x] **EC-5** Pokémon ohne deutschen Namen wird verworfen — `client.test.ts`, `question-action.test.ts`
+- [x] **EC-6** Nicht abrufbares Bild verwirft die Frage, nicht die Runde — `client.test.ts`, `quiz-screen.error-states.test.tsx`
+- [x] **EC-7** Abgelaufene Sitzung führt auf `/login` — `quiz-screen.error-states.test.tsx` (Fragen-Abruf und Speichern); serverseitig `question-action.test.ts`, `run-actions.test.ts`. **Zusätzlich der reale Fall**, der im Erstlauf fehlte: gültiges Cookie zu serverseitig widerrufener Sitzung landet in einer Weiterleitung auf `/login`
+- [x] **EC-8** Rate-Limit/Serverfehler wie ein Ausfall behandelt — `client.test.ts` („liefert null bei einer Fehlerantwort", beide Endpunkte)
+- [x] **EC-9** Mehrfaches „Runde starten" startet genau eine Runde — Browser-Lauf: drei Klicks gleichzeitig, genau eine Runde begann; `quiz-screen.error-states.test.tsx` („EC-9": genau ein Abruf)
+- [x] **EC-10** Nach drei Verwürfen erscheint die Fehlerkarte — `quiz-screen.error-states.test.tsx` („EC-10")
+- [x] **EC-11** Kaputte Bildadresse wird über die Rückfallebene repariert — `quiz-screen.error-states.test.tsx` („EC-11"), `client.test.ts` (vier Fälle)
+
+### Security Audit Results
+
+- [x] **Authentifizierung** — `/` und `/leaderboard` ohne Sitzung: **307** nach `/login`. Widerrufene Sitzung: eine Weiterleitung, keine Schleife
+- [x] **Autorisierung** — zwei echte Konten über PostgREST: B liest A's Runden nicht (auch nicht gezielt nach `profile_id` gefiltert → `[]`), kann keine auf A schreiben (**403**). Anonym: `[]`. A sieht ausschließlich die eigenen
+- [x] **Unveränderlichkeit** — PATCH und DELETE liefern zwar 204, **verändern aber nichts**: gegengeprüft, alle fünf Zeilen von A waren danach unverändert vorhanden (Serie 5, 12, 0 trotz versuchtem `streak=386` und versuchtem Löschen). Die 204 ist PostgREST's „0 Zeilen betroffen", kein erfolgreicher Schreibvorgang. B's PATCH auf A ebenso wirkungslos
+- [x] **Injection** — `'; DROP TABLE public.runs; --`, `1 OR 1=1`, `<script>alert(1)</script>` als Filterwert: alle **400**, Tabelle danach unverändert erreichbar (200)
+- [x] **Sensible Daten in Antworten** — `runs` gibt keine IP-, Geräte- oder Verlaufsdaten heraus; `profiles` gibt **keine E-Mail-Adresse** heraus (`id, trainer_name, created_at`)
+- [x] **Keine Geheimnisse im Client-Bundle** — der tatsächliche Secret-Key kommt in `.next/static` **nicht** vor (gezielt nach dem Schlüsselwert gegrept: 0 Treffer). Der einzige `sb_secret_`-Treffer ist die Formaterkennung von `supabase-js` (`e.startsWith("sb_publishable_")||e.startsWith("sb_secret_")`), kein Schlüssel
+- [x] **Keine Zugangsdaten in der URL** — **diesmal am ausgelieferten HTML geprüft, nicht am Handler**: `<form … method="post">`. Ohne JavaScript sendet der Browser damit POST statt GET (BUG-4)
+- [x] **Keine Kontoexistenz-Preisgabe** — bekannte und unbekannte E-Mail-Adresse liefern im Browser wortgleich „E-Mail-Adresse oder Passwort ist falsch."
+- [!] **Rate Limiting auf den Server Actions** — **NICHT VERIFIZIERT — weiterhin nicht umgesetzt.** Gegengeprüft: keine Drosselung im Quellcode (`rateLimit`/`throttle` kommen nicht vor). Unverändert BUG-2, Backlog-Punkt **B1**
+- [!] **Brute Force auf Zugangsdaten** — **entfällt für PROJ-2:** Dieses Feature prüft keine Zugangsdaten. Login, Registrierung und Passwort-Reset gehören zu PROJ-1; dort ist AC-8 als offen dokumentiert und nur gegen das gehostete Projekt prüfbar
+
+### E2E Tests
+
+- Status: **nicht ausgeführt** (`/e2e-tests` für die kritischen Abläufe)
+
+### Regression
+
+- [x] **PROJ-1 im Browser vollständig** — Registrierung mit Trainername, Abmelden über den Nutzer-Chip, Routenschutz nach dem Abmelden, erneuter Login mit demselben Konto, Trainername in der Kopfzeile, identische Fehlermeldung bei falschem Passwort: **6/6**
+- [x] **Proxy-Verhalten** — 7 Tests in `src/proxy.test.ts` grün, inkl. beider Hälften der ehemaligen Schleife
+- [x] **Datenschicht** — Sicherheitsdurchgang vollständig erneut gelaufen (Autorisierung, Grenzwerte, Unveränderlichkeit, Injection, sensible Daten)
+- [x] **Keine JavaScript-Fehler** in drei vollständigen Browser-Läufen
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser (Firefox, Safari)** — **weiterhin in keinem Lauf geprüft.** Nur Chromium ist installiert; `/qa` lädt bewusst keinen weiteren Browser nach. Gehört zu `/e2e-tests` oder einem menschlichen Durchgang
+- [!] **Rate Limiting der Server Actions** — nicht umgesetzt, siehe BUG-2 / B1
+- [!] **Verhalten unter echter Last / vieler gleichzeitiger Spieler** — nicht Gegenstand dieses Laufs
+- [!] **Zugriffslogs des Hosters** — offen bis `/deploy`, wie in `spec.md` → Open Questions vermerkt
+
+### Bugs Found
+
+#### BUG-6: Die Verlassen-Warnung greift nicht, während die nächste Frage lädt (AC-19)
+
+- **Severity:** Low
+- **Betrifft:** AC-19 — teilweise. Die Warnung existiert (BUG-1 ist behoben und hält), sie deckt aber nicht die gesamte laufende Runde ab
+- **Ursache:** `src/components/quiz/quiz-screen.tsx:112` — `roundInFlight` ist `phase === 'open' || 'resolved' || 'error'`. Die Phase **`loading`** fehlt. `advance()` setzt genau diese Phase, wenn die nächste Frage noch nicht vorgeladen ist (`quiz-screen.tsx:290`). In diesem Fenster läuft die Runde mit voller Serie weiter, ist aber ungeschützt
+- **Schritte zum Nachstellen:**
+  1. Anmelden, Runde starten, mindestens eine Frage richtig beantworten
+  2. In dem Moment, in dem „Runde wird vorbereitet …" steht, die Seite neu laden
+  3. **Erwartet:** Der Browser fragt vor dem Verlassen nach
+  4. **Tatsächlich:** Die Seite wird kommentarlos verlassen, die Runde ist verloren
+- **Nachweis und Ausmaß:** Im Browser über eine ganze Runde alle 40 ms gemessen (`beforeunload` ausgelöst, `defaultPrevented` ausgewertet). Ab Serie ≥ 1: 193 Messpunkte ≈ 7,7 s Spielzeit, davon **10 Messpunkte ≈ 400 ms ohne Warnung — 5,2 % der Rundenzeit**, als ein zusammenhängendes Fenster. Alle 10 ungeschützten Messpunkte fielen exakt mit „Runde wird vorbereitet …" zusammen, keiner außerhalb
+- **Warum der bestehende Test es nicht fängt:** `quiz-screen.error-states.test.tsx` („AC-19: die Verlassen-Warnung greift erst ab Serie 1") prüft direkt nach der richtigen Antwort — da ist die Phase noch `open`. Die Phase `loading` kommt darin nicht vor
+- **Abnahmetest liegt bereit:** `quiz-screen.error-states.test.tsx` → „AC-19: die Warnung greift auch, während die nächste Frage noch lädt". Mit `it.skip` ausgesetzt, damit die Suite nicht dauerhaft rot steht — dasselbe Vorgehen wie bei BUG-1. **Beide Richtungen belegt:** ohne `.skip` und mit unverändertem Code fällt er („expected false to be true"), mit probeweise um `|| phase === 'loading'` ergänztem `roundInFlight` besteht er (10/10). Der Code wurde danach unverändert zurückgesetzt — `/qa` behebt keine Fehler
+- **Umfang des Fixes:** ein Term in Zeile 112. `/build` entfernt dabei das `.skip`
+- **Priorität:** Nice to have. Das Fenster ist kurz, tritt nur beim Neuladen genau in diesem Moment auf, und die Runde ist laut `spec.md` ohnehin nicht wiederherstellbar — die Warnung rettet den versehentlichen F5, mehr verspricht sie nicht
+
+#### BUG-2: Keine Drosselung der Server Actions
+
+- **Severity:** Low — **unverändert offen**, bewusst als Backlog-Punkt **B1** in `tasks.md`
+- **Betrifft:** kein AC; in Spec und Design nicht gefordert, hier als Sicherheitsbefund geführt
+- **Stand in diesem Lauf:** gegengeprüft, weiterhin nicht umgesetzt. Bewertung wie zuvor: wiederholte Pokémon kommen aus dem Zwischenspeicher (AC-31 belegt: 91 Treffer), `saveRun` kann nur eigene Zeilen anlegen und ist durch AC-12 begrenzt. Vor dem öffentlichen Start neu bewerten
+
+### Summary
+
+- **Acceptance Criteria:** **30 von 31 vollständig verifiziert**, 1 teilweise (AC-19 — Warnung vorhanden, deckt aber die Ladephase nicht ab). **Alle 31 wurden in diesem Lauf angefasst**, keines aus einem früheren Durchgang übernommen — insbesondere AC-24 und die Wirkung von AC-31, die vorher aus dem `/build`-Durchgang stammten
+- **Edge Cases:** **11 von 11 verifiziert**
+- **Bugs:** 2 offen — 0 kritisch, 0 hoch, 0 mittel, **2 niedrig** (BUG-6 neu, BUG-2 bewusst zurückgestellt). BUG-1, BUG-3, BUG-4 und BUG-5 sind behoben und nachgeprüft
+- **Security:** **8 von 10 Prüfungen verifiziert**, 2 nicht verifiziert — Rate Limiting (nicht umgesetzt, BUG-2) und Brute Force auf Zugangsdaten (entfällt, gehört zu PROJ-1)
+- **Neue Tests in diesem Lauf:** 1 (der ausgesetzte Abnahmetest zu BUG-6), rot-geprüft in beide Richtungen
+- **Production Ready:** **JA** — keine kritischen oder hohen Fehler
+- **Was weiterhin niemand geprüft hat:** Firefox und Safari. Alle Browser-Prüfungen dieses Projekts liefen ausschließlich in Chromium
+
+> „Production Ready" ist eine Aussage über **gefundene Fehler**, nicht über Abdeckung. Cross-Browser wurde in keinem Lauf dieses Projekts geprüft.
 
 ---
 

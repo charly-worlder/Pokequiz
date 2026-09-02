@@ -185,6 +185,40 @@ describe('QuizScreen — Fehlerpfade', () => {
     await waitFor(() => expect(fireBeforeUnload()).toBe(true))
   })
 
+  // Abnahmetest zu BUG-6 (qa-report.md, Lauf vom 2026-09-02): Die Warnung hängt an
+  // `roundInFlight`, das die Phase `loading` nicht einschließt. Ist die nächste Frage
+  // noch nicht vorgeladen, läuft die Runde zwar weiter, ist aber ungeschützt —
+  // gemessen ~400 ms je Runde. Ausgesetzt, damit die Suite nicht dauerhaft rot steht;
+  // `/build` entfernt das `.skip` zusammen mit dem Fix.
+  it.skip('AC-19: die Warnung greift auch, während die nächste Frage noch lädt', async () => {
+    const fireBeforeUnload = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+
+    // Erste Frage kommt, das Vorladen bleibt hängen — nach der richtigen Antwort
+    // gibt es keine Reserve, die Runde geht in die Phase `loading`.
+    getNextQuestion.mockResolvedValueOnce({ status: 'ok', question: question(3) })
+    getNextQuestion.mockReturnValue(new Promise(() => {}))
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(images().length).toBeGreaterThan(0))
+    loadImages()
+    await waitFor(() => expect(screen.getByText('Name3')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name3' }))
+    await waitFor(() => expect(fireBeforeUnload()).toBe(true))
+
+    // Serie 1 ist erreicht, die nächste Frage lädt noch: die Runde hat etwas zu
+    // verlieren, also muss die Warnung auch hier greifen.
+    await waitFor(() =>
+      expect(screen.getByText('Runde wird vorbereitet …')).toBeInTheDocument()
+    )
+    expect(fireBeforeUnload()).toBe(true)
+  })
+
   it('EC-9: mehrfaches Klicken auf „Runde starten" startet genau eine Runde', async () => {
     getNextQuestion.mockResolvedValue({ status: 'ok', question: question(4) })
     render(<QuizScreen initialPersonalBest={null} />)
