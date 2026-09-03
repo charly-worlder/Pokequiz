@@ -224,5 +224,33 @@ Genau dieser Fall fehlte bisher in jeder Suite: Alle bisherigen Prüfungen simul
 - **Edge Cases:** 4 von 6 verifiziert, 2 nicht verifiziert (EC-4 gleiche Ursache wie AC-8; EC-6 aus dem Erstlauf abgedeckt)
 - **Bugs:** BUG-3 und BUG-4 **behoben und verifiziert**; **BUG-5 neu (Low)**
 - **Security:** 4 von 6 Prüfungen verifiziert, 2 offen (Brute Force, Massen-Registrierung)
-- **Production Ready:** **JA für diesen Stand** — kein kritischer oder hoher Fehler offen. Mit zwei Auflagen, die vor dem öffentlichen Start zu erledigen sind: **AC-8 gegen das gehostete Projekt prüfen** und **T4 im Dashboard setzen**
+- **Production Ready:** **JA für diesen Stand** — kein kritischer oder hoher Fehler offen. Mit ~~zwei~~ **drei** Auflagen, die vor dem öffentlichen Start zu erledigen sind: **AC-8 gegen das gehostete Projekt prüfen**, **T4 im Dashboard setzen** und **den Warnhinweis am Trainername-Feld ergänzen** (dritte Auflage nachgetragen am 2026-09-03, siehe Nachtrag unten)
 - **Weiterhin ungeprüft:** Firefox und Safari — in keinem Lauf getestet, alles lief in Chromium
+
+---
+
+## Nachtrag — 2026-09-03: Deploy-Blocker aus der Datenschutzprüfung zu PROJ-3
+
+**Herkunft:** Dies ist **kein Befund aus einem QA-Lauf.** Er stammt aus `/dsgvo PROJ-3` vom 2026-09-03 und wird hier vermerkt, weil er PROJ-1 betrifft und in dieselbe Reihe gehört wie AC-8 und T4: etwas, das den jetzigen Stand nicht kaputt macht, aber vor dem öffentlichen Start erledigt sein muss.
+
+### Offener Vertragsmangel: Der Trainername wird veröffentlicht, ohne dass die Registrierung es sagt
+
+**Sachverhalt.** Drei Festlegungen greifen ineinander, jede für sich unauffällig:
+
+1. `spec.md` → AC-1 nimmt den Trainernamen bei der Registrierung entgegen.
+2. `spec.md` → Decision Log: „Trainername ist nach der Registrierung dauerhaft fix." Es gibt keinen Änderungsweg — auch nicht in der Datenbank, wo `0001_profiles.sql` bewusst **keine** `update`-Policy hat.
+3. `0001_profiles.sql` macht den Namen für **alle angemeldeten Nutzer** lesbar (`profiles_select_authenticated`).
+
+**Kein einziges AC verlangt, dass der Nutzer davon erfährt.** AC-14 fordert lediglich einen sichtbaren Link zur Datenschutzerklärung vor dem Absenden — das ist eine andere Zusage.
+
+**Warum es erst jetzt auffällt.** Bis einschließlich PROJ-2 war der Trainername zwar für angemeldete Nutzer *lesbar*, wurde aber an keiner Stelle der Oberfläche **angezeigt**. Der Nutzer-Chip in der Kopfzeile zeigt jedem nur seinen eigenen. PROJ-3 ist der erste Ort, an dem der Name tatsächlich vor anderen Menschen erscheint — und dann unwiderruflich.
+
+**Wirkung.** Ein Nutzer trägt seinen echten Namen ein, ohne zu wissen, dass er für alle anderen Spieler sichtbar und nachträglich nicht mehr änderbar ist. Der einzige Rückweg ist das Löschen des gesamten Kontos, und den gibt es erst mit PROJ-4. Das Publikum schließt laut `docs/PRD.md` absehbar Minderjährige ein — genau der Grund, aus dem dort die Datenschutz-Haltung `standard` gewählt wurde.
+
+**Was mindestens fehlt.** Ein Warnhinweis am Trainername-Feld im Registrierungsformular, der **beide** Hälften sagt: für andere Spieler sichtbar **und** später nicht änderbar. Eine Hälfte allein genügt nicht — „öffentlich" ohne „endgültig" verschweigt genau den Teil, der die Entscheidung unumkehrbar macht.
+
+**Priorität: Blocker für `/deploy`**, gleichrangig mit AC-8 und T4. Ein Unterschied zu jenen beiden: Die sind erst gegen das gehostete Projekt prüfbar — dieser hier ist **sofort behebbar**.
+
+**Der Weg dorthin.** Der Hinweis ändert das Verhalten von PROJ-1 und braucht deshalb ein eigenes Acceptance Criterion. Route laut `.claude/rules/general.md` → Change Routing: **`/refine PROJ-1`** (AC ergänzen) → `/build` → `/qa`. `spec.md` wird **nicht** auf diesem Weg angefasst; sie ist der Vertrag und gehört `/refine`.
+
+**Nicht Teil dieses Blockers, aber offen:** ob der Trainername (mindestens einmalig) änderbar sein sollte. Das ist eine Rechtsfrage, keine QA-Frage — sie liegt in `docs/privacy.md` → „Für einen Anwalt / Datenschutzbeauftragten".

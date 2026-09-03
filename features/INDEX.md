@@ -24,11 +24,22 @@
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
-| PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Roadmap | — | 2026-08-30 |
+| PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
 **Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1)
 
 <!-- Add features above this line -->
+
+## Deploy-Blocker
+
+> Dinge, die den jetzigen Stand **nicht** kaputt machen — die Features sind zu Recht `Approved` —, die aber vor dem öffentlichen Start erledigt sein müssen. `/deploy` arbeitet diese Liste ab. Die vollständige Einordnung steht jeweils im `qa-report.md` des Features.
+
+| Feature | Blocker | Behebbar |
+|---------|---------|----------|
+| PROJ-1 | **AC-8 / EC-4** — Supabases eingebautes Rate-Limit ist im lokalen Stack nicht auslösbar; der Schutz vor automatisiertem Durchprobieren ist damit unbewiesen, nicht widerlegt | erst gegen das gehostete Projekt |
+| PROJ-1 | **T4** — Passwort-Mindestlänge (8) im Dashboard des gehosteten Projekts setzen. Der lokale Spiegel in `config.toml` ist gesetzt und verifiziert | erst nach dem ersten `/deploy` |
+| PROJ-1 | **AC-11 / AC-12** — der Passwort-Reset-Link hängt an Site-URL und Redirect-URLs des gehosteten Projekts | erst gegen das gehostete Projekt |
+| PROJ-1 | **Warnhinweis am Trainername-Feld** — dass der Name für andere Spieler sichtbar **und** dauerhaft unveränderlich ist. Kein AC verlangt das bisher; mit PROJ-3 wird der Name erstmals tatsächlich angezeigt. Aus `/dsgvo PROJ-3`, 2026-09-03. Weg: `/refine PROJ-1` → `/build` → `/qa` | **sofort** |
 
 ## Next Available ID: PROJ-5
