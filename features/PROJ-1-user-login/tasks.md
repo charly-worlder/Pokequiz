@@ -19,7 +19,7 @@
 <!-- T15–T18 nachgetragen am 2026-09-03 durch /refine PROJ-1. Anlass: BUG-6 aus dem
      QA-Lauf — der Reset-Link funktionierte nur im anfordernden Browser. -->
 
-- [ ] T15 [P]  E-Mail-Vorlage für den Passwort-Reset: `supabase/templates/recovery.html` mit Link auf `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password`, dazu `[auth.email.template.recovery]` in `config.toml`  · files: supabase/templates/recovery.html, supabase/config.toml  · → AC-11, EC-7
+- [x] T15 [P]  E-Mail-Vorlage für den Passwort-Reset: `supabase/templates/recovery.html` mit Link auf `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password`, dazu `[auth.email.template.recovery]` in `config.toml`  · files: supabase/templates/recovery.html, supabase/config.toml  · → AC-11, EC-7
 - [ ] T18 [user]  Supabase (gehostetes Projekt): dieselbe Reset-Vorlage setzen  · where: Dashboard → Authentication → Email Templates → Reset Password  · → AC-11, EC-7
 
 ## Level 2 — API
@@ -27,7 +27,7 @@
 <!-- Server Actions und Routenschutz. Hängt vom Datenvertrag aus Level 1 ab. Disjunkte Dateien → beide [P]. -->
 
 - [x] T5 [P]  Server Actions: registrieren, einloggen, abmelden, Passwort-Reset anfordern, neues Passwort setzen — inkl. Unterscheidung Duplikat-E-Mail (AC-3) vs. Duplikat-Trainername (AC-2, EC-1), identischer Fehlermeldung bei falschem Login (AC-7), gleicher Bestätigungsmeldung unabhängig von Kontoexistenz beim Reset (AC-10, EC-3); ruft Supabase Auth direkt auf, keine eigene Drosselungsprüfung  · files: src/lib/auth/actions.ts, src/lib/auth/error-mapping.ts  · → AC-1, AC-2, AC-3, AC-4, AC-6, AC-7, AC-8, AC-10, AC-11, AC-12, AC-13, EC-1, EC-3, EC-4
-- [ ] T16 [P]  Server-Route `/auth/confirm`: liest `token_hash` und `type`, ruft `verifyOtp({ type, token_hash })`, setzt die Sitzung serverseitig, leitet auf `next` weiter (Standard `/reset-password`); bei fehlendem oder ungültigem Token Weiterleitung auf `/reset-password` mit Fehlerkennzeichnung. `/auth/confirm` muss im Proxy öffentlich erreichbar sein  · files: src/app/auth/confirm/route.ts, src/proxy.ts  · → AC-11, AC-12, EC-7
+- [x] T16 [P]  Server-Route `/auth/confirm`: liest `token_hash` und `type`, ruft `verifyOtp({ type, token_hash })`, setzt die Sitzung serverseitig, leitet auf `next` weiter (Standard `/reset-password`); bei fehlendem oder ungültigem Token Weiterleitung auf `/reset-password` mit Fehlerkennzeichnung. `/auth/confirm` muss im Proxy öffentlich erreichbar sein  · files: src/app/auth/confirm/route.ts, src/proxy.ts  · → AC-11, AC-12, EC-7
 - [x] T6 [P]  Proxy: Routenschutz (ausgeloggt → `/login` außer `/login`, `/reset-password`, `/privacy`, `/imprint`; eingeloggt auf `/login` → `/`) — Next.js 16 benennt "Middleware" in "Proxy" um  · files: src/proxy.ts  · → EC-2
 
 ## Level 3 — UI
@@ -39,7 +39,7 @@
 - [x] T9 [P]  RegisterView: Trainername-/E-Mail-/Passwort-Feld, Link zur Datenschutzerklärung, feldspezifische Fehlermeldungen  · files: src/components/auth/register-view.tsx  · → AC-1, AC-2, AC-3, AC-13, AC-14, EC-5
 - [x] T10 [P]  ForgotPasswordView: E-Mail-Feld, immer gleiche Bestätigungsmeldung  · files: src/components/auth/forgot-password-view.tsx  · → AC-10, EC-3
 - [x] T11 [P]  `/reset-password`-Seite + Formular: Code-Tausch gegen Recovery-Sitzung, neues-Passwort-Feld, Fehlermeldung bei ungültigem/abgelaufenem Link  · files: src/app/reset-password/page.tsx, src/components/auth/reset-password-form.tsx  · → AC-11, AC-12
-- [ ] T17  `/reset-password` auf serverseitige Sitzungsprüfung umstellen: Seite prüft die Sitzung auf dem Server und rendert entweder das Formular oder den AC-12-Fehlerzustand; die clientseitige Fragment-/`getSession()`-Logik und der „Link wird geprüft"-Zwischenzustand entfallen. Dabei den überholten Kommentar in `actions.ts:115-118` korrigieren (BUG-15) und prüfen, ob das Session-Cookie jetzt `HttpOnly` werden kann (BUG-13) — falls ja, als eigener Befund melden, nicht stillschweigend mitändern. **Nicht `[P]`:** hängt an T16 und berührt dieselbe Route  · files: src/app/reset-password/page.tsx, src/components/auth/reset-password-form.tsx, src/lib/auth/actions.ts  · → AC-11, AC-12, EC-7
+- [x] T17  `/reset-password` auf serverseitige Sitzungsprüfung umstellen: Seite prüft die Sitzung auf dem Server und rendert entweder das Formular oder den AC-12-Fehlerzustand; die clientseitige Fragment-/`getSession()`-Logik und der „Link wird geprüft"-Zwischenzustand entfallen. Dabei den überholten Kommentar in `actions.ts:115-118` korrigieren (BUG-15) und prüfen, ob das Session-Cookie jetzt `HttpOnly` werden kann (BUG-13) — falls ja, als eigener Befund melden, nicht stillschweigend mitändern. **Nicht `[P]`:** hängt an T16 und berührt dieselbe Route  · files: src/app/reset-password/page.tsx, src/components/auth/reset-password-form.tsx, src/lib/auth/actions.ts  · → AC-11, AC-12, EC-7
 - [x] T12 [P]  Platzhalter-Startseite (bestehende Scaffold-Seite): zeigt „Eingeloggt als {Trainername}" + Abmelden-Button, rein zur Testbarkeit von AC-4/AC-6 bis PROJ-2 die echte Startseite baut  · files: src/app/page.tsx  · → AC-4, AC-6
 
 ## Level 4 — Polish

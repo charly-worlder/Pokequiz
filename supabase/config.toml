@@ -250,6 +250,14 @@ otp_expiry = 3600
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
 
+# PROJ-1 / EC-7: eigene Reset-Vorlage, damit der Link auf /auth/confirm mit
+# {{ .TokenHash }} zeigt statt auf den PKCE-Standardpfad. Ohne das funktioniert
+# der Reset nur in dem Browser, in dem er angefordert wurde (BUG-6).
+# Im gehosteten Projekt identisch zu setzen — tasks.md → T18.
+[auth.email.template.recovery]
+subject = "Passwort zurücksetzen"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true

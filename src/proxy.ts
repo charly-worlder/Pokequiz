@@ -2,9 +2,11 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Route protection (design.md → Behaviors & Access, spec.md EC-2): everything
-// requires a session except these — /reset-password is reached only via the
-// emailed recovery link, /privacy and /imprint are PROJ-4 and stay public.
-const PUBLIC_PATHS = ['/login', '/reset-password', '/privacy', '/imprint']
+// requires a session except these — /auth/confirm redeems the emailed recovery
+// link and must be reachable by someone who is precisely NOT signed in yet,
+// /reset-password is reached only through it, /privacy and /imprint are PROJ-4
+// and stay public.
+const PUBLIC_PATHS = ['/auth/confirm', '/login', '/reset-password', '/privacy', '/imprint']
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))
