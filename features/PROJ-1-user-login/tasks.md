@@ -40,11 +40,17 @@
 
 - [x] T13  Netzwerkfehler-Behandlung über alle vier Formulare hinweg (Fehlermeldung + „Erneut versuchen", eingegebene Werte bleiben erhalten) und Integrationsdurchlauf gegen alle AC-IDs und EC-IDs aus `spec.md`  · files: src/components/auth/login-view.tsx, src/components/auth/register-view.tsx, src/components/auth/forgot-password-view.tsx, src/components/auth/reset-password-form.tsx  · → EC-6
 
+<!-- Nachgetragen am 2026-09-03 durch /refine PROJ-1. Anlass: /dsgvo PROJ-3 deckte auf,
+     dass der Trainername veröffentlicht wird, ohne dass die Registrierung es sagt.
+     Nicht [P]: berührt dieselbe Datei wie T9 und läuft deshalb nie parallel dazu. -->
+
+- [ ] T14  RegisterView: Hinweistext am Trainername-Feld — „Dein Trainername ist für alle Spieler auf der Bestenliste sichtbar und kann später nicht mehr geändert werden." Dauerhaft sichtbar (kein Tooltip, kein Aufklappen), dem Feld per `aria-describedby` zugeordnet, damit Screenreader ihn beim Fokussieren vorlesen. **Keine** Bestätigungs-Checkbox  · files: src/components/auth/register-view.tsx  · → AC-15
+
 ## Parallelization
 
 - **Ebenen sind Barrieren.** Eine Ebene startet erst, wenn die vorherige vollständig integriert und gegen ihre AC-IDs verifiziert ist. Das hält den Datenvertrag vor der UI: Schema (L1) → API (L2) → UI (L3) → Politur (L4).
 - **`[P]` verlangt disjunkte Dateien.** Zwei `[P]`-Aufgaben derselben Ebene listen nie denselben Pfad unter `files:`. Würden sie dieselbe Datei berühren, sind sie **nicht** beide `[P]` — sequenziell setzen (bei einer `[P]` streichen) oder zu einer Aufgabe zusammenführen.
-- **Grobkörnig, nicht mikro.** Aufgaben sind sinnvolle Prüfpunkte (13 in diesem Feature), keine Einzeiler.
+- **Grobkörnig, nicht mikro.** Aufgaben sind sinnvolle Prüfpunkte (14 in diesem Feature), keine Einzeiler.
 - **`[user]`-Aufgaben sind nie parallel und werden nie gebaut.** Sie stehen in der Ebene, deren Code von ihnen abhängt; `/build` gibt bei Erreichen der Ebene die Übergabe aus (was, wo, welcher Wert) und macht weiter — das Kästchen bleibt offen, bis der Nutzer es abhakt.
 - Während `/build` läuft jede `[P]`-Aufgabe der aktiven Ebene in einem eigenen Subagenten mit isoliertem Git-Worktree; danach integriert der Hauptagent, verifiziert gegen die AC-IDs der Ebene und hakt die Kästchen hier ab. Subagenten erklären sich nie selbst für fertig — es gibt einen Verifizierungs-Owner.
 - **Schnittstelle zu PROJ-2:** T12 ist ein bewusster, temporärer Platzhalter auf `/` — PROJ-2 ersetzt `src/app/page.tsx` vollständig durch die echte Startseite (Spiel starten, spielen, Ergebnis sehen).
