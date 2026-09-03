@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -64,6 +65,10 @@ export function RegisterView({ onSwitchToLogin }: { onSwitchToLogin: () => void 
               <FormControl>
                 <Input autoComplete="username" {...field} />
               </FormControl>
+              <FormDescription className="text-xs">
+                Dein Trainername ist für alle Spieler auf der Bestenliste sichtbar und kann
+                später nicht mehr geändert werden.
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
