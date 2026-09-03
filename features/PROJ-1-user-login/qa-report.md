@@ -202,6 +202,7 @@ Genau dieser Fall fehlte bisher in jeder Suite: Alle bisherigen Prüfungen simul
 - **Regression aus PROJ-2:** Vor der Shell gab es nur das innere `<main>`
 - **Fix:** Das innere `<main>` in den beiden Seiten zu einem `<div>` machen. Eine Zeile je Datei
 - **Priorität:** Vor dem Deploy, aber nicht blockierend
+- **Status: behoben am 2026-09-02.** Beide Seiten verwenden jetzt ein `<div>`; das ausgelieferte HTML enthaelt auf `/login` und `/reset-password` genau **ein** `<main>` (geprueft mit `curl`), Fusszeile und Inhalt unveraendert vorhanden
 
 #### Offene `[user]`-Aufgabe: T4 (Passwort-Mindestlänge im Dashboard)
 

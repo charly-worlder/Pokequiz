@@ -1,36 +1,29 @@
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { logoutAction } from '@/lib/auth/actions'
-import { Button } from '@/components/ui/button'
+import { getPersonalBest } from '@/lib/quiz/run-actions'
+import { QuizScreen } from '@/components/quiz/quiz-screen'
 
-// Platzhalter, bis PROJ-2 die echte Startseite baut (Spiel starten, spielen,
-// Ergebnis sehen) — siehe design.md → PROJ-1, T12. Dient hier nur dazu, AC-4
-// (Weiterleitungsziel nach Login) und AC-6 (Abmelden) testbar zu machen.
+/**
+ * The game screen — start, play and result are one route, because it is one
+ * continuous flow and a reload loses the state anyway (docs/app-shell.md).
+ *
+ * spec.md AC-13: the proxy already redirects signed-out visitors, and this
+ * check is the second, independent one — the page never renders for a request
+ * without a session.
+ */
 export default async function HomePage() {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) {
-    return null
-  }
+  if (!user) redirect('/login')
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('trainer_name')
-    .eq('id', user.id)
-    .single()
+  const personalBest = await getPersonalBest()
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background p-6">
-      <p className="text-lg text-foreground">
-        Eingeloggt als <span className="font-semibold">{profile?.trainer_name}</span>
-      </p>
-      <form action={logoutAction}>
-        <Button type="submit" variant="outline">
-          Abmelden
-        </Button>
-      </form>
-    </main>
+    <div className="mx-auto w-full max-w-2xl px-[clamp(18px,4vw,44px)] py-[clamp(12px,1.8vw,22px)]">
+      <QuizScreen initialPersonalBest={personalBest} />
+    </div>
   )
 }

@@ -12,6 +12,10 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Added at /e2e-tests: the scaffolded config had Chromium and WebKit only,
+    // so Firefox had never run in any check of this project — the gap every QA
+    // report listed as unverified.
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
     { name: 'Mobile Safari', use: { ...devices['iPhone 13'] } },
   ],
   webServer: {

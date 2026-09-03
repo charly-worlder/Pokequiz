@@ -54,6 +54,14 @@
 
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  /* docs/design-system.md → Bewegung. Four of the seven keyframes are used by
+     PROJ-2; `fall` and `sheen` belong to the leaderboard (PROJ-3) and `pulse`
+     to a screen this feature does not build, so they are not defined yet. */
+  --animate-in: in 0.4s ease-out;
+  --animate-pop: pop 0.28s ease-out;
+  --animate-nudge: nudge 0.4s ease-in-out;
+  --animate-float: float 4.5s ease-in-out infinite;
 }
 
 @keyframes accordion-down {
@@ -147,11 +155,66 @@
   }
 }
 
+/* Motion — docs/design-system.md → Bewegung (PROJ-2, spec.md AC-4, AC-6, AC-8). */
+
+@keyframes in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Correct answer and new personal best — a short overshoot to 1.03. */
+@keyframes pop {
+  0% { transform: scale(1); }
+  55% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+
+/* Wrong answer — horizontal shake, 0.4s. */
+@keyframes nudge {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+/* The Pokéball on the start screen. */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
 @layer base {
   * {
     @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* docs/design-system.md: „Fokus ist Pflicht, nicht Kür." A visible ring on
+     every interactive element — keyboard users have nothing otherwise. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+
+  /* Live-changing numbers (clock, streak, time) never shift the layout
+     (spec.md AC-25, design-system.md → Typografie). */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* docs/design-system.md: every keyframe respects reduced motion — state changes
+   remain, movement stops. This deliberately does not disable transitions of
+   colour, which is what carries the answer feedback (AC-4, AC-6). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
