@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
+import { AUTH_COOKIE_OPTIONS } from './cookie-options'
+
 // Server-side client for Server Actions and Route Handlers — reads and writes
 // the session via the request's cookie jar. See docs/stacks/backend-supabase.md
 // → "The login and signup flow".
@@ -11,6 +13,7 @@ export async function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: AUTH_COOKIE_OPTIONS,
       cookies: {
         getAll() {
           return cookieStore.getAll()

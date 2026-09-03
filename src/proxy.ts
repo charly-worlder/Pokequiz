@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+import { AUTH_COOKIE_OPTIONS } from '@/lib/supabase/cookie-options'
+
 // Route protection (design.md → Behaviors & Access, spec.md EC-2): everything
 // requires a session except these — /auth/confirm redeems the emailed recovery
 // link and must be reachable by someone who is precisely NOT signed in yet,
@@ -19,6 +21,7 @@ export async function proxy(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: AUTH_COOKIE_OPTIONS,
       cookies: {
         getAll() {
           return request.cookies.getAll()
