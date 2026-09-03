@@ -254,3 +254,156 @@ Genau dieser Fall fehlte bisher in jeder Suite: Alle bisherigen Prüfungen simul
 **Der Weg dorthin.** Der Hinweis ändert das Verhalten von PROJ-1 und braucht deshalb ein eigenes Acceptance Criterion. Route laut `.claude/rules/general.md` → Change Routing: **`/refine PROJ-1`** (AC ergänzen) → `/build` → `/qa`. `spec.md` wird **nicht** auf diesem Weg angefasst; sie ist der Vertrag und gehört `/refine`.
 
 **Nicht Teil dieses Blockers, aber offen:** ob der Trainername (mindestens einmalig) änderbar sein sollte. Das ist eine Rechtsfrage, keine QA-Frage — sie liegt in `docs/privacy.md` → „Für einen Anwalt / Datenschutzbeauftragten".
+
+---
+
+## QA-Lauf — 2026-09-03, nach AC-15 (Hinweis am Trainername-Feld)
+
+**Anlass:** `/build` hat T14 umgesetzt (AC-15). Geprüft wurde jedoch **nicht nur das Delta**: Alle 15 AC-IDs und 6 EC-IDs wurden in diesem Lauf neu verifiziert, ohne ein einziges Häkchen aus den Läufen vom 2026-09-01 und 2026-09-02 zu übernehmen. Das war eine bewusste Entscheidung — und sie hat sich gelohnt: Zwei der drei High-Bugs unten sind **Altlasten**, die in den früheren Läufen nicht gefunden wurden und nichts mit AC-15 zu tun haben.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten, die den Build nicht gesehen haben — Bahn A (Acceptance + Regression + Testsuite), Bahn B (Security-Red-Team). Beide gegen die laufende App (`http://localhost:3000`) und das lokale Supabase. Zusammenführung, Bewertung und dieser Report: Hauptkontext.
+
+**Bug-Nummerierung:** Die Bahnen haben unabhängig voneinander bei BUG-1 begonnen. Hier durchnummeriert ab **BUG-6**, weil BUG-1/3/4/5 in diesem Feature bereits vergeben sind.
+
+### Acceptance Criteria
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-1 | [x] PASS | `registerAction` per HTTP → `x-action-redirect: /`, DB-Gegenprobe: Profil angelegt, Passwort bcrypt, keine Bestätigung nötig. Passwort < 8 → Feldfehler; Supabase lehnt zusätzlich serverseitig ab (`422 weak_password`) |
+| AC-2 | [x] PASS | Registrierung mit kleingeschriebener Variante eines vergebenen Namens → Feldfehler; Durchsetzung per `profiles_trainer_name_lower_key` (`0001_profiles.sql:13`) |
+| AC-3 | [x] PASS | Vergebene E-Mail → Feldfehler mit Login-Link (`error-mapping.ts:43-45`, `register-view.tsx:86-96`) |
+| AC-4 | [x] PASS | Korrekter Login → `x-action-redirect: /;push` + Session-Cookie; im Browser bestätigt |
+| AC-5 | [x] PASS | Cookie ist persistent (`Max-Age=34560000`), nicht sitzungsgebunden; `storageState` in frischem Browser-Kontext → `/` liefert 200 mit Startbildschirm |
+| AC-6 | [x] PASS | `logoutAction` → Cookie `Max-Age=0`, Redirect `/login`; danach `/` → 307 |
+| AC-7 | [x] PASS | Falsches Passwort und unbekannte Adresse liefern **identischen** String, in curl und Browser; `error-mapping.ts:61-67` verzweigt nur bei 429 |
+| AC-8 | [!] **FAIL (lokal)** / NOT VERIFIED (hosted) | 35 Fehl-Logins in Folge, **kein einziges 429**, danach loggt das korrekte Passwort normal ein. Ursache belegt: `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt im lokalen Auth-Container, obwohl `config.toml:209` es setzt. → **BUG-7** |
+| AC-10 | [x] PASS | Gleiche Meldung unabhängig von Kontoexistenz; Mailpit enthält genau **eine** Mail (für die existierende Adresse), keine für die unbekannte |
+| AC-11 | [!] **TEILWEISE** | Im **selben** Browser vollständig grün (Reset angefordert → Mail → Link → neues Passwort → Login damit erfolgreich). **Über Gerätegrenzen hinweg gebrochen** → **BUG-6** |
+| AC-12 | [x] PASS | Benutzter und tokenloser Link → „Dieser Link ist ungültig oder abgelaufen." + „Neuen Link anfordern"; serverseitig zusätzlich abgesichert (`actions.ts:146-151`) |
+| AC-13 | [x] PASS | Leere Formulare → alle Feldfehler gleichzeitig; `framenavigated` auf dem Hauptframe **nicht** ausgelöst → kein Reload |
+| AC-14 | [!] **Wortlaut erfüllt, Ziel defekt** | Link „Datenschutzerklärung" sichtbar mit `href="/privacy"` (`register-view.tsx:114-120`) — aber `GET /privacy` → **404** → **BUG-10** |
+| AC-15 | [x] PASS | Hinweistext ohne Klick/Hover sichtbar (`register-view.tsx:68-71`), keine Checkbox im Formular; Unit-Tests grün |
+
+_AC-9 existiert nicht — laut Decision Log gestrichen._
+
+### Edge Cases
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| EC-1 | [x] PASS | 3 **parallele** Registrierungen mit demselben Trainernamen → 1 Erfolg, 2 Ablehnungen; DB: genau 1 Profil, **0** verwaiste `auth.users` ohne Profil. Zweiter Lauf mit Groß-/Kleinvarianten identisch. Garantie im Code bestätigt: Unique-Index + `SECURITY DEFINER`-Trigger in derselben Transaktion (`0001_profiles.sql:13,28-51`) |
+| EC-2 | [x] PASS | `/`, `/?x=1`, `/some/deep/path`, `/api/whatever`, `/nonexistent` → alle 307 auf `/login` (Query bleibt erhalten); `/login`, `/reset-password` → 200; eingeloggt auf `/login` → 307 auf `/` |
+| EC-3 | [x] PASS | Unbekannte Adresse → identische Meldung, **keine** zusätzliche Mail in Mailpit |
+| EC-4 | [!] NOT VERIFIED / FAIL lokal | Deckungsgleich mit AC-8: Wo das Limit gar nicht greift, kann „bleibt weiterhin gesperrt" nicht eintreten |
+| EC-5 | [x] PASS | Leerzeichen, 2 Zeichen, 21 Zeichen, Emoji → jeweils feldspezifische Ablehnung; DB-CHECK zusätzlich vorhanden |
+| EC-6 | [!] **TEILWEISE FAIL** | Auth-Container per `docker pause` angehalten: Registrierung meldet korrekt „Verbindung fehlgeschlagen"; **Login meldet „E-Mail-Adresse oder Passwort ist falsch."** → **BUG-9** |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis | Beleg |
+|---------|----------|-------|
+| Authentication Bypass | [x] PASS | Ohne Session: `/` und `/api` → 307 auf `/login`; Guard `src/proxy.ts:52-56`, serverautoritative Prüfung per `getUser()` |
+| Autorisierung (Datenbankebene) | [x] PASS | Zweites Konto liest fremde Runden → `[]`; gefälschter `profile_id`-INSERT → `403 / 42501`. Anon ohne Session sieht auf `profiles` und `runs` nichts |
+| Input Injection | [x] PASS | XSS-Trainername **unter Umgehung der App-Validierung** direkt an Supabase → vom DB-CHECK abgelehnt. Defense in Depth wirkt (Zod **und** Constraint) |
+| Brute Force auf Zugangsdaten | [!] **FAIL** | 35 Versuche ohne Drosselung → BUG-7 |
+| Account-Enumeration (Login/Reset) | [x] PASS | Identische Meldungen und Codepfade (`error-mapping.ts:61-75`) |
+| Account-Enumeration (Registrierung) | [x] Bekannt, by design | Vergebene E-Mail wird offen gemeldet — dokumentierte Produktentscheidung (2026-08-31), kein Bug |
+| Bulk-Signup | [!] NOT VERIFIED — nicht implementiert | 10 Konten per Schleife angelegt, alle 200, kein CAPTCHA. AC-9 bewusst gestrichen; reaktiv geplant |
+| Exponierte Secrets | [x] PASS | `.next/` durchsucht: kein Service-Role-Key, kein `SECRET_KEY`, kein `JWT_SECRET` im Bundle. Nur `NEXT_PUBLIC_*` erreicht den Client |
+| Sensible Daten in API-Antworten | [x] PASS | `profiles` gibt nur `id` + `trainer_name` heraus, keine E-Mail |
+| Zugangsdaten in der URL | [x] PASS | Alle vier Formulare `method="post"`, kein nativer GET-Fallback |
+| Security-Header | [!] **FAIL** | Keiner von `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` gesetzt → **BUG-12** |
+
+### Bugs
+
+#### BUG-6: Passwort-Reset funktioniert nur in dem Browser, in dem er angefordert wurde
+- **Severity: High** · betrifft **AC-11**
+- **Ursache:** Der Reset-Link ist PKCE. Der `code_verifier` liegt als Cookie **auf dem anfordernden Gerät** (`Set-Cookie: sb-127-auth-token-code-verifier=…` in der Antwort von `requestPasswordResetAction`). Ohne dieses Cookie ist der Tausch nicht möglich.
+- **Reproduktion:** Konto anlegen → in Browser-Kontext A „Passwort vergessen?" absenden → Link aus dem Postfach in **frischem** Kontext B öffnen → „Dieser Link ist ungültig oder abgelaufen.", obwohl der Link frisch und unbenutzt ist.
+- **Wirkung:** Genau der Alltagsfall „am Rechner anfordern, Mail am Handy öffnen" ist gebrochen — und die Meldung ist dabei **sachlich falsch**: Sie behauptet einen abgelaufenen Link, wo ein gültiger vorliegt. Der Nutzer fordert einen neuen an, mit demselben Ergebnis. Das ist eine Sackgasse für jeden, der sein Passwort wirklich vergessen hat.
+- **Nicht durch AC-15 verursacht** — Altlast, in den Läufen vom 01./02.09. nicht entdeckt, weil dort nur innerhalb **eines** Kontexts geprüft wurde. `design.md` → Technical Decisions behauptet, die clientseitige Lösung decke „beide Formen" ab; für PKCE über Gerätegrenzen gilt das nicht.
+
+#### BUG-7: Keine wirksame Drosselung auf dem Zugangsdaten-Pfad (lokal nachgewiesen)
+- **Severity: High** · betrifft **AC-8, EC-4**
+- 35 Fehl-Logins gegen dasselbe Konto von derselben IP: keine einzige Ablehnung; danach loggt das korrekte Passwort normal ein.
+- **Ursache belegt:** `docker exec … env | grep RATE_LIMIT` zeigt, dass `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` im lokalen Auth-Container **nicht gesetzt** ist, obwohl `supabase/config.toml:209` `sign_in_sign_ups = 30` konfiguriert.
+- **Einordnung:** Inhaltlich die bekannte Open Question — neu ist die Beweislage. Bisher stand „nicht verifizierbar"; jetzt ist **demonstriert**, dass unbegrenztes Durchprobieren lokal funktioniert. Die App hat bewusst keinen eigenen Zähler (Produktentscheidung); der einzige vorgesehene Schutz ist Supabases Per-IP-Regel — die auch im funktionierenden Zustand weder verteilte noch geduldige kontobezogene Angriffe stoppt.
+- **Nicht lokal reparierbar**, aber vor dem Livegang verifizierungspflichtig.
+
+#### BUG-8: Offene `[user]`-Aufgabe T4 auf dem Zugangsdaten-Pfad
+- **Severity: High** (nach QA-Regel für offene `[user]`-Tasks auf Credential-Pfaden) · betrifft **AC-1, AC-11**
+- `tasks.md:17` — Passwort-Mindestlänge 8 im gehosteten Supabase-Projekt: nicht abgehakt.
+- **Entlastender Kontext:** Der lokale Spiegel ist gesetzt **und nachweislich wirksam** (`config.toml:184`; direkter API-Signup mit 5 Zeichen → `422 weak_password`). Das gehostete Projekt existiert noch nicht, die Aufgabe ist also strukturell nicht erledigbar — kein Versäumnis, aber ein echtes Gate vor `/deploy`.
+
+#### BUG-9: Login meldet bei Supabase-Ausfall „falsches Passwort" statt Netzwerkfehler
+- **Severity: Medium** · betrifft **EC-6**
+- `error-mapping.ts:61-67`: `mapLoginError` verzweigt nur auf 429; jeder andere Fehler — auch ein Transportfehler ohne Status — fällt auf `WRONG_CREDENTIALS_MESSAGE`.
+- **Reproduktion:** `docker pause supabase_auth_…`, dann Login mit **korrekten** Zugangsdaten → nach ~61 s „E-Mail-Adresse oder Passwort ist falsch."
+- **Wirkung:** Der Nutzer hält sein Passwort für falsch und läuft in den Reset — statt es erneut zu versuchen. Der Registrierungspfad macht es richtig (`mapRegisterError` fällt auf `NETWORK_ERROR_MESSAGE`, Zeile 55); nur der Login-Pfad nicht.
+- **Teilregression:** EC-6 galt am 01.09. als vollständig grün. Der damalige Fix (`run-action.ts`) behob die rohe Browser-Fehlerseite; diese Fehlklassifizierung *innerhalb* der App blieb unentdeckt.
+
+#### BUG-10: Datenschutz-Link im Registrierungsformular zeigt auf 404
+- **Severity: Medium** · betrifft **AC-14**
+- `register-view.tsx:116` verlinkt `/privacy`; `GET /privacy` → **404** (curl und Browser bestätigt). `/imprint` ebenfalls 404, dort aber nirgends verlinkt.
+- **Inkonsistent zur eigenen Regel des Projekts:** `site-footer.tsx:11` hält `LEGAL_PAGES` bewusst leer, „damit kein toter Link entsteht, bis PROJ-4 die Seite baut". Im Registrierungsformular wurde derselbe Gedanke nicht angewandt.
+- AC-14 ist im Wortlaut erfüllt („ein Link ist sichtbar") — der Vertrag hat nur nie verlangt, dass er irgendwo hinführt.
+
+#### BUG-11: Passwort über 72 Zeichen scheitert mit „Verbindung fehlgeschlagen"
+- **Severity: Medium** · betrifft **AC-1, AC-11**
+- Registrierung mit 76-Zeichen-Passwort → „Die Verbindung ist fehlgeschlagen." Tatsächliche Ursache: `400 validation_failed "Password cannot be longer than 72 characters"` (bcrypt-Grenze). Exakt 72 Zeichen → 200.
+- `mapRegisterError` hat für 400 keinen Zweig (`error-mapping.ts:42-56`); `updatePasswordAction` bildet jeden Fehler auf `NETWORK_ERROR_MESSAGE` ab (`actions.ts:155-157`) — betrifft also auch den Reset-Pfad.
+- **Wirkung:** Passwortmanager erzeugen solche Passphrasen. Der Nutzer bekommt kein Feld-Feedback und keinen Hinweis, was zu tun wäre.
+
+#### BUG-12: Security-Header fehlen vollständig
+- **Severity: Medium**
+- `curl -i http://localhost:3000/login`: weder `X-Frame-Options` noch `X-Content-Type-Options` noch `Referrer-Policy`; keine Header-Konfiguration in `next.config.ts` oder `src/proxy.ts`.
+- `.claude/rules/security.md` verlangt alle vier. Fehlendes `X-Frame-Options`/`frame-ancestors` bedeutet Clickjacking-Risiko auf der Login-Seite. HSTS ist lokal über HTTP nicht prüfbar, die anderen drei sind es und fehlen.
+- Wird typischerweise beim Host konfiguriert — muss dort gegen die Live-URL verifiziert werden.
+
+#### BUG-13: Session-Cookie ohne `HttpOnly` und ohne `Secure`
+- **Severity: Medium** — **Bewertung ausdrücklich offen, siehe unten**
+- `Set-Cookie: sb-127-auth-token=…; Path=/; Expires=…; Max-Age=34560000; SameSite=lax` — kein `HttpOnly`, kein `Secure`. Access- und Refresh-Token sind damit per `document.cookie` lesbar.
+- **Warum es so ist:** Der clientseitige Reset-Pfad liest die Sitzung im Browser (`getSession()`), was ein `HttpOnly`-Cookie ausschließen würde. Das ist Folge einer Designentscheidung, nicht ein vergessenes Flag.
+- **Ehrliche Einordnung:** Diesen Punkt hat die **Acceptance-Bahn** nebenbei bemerkt; die Security-Bahn hatte ihn nicht auf der Liste und hat ihn **nicht bewertet**. Der beobachtete Befund (die Cookie-Flags) ist gesichert, das Severity-Urteil ist es nicht. Gehört vor dem Livegang bewusst entschieden, zusammen mit BUG-6 — beide hängen am selben clientseitigen Reset-Design.
+
+#### BUG-14: „Stattdessen einloggen" erscheint bei jedem E-Mail-Feldfehler
+- **Severity: Low** · `register-view.tsx:86-96` koppelt den Hinweis an *jeden* Fehler am E-Mail-Feld, also auch an „Bitte eine gültige E-Mail-Adresse eingeben", wo er sinnlos ist.
+
+#### BUG-15: Codekommentar widerspricht dem beobachteten Verhalten
+- **Severity: Low** · `actions.ts:115-118` behauptet, der Recovery-Link liefere die Tokens „always" im URL-Fragment und „never a server-readable `?code=`". Gemessen wurde genau die `?code=`-Form. `design.md` beschreibt die Doppeldeutigkeit korrekt, der Kommentar nicht — irreführend für den nächsten, der BUG-6 anfasst.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 11 Dateien, 96 Tests, alle grün** (2,50 s).
+- **Bestehende Playwright-Suite als Regression: 14 von 15 grün.** Der eine Fehlschlag — `tests/PROJ-2-quiz-round.spec.ts:41` in Chromium, „Erste Frage brauchte 3880 ms, erlaubt sind 3000 ms" — war bei Einzelausführung grün und in Firefox und Mobile Safari grün. **Einstufung: Flake unter 15 parallelen Workern gegen den Dev-Server, kein PROJ-1-Regressionsbruch.** Erwähnenswert bleibt: Das AC-2-Zeitbudget von PROJ-2 hat unter Last **keine Reserve**.
+- **Geteilte App-Shell und Auth (PROJ-2) intakt:** ausgeloggte Kopfzeile zeigt die Merkzeile (AC-22), eingeloggte den Trainername-Chip (AC-21), `/` ausgeloggt → 307. Der PROJ-2-Kernpfad läuft in drei Browsern durch und speichert Runden.
+- **Datenschicht unverändert:** `pg_policies` bestätigt `profiles_select_authenticated`, `runs_select_own`, `runs_insert_own`; `ON DELETE CASCADE` vorhanden. Deckt sich mit `docs/data-model.md`.
+- Kein Feature steht auf „Deployed" — außer PROJ-2 gab es nichts zu regressionsprüfen.
+
+### Unit-Tests aus diesem Lauf
+
+Keine neu geschrieben. Die drei Tests zu AC-15 (`register-view.test.tsx`) stammen aus dem `/build`-Lauf und wurden dort mit Rot-Nachweis geführt; sie liefen hier als Regression grün mit. Für die neuen Bugs sind Tests Sache des Fixes, nicht dieses Laufs.
+
+### Not Verified In This Run
+
+- [!] **AC-8 / EC-4 gegen das gehostete Projekt** — lokal nicht auslösbar (Ursache in BUG-7 belegt). Zu prüfen nach dem ersten `/deploy`: ~35 falsche Logins gegen die öffentliche Projekt-URL, auf 429. Einstellung: **Dashboard → Authentication → Rate Limits → `sign_in_sign_ups`**
+- [!] **T4** — Wert im gehosteten Projekt nicht beobachtbar, weil es das Projekt nicht gibt. **Dashboard → Authentication → Sign In / Providers → Email → Minimum password length = 8**
+- [!] **Site URL / Redirect URLs im gehosteten Projekt** — lokal korrekt, hosted nicht prüfbar
+- [!] **Security-Header gegen die Live-URL** — lokal fehlen alle drei prüfbaren (BUG-12); HSTS erst über HTTPS beurteilbar
+- [!] **Responsives Layout bei 375 / 768 / 1440 px** — kein Viewport-Urteil. Die E2E-Suite fährt „Mobile Safari", prüft dort aber Funktion, nicht Layout
+- [!] **Cross-Browser über Chromium/Firefox/WebKit hinaus** — echtes Safari, ältere Engines nicht verfügbar
+- [!] **DevTools-Prüfungen** — Konsole, Netzwerk-Tab, berechnete Styles nicht durchgeführt
+- [!] **Verhalten ohne JavaScript** — als bekannte Einschränkung in `design.md` dokumentiert, in diesem Lauf nicht nachgestellt
+- [!] **Severity-Bewertung von BUG-13** — von keiner der beiden Bahnen abschließend beurteilt (siehe dort)
+
+### Verdikt
+
+- **Acceptance Criteria:** 11 von 14 geprüften bestanden · AC-8 **FAIL** (lokal) · AC-11 **teilweise** (im selben Browser grün, geräteübergreifend gebrochen) · AC-14 im Wortlaut erfüllt, Ziel defekt
+- **Edge Cases:** 4 von 6 bestanden · EC-4 nicht verifizierbar · EC-6 **teilweise FAIL**
+- **Bugs:** 10 neu — **3 High** (BUG-6, BUG-7, BUG-8), **5 Medium** (BUG-9 bis BUG-13), **2 Low** (BUG-14, BUG-15)
+- **Security:** 8 Prüfungen mit Beleg bestanden, **2 mit Befund** (Brute Force, Security-Header), 1 NOT VERIFIED (Bulk-Signup, bewusst nicht implementiert)
+- **Automatisierte Tests:** 96/96 grün · E2E 14/15 (der eine Fehlschlag ein Flake, einzeln grün)
+- **Production Ready: NEIN** — drei offene High-Bugs.
+
+> **Was „NEIN" hier heißt und was nicht.** Es heißt nicht, dass AC-15 oder der Build vom 03.09. etwas kaputt gemacht hätten — AC-15 ist grün, und die Regression ist sauber. Es heißt, dass ein **vollständiger** Sweep zwei High-Bugs gefunden hat, die in den Läufen vom 01./02.09. durchgerutscht sind: der geräteübergreifende Passwort-Reset (**BUG-6**) und die nun nachgewiesene fehlende Drosselung (**BUG-7**). PROJ-1 stand seit dem 02.09. auf `Approved` — nach diesem Lauf zu Unrecht.
+
+> **Der wichtigste einzelne Befund ist BUG-6.** Ein Nutzer, der sein Passwort vergisst, es am Rechner zurücksetzen will und die Mail am Handy öffnet, kommt nicht wieder in sein Konto — und die App sagt ihm dabei etwas Falsches. Für ein Produkt ohne E-Mail-Bestätigung ist der Reset der einzige Weg zurück ins Konto.

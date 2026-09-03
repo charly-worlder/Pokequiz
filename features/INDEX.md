@@ -22,7 +22,7 @@
 
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
-| PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | In Progress | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
+| PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | In Review | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
@@ -40,6 +40,7 @@
 | PROJ-1 | **AC-8 / EC-4** — Supabases eingebautes Rate-Limit ist im lokalen Stack nicht auslösbar; der Schutz vor automatisiertem Durchprobieren ist damit unbewiesen, nicht widerlegt | erst gegen das gehostete Projekt |
 | PROJ-1 | **T4** — Passwort-Mindestlänge (8) im Dashboard des gehosteten Projekts setzen. Der lokale Spiegel in `config.toml` ist gesetzt und verifiziert | erst nach dem ersten `/deploy` |
 | PROJ-1 | **AC-11 / AC-12** — der Passwort-Reset-Link hängt an Site-URL und Redirect-URLs des gehosteten Projekts | erst gegen das gehostete Projekt |
-| PROJ-1 | **Warnhinweis am Trainername-Feld** — dass der Name für andere Spieler sichtbar **und** dauerhaft unveränderlich ist. Aus `/dsgvo PROJ-3`, 2026-09-03. **In Arbeit:** als `AC-15` / `T14` erfasst (`/refine` am 2026-09-03 erledigt), es fehlen `/build` und `/qa` | **sofort** |
+| PROJ-1 | ~~**Warnhinweis am Trainername-Feld**~~ — **erledigt** am 2026-09-03: `AC-15` gebaut (`T14`) und im QA-Lauf verifiziert | ✅ |
+| PROJ-1 | **Security-Header fehlen** — `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` sind nirgends gesetzt (BUG-12). Werden beim Host konfiguriert und müssen gegen die Live-URL geprüft werden | beim Deploy |
 
 ## Next Available ID: PROJ-5
