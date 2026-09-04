@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { runClientAction } from '@/lib/actions/run-action'
 import { getNextQuestion, repairImageUrl, type Question } from '@/lib/quiz/question-action'
 import { saveRun, type PersonalBest } from '@/lib/quiz/run-actions'
 import { POOL_SIZE } from '@/lib/validation/quiz'
@@ -21,10 +22,12 @@ import { ResultView, type SaveState } from './result-view'
  *   open --wrong--> resolved --click--> finished
  *   open --pool empty--> finished (winner)
  *   error --retry ok--> open      error --end round--> finished
- *   finished --play again--> ready
+ *   finished --play again--> loading      (AC-9: one click, a new round)
  *
  * There is no path from `finished` back to `open`: a finished round is
- * immutable, exactly like its row in the database.
+ * immutable, exactly like its row in the database. „Nochmal spielen" does not
+ * lead back to `ready` either — AC-9 promises a started round, not the start
+ * screen a second time (BUG-10, qa-report.md 2026-09-04).
  */
 type Phase = 'ready' | 'loading' | 'open' | 'resolved' | 'error' | 'finished'
 
@@ -138,11 +141,20 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       const durationMs = Math.round(accumulatedRef.current)
       setFinalDurationMs(durationMs)
 
-      const result = await saveRun({
-        streak: finalStreak,
-        durationMs,
-        clientRoundId: roundIdRef.current,
-      })
+      // BUG-7 (qa-report.md 2026-09-04): Ohne diesen Fänger lief ein
+      // Transport-Fehler an allen folgenden Zeilen vorbei — `saveState` blieb
+      // auf 'saving', der Ergebnis-Screen sah aus wie ein gespeichertes
+      // Ergebnis, und die Fehler-UI aus EC-3 wurde nie erreicht. Genau der
+      // Fehlertyp, den PROJ-1 mit `runAuthAction` längst behoben hatte.
+      const result = await runClientAction(
+        () =>
+          saveRun({
+            streak: finalStreak,
+            durationMs,
+            clientRoundId: roundIdRef.current,
+          }),
+        { status: 'failed' as const }
+      )
 
       if (result.status === 'unauthenticated') return bailToLogin()
       if (result.status === 'saved') {
@@ -163,7 +175,12 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     if (fetchingRef.current) return
     fetchingRef.current = true
     try {
-      const result = await getNextQuestion(seenIdsRef.current)
+      // Ein Transport-Fehler ist für den Spieler dasselbe wie eine nicht
+      // lieferbare Frage: Wartet er darauf, zeigt AC-16 die Fehlerkarte
+      // (BUG-7, gleiche Wurzel).
+      const result = await runClientAction(() => getNextQuestion(seenIdsRef.current), {
+        status: 'unavailable' as const,
+      })
 
       if (result.status === 'unauthenticated') {
         bailToLogin()
@@ -236,8 +253,14 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
 
     if (!repairedRef.current.has(failed.pokemonId)) {
       repairedRef.current.add(failed.pokemonId)
-      const repaired = await repairImageUrl(failed.pokemonId)
-      if (repaired) {
+      const repaired = await runClientAction(() => repairImageUrl(failed.pokemonId), null)
+      // BUG-8 (qa-report.md 2026-09-04): Die offiziell dokumentierte Adresse
+      // ist im Normalfall *dieselbe*, die gerade gescheitert ist. Sie erneut zu
+      // setzen ließ `ImageProbe`s `key` unverändert — der Browser lud nicht
+      // neu, `onError` feuerte kein zweites Mal, und die Runde hing dauerhaft
+      // auf „Runde wird vorbereitet …", ohne Meldung und ohne Ausweg. Eine
+      // unveränderte Adresse ist keine Reparatur.
+      if (repaired && repaired !== failed.imageUrl) {
         setProbing({ ...failed, imageUrl: repaired })
         return
       }
@@ -246,9 +269,18 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     setProbing(null)
     discardsRef.current += 1
 
-    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS && !hasCurrentRef.current) {
-      pauseClock()
-      setPhase('error')
+    // spec.md EC-10 — drei Verwürfe in Folge sind eine gebrochene Quelle.
+    // BUG-13 (qa-report.md 2026-09-04): Die Grenze griff nur, wenn der Spieler
+    // wartete. Fiel die Bildquelle aus, *während* er noch antwortete, zog das
+    // Vorladen endlos neue Fragen — je vier Namensabfragen an die PokeAPI, ohne
+    // Backoff, gegen genau die Fair-Use-Zusage, um die dieses Feature sich
+    // sonst bemüht (AC-31). Die Grenze stoppt die Schleife jetzt in beiden
+    // Fällen; die Fehlerkarte zeigt sie nur dem, der wartet.
+    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) {
+      if (!hasCurrentRef.current) {
+        pauseClock()
+        setPhase('error')
+      }
       return
     }
     void fetchQuestion()
@@ -293,9 +325,17 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     // Nothing preloaded — the player waits, so a failure now is visible.
     hasCurrentRef.current = false
     setCurrent(null)
+    // Das Vorladen kann an der Verwurfsgrenze stehengeblieben sein, während der
+    // Spieler noch antwortete (BUG-13). Jetzt wartet er — das ist der Fall aus
+    // EC-10, also die Fehlerkarte statt eines neuen Anlaufs.
+    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) {
+      pauseClock()
+      setPhase('error')
+      return
+    }
     setPhase('loading')
     void fetchQuestion()
-  }, [reserve, fetchQuestion])
+  }, [reserve, fetchQuestion, pauseClock])
 
   const answer = useCallback(
     (index: number) => {
@@ -340,6 +380,10 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   ) : null
 
   if (phase === 'finished') {
+    // spec.md AC-9 — „Nochmal spielen" startet die neue Runde unmittelbar. Der
+    // Umweg über den Startbildschirm war BUG-10 (qa-report.md 2026-09-04): ein
+    // zusätzlicher Klick, der gegen das PRD-Erfolgskriterium „direkt eine
+    // zweite Runde" arbeitet.
     return (
       <ResultView
         streak={streak}
@@ -348,7 +392,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         isPersonalBest={isPersonalBest}
         saveState={saveState}
         onRetrySave={() => void finishRound(streak, poolCleared)}
-        onPlayAgain={() => setPhase('ready')}
+        onPlayAgain={startRound}
       />
     )
   }

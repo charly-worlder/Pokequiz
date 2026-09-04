@@ -49,10 +49,12 @@ offen --falsch--> aufgelöst --Klick--> beendet
 offen --Pool leer--> beendet (Gewinner-Meldung)
 fehler --"Erneut versuchen" erfolgreich--> offen
 fehler --"Runde beenden"--> beendet
-beendet --"Nochmal spielen"--> bereit
+beendet --"Nochmal spielen"--> lädt   (direkt in die neue Runde, AC-9)
 ```
 
 Kein Übergang führt aus `beendet` zurück in `offen` — eine beendete Runde ist unveränderlich, so wie ihre Zeile in der Datenbank.
+
+**Korrigiert am 2026-09-04 (BUG-10).** Dieser Entwurf schrieb ursprünglich `beendet --"Nochmal spielen"--> bereit`, also zurück auf den Startbildschirm. Der Code folgte dem Design, und das Design widersprach dem Vertrag: AC-9 sagt „dann **startet eine neue Runde**", nicht „dann sieht der Nutzer wieder den Startknopf". Aufgefallen ist das erst im QA-Lauf vom 2026-09-04 — vier Wochen lang stand ein Übergang im Design, den niemand gegen die Spec gelesen hatte. Aufgelöst zugunsten des Vertrags, weil das PRD-Erfolgskriterium „mindestens die Hälfte startet direkt eine zweite Runde" jeden zusätzlichen Klick teuer macht.
 
 ## Data Model
 
@@ -228,3 +230,28 @@ Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb de
 **Regressionstest für das Vorladen (`quiz-screen.test.tsx`).** Der Bug war in der Oberfläche unsichtbar und nur im Server-Log erkennbar; eine einmalige Beobachtung sichert nichts für die Zukunft. Zwei Tests: dass nach der ersten sichtbaren Frage sofort eine zweite geladen wird, und dass eine richtige Antwort die vorgeladene Frage ohne Ladezustand zeigt. **Beide wurden rot geprüft**, indem ausschließlich die eine wiederhergestellte Bug-Zeile entfernt wurde (die fünf anderen `fetchQuestion`-Aufrufe blieben intakt) — sie fangen also genau diesen Fehler und nicht irgendeinen.
 
 Damit weicht dieses Feature bewusst von der Konvention ab, dass Tests ausschließlich `/qa` schreibt: Für einen Bug, der beim Anschauen nicht auffällt, gehört der Test zum Fix.
+
+---
+
+## Notizen aus dem Fix-Lauf (2026-09-04)
+
+Vier Befunde aus dem QA-Lauf vom selben Tag behoben: BUG-10 (AC-9), BUG-7 (EC-3), BUG-8 (EC-6) und BUG-13 (AC-31). Alle vier innerhalb des genehmigten Designs; die einzige Design-Änderung ist der oben korrigierte Übergang.
+
+**Der Transport-Fänger liegt jetzt feature-neutral in `src/lib/actions/run-action.ts`.** PROJ-1 hatte denselben Fehlertyp am 2026-09-01 gefunden und mit `src/lib/auth/run-action.ts` behoben — in einem *Feature*-Ordner. PROJ-2 baute ihn deshalb ein zweites Mal ein (BUG-7): Ein `await saveRun(...)` ohne `try/catch` ließ bei einem Verbindungsabbruch alle folgenden Zeilen aus, `saveState` blieb auf `'saving'`, und der Ergebnis-Screen sah aus wie ein gespeichertes Ergebnis. Die Fehler-UI aus EC-3 existierte und war unerreichbar. Der generische Kern `runClientAction(call, fallback)` deckt jetzt beide Features ab; `runAuthAction` ist sein Auth-Zuschnitt und bleibt in Verhalten und Tests unverändert. Im Quiz gehen `saveRun`, `getNextQuestion` und `repairImageUrl` hindurch.
+
+**Eine unveränderte Bildadresse ist keine Reparatur (BUG-8).** Der Entwurf beschreibt die Rückfallebene als „offizielle Adresse über `/pokemon/{id}` nachschlagen" — und übersah, dass diese Adresse im Normalfall **genau die konstruierte ist**. `repairImageUrl` gab sie zurück, `setProbing` setzte denselben `src`, `ImageProbe`s `key` blieb gleich, der Browser lud nicht neu, `onError` feuerte kein zweites Mal — und die Runde hing dauerhaft auf „Runde wird vorbereitet …", ohne Meldung und ohne Ausweg. Betroffen war real **jeder Ausfall des Sprite-CDN**, also genau der Fall, für den EC-6 geschrieben wurde. Der Fix ist eine Zeile: Nur eine *abweichende* Adresse gilt als Reparatur, sonst greift der Verwurf aus EC-6. Damit werden EC-10 und EC-11 überhaupt erst erreichbar — beide Unit-Tests waren vorher grün, weil sie die Funktion direkt aufriefen und eine abweichende Adresse mockten.
+
+**Die Verwurfsgrenze gilt jetzt auch beim Vorladen (BUG-13).** Sie hing an `!hasCurrentRef.current`, griff also nur, wenn der Spieler auf die Frage wartete. Fiel die Bildquelle aus, *während* er noch antwortete, zog das Vorladen endlos neue Fragen nach — je vier Namensabfragen an die PokeAPI, ohne Backoff. Das widersprach der eigenen Begründung im Decision Log („der Nutzer klickt selbst, es entsteht also keine automatische Last gegen die Fair-Use-Policy") und war nur deshalb nicht sichtbar, weil BUG-8 die Schleife vorher zum Stillstand brachte. Die Grenze stoppt das Nachziehen jetzt in beiden Fällen; die Fehlerkarte zeigt sie weiterhin nur dem, der wartet. Bleibt das Vorladen an der Grenze stehen und der Spieler kommt später dort an, führt `advance` direkt in den Fehlerzustand — das ist EC-10, nur zeitversetzt.
+
+**Vier Abnahmetests, alle rot geprüft.** In `quiz-screen.error-states.test.tsx`, plus `src/lib/actions/run-action.test.ts` für den generischen Kern. Jeder wurde einzeln gegen den wiederhergestellten Fehler gefahren und fiel dort:
+
+| Test | ohne den Fix |
+|---|---|
+| EC-3 / BUG-7 | rot — kein Hinweis, kein „Erneut speichern" |
+| EC-6 / BUG-8 | rot — eine Frage, eine Adresse, keine zweite Anfrage |
+| AC-31 / BUG-13 | rot — zweistellig viele `getNextQuestion`-Aufrufe |
+| AC-9 / BUG-10 | rot — „Runde starten" steht wieder da |
+
+**Eine Lehre aus dem BUG-8-Test, die über diesen Fix hinausgeht.** Der erste Entwurf des Tests feuerte `error` in einer Schleife auf alle Bilder — und war **auch gegen den kaputten Code grün**. Genau das Von-Hand-Feuern ist nämlich das, was der Browser nicht tut: Der Fehler *besteht* darin, dass kein zweites Ereignis kommt. Ein Test, der das fehlende Ereignis selbst nachliefert, prüft den Fehler weg. Der jetzige Test feuert genau einmal und verlangt, dass die Runde von sich aus weitergeht.
+
+**Nicht behoben, bewusst:** BUG-9 (Medium, EC-7) teilt die Wurzel mit BUG-7, braucht aber eine eigene Entscheidung — der Proxy fängt den Server-Action-POST ab und antwortet mit HTML, was sich von einem gewöhnlichen Verbindungsabbruch nicht zuverlässig unterscheiden lässt. Mit dem Fänger sieht der Spieler jetzt immerhin „konnte noch nicht gespeichert werden" statt eines Ergebnis-Screens, der Erfolg vortäuscht; die von EC-7 zugesagte Weiterleitung auf `/login` bleibt offen. Ebenfalls offen: BUG-11 (Low, AC-25) und BUG-12 (Low).

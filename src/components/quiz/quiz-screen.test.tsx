@@ -23,7 +23,9 @@ const { getNextQuestion, repairImageUrl, saveRun, getPersonalBest, push } = vi.h
 
 vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion, repairImageUrl }))
 vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
+// `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
+// benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
 
 // next/image needs a real <img> here so that load and error events can be
 // dispatched; its own props are not what this test is about.

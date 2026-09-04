@@ -59,6 +59,26 @@
 - [x] T12  Ergebnis-Screen: „Zur Bestenliste" erscheint nur, wenn `/leaderboard` existiert. Den Schalter dabei aus `site-header.tsx` in ein gemeinsames Modul ziehen, das beide Stellen importieren — PROJ-3 legt dann **einen** Schalter um statt zwei, und keiner kann vergessen werden  · files: src/lib/site-pages.ts, src/components/shell/site-header.tsx, src/components/quiz/result-view.tsx  · → AC-7, AC-21
 - [x] T11  Kopfzeile: Der Zugang zur Bestenliste erscheint nur, wenn `/leaderboard` existiert — bis dahin gar nicht statt als toter Link. Nach demselben Muster wie `LEGAL_PAGES` in `site-footer.tsx`, damit PROJ-3 eine erkennbare Stelle zum Freischalten hat  · files: src/components/shell/site-header.tsx  · → AC-21
 
+## Level 6 — Fixes aus dem QA-Lauf vom 2026-09-04
+
+<!-- Nachgetragen am 2026-09-04. Anlass: der vollständige Sweep in qa-report.md
+     (2 High, 3 Medium, 2 Low). T13-T15 decken die vom Nutzer beauftragten
+     Befunde ab; BUG-9, BUG-11 und BUG-12 bleiben bewusst offen, siehe unten.
+     T14 und T15 fassen BUG-7/BUG-8/BUG-13 zusammen, weil BUG-13 vom Hänger aus
+     BUG-8 verdeckt wurde: einzeln behoben tauscht man einen Hänger gegen eine
+     Anfrageschleife. -->
+
+- [x] T13  „Nochmal spielen" startet unmittelbar eine neue Runde, statt auf den Startbildschirm zurückzuführen (BUG-10). Der Widerspruch lag im `design.md`, nicht nur im Code — der Übergang `beendet → bereit` wird dort zu `beendet → lädt` korrigiert  · files: src/components/quiz/quiz-screen.tsx, features/PROJ-2-pokemon-quiz/design.md  · → AC-9
+- [x] T14  Transport-Fänger für den Quiz-Pfad (BUG-7): den generischen Kern aus PROJ-1s `run-action.ts` nach `src/lib/actions/` ziehen, `runAuthAction` als Auth-Zuschnitt darauf setzen und `saveRun`, `getNextQuestion` und `repairImageUrl` hindurchführen. Ein abgerissener Aufruf erreicht damit die Fehler-UI aus EC-3, statt den Ergebnis-Screen auf „gespeichert" stehenzulassen  · files: src/lib/actions/run-action.ts, src/lib/auth/run-action.ts, src/components/quiz/quiz-screen.tsx  · → EC-3
+- [x] T15  Bildausfall beendet die Runde nicht mehr als Hänger (BUG-8) und zieht nicht mehr endlos nach (BUG-13): Eine unveränderte Reparaturadresse gilt nicht als Reparatur, sondern führt in den Verwurf aus EC-6; die Verwurfsgrenze aus EC-10 stoppt das Nachziehen auch beim Vorladen, nicht nur wenn der Spieler wartet  · files: src/components/quiz/quiz-screen.tsx  · → AC-31, EC-6, EC-10, EC-11
+- [x] T16  Abnahmetests zu T13-T15, jeder einzeln gegen den wiederhergestellten Fehler rot geprüft  · files: src/components/quiz/quiz-screen.error-states.test.tsx, src/lib/actions/run-action.test.ts  · → AC-9, AC-31, EC-3, EC-6
+
+**Bewusst nicht Teil dieser Lieferung** (aus demselben QA-Lauf, vom Nutzer nicht beauftragt):
+
+- **BUG-9** (Medium, EC-7) — abgelaufene Sitzung: keine Weiterleitung auf `/login`. Teilt die Wurzel mit BUG-7 und ist durch T14 gemildert (der Spieler sieht jetzt „konnte noch nicht gespeichert werden" statt eines Erfolgs, der keiner ist), aber nicht erfüllt. Braucht eine eigene Entscheidung: Der Proxy fängt den Server-Action-POST ab und antwortet mit HTML — das von einem gewöhnlichen Verbindungsabbruch zu unterscheiden, geht nur über Merkmale der Antwort, und das gehört entschieden, nicht nebenbei eingebaut
+- **BUG-11** (Low, AC-25) — keine Skelettfläche beim Rundenstart
+- **BUG-12** (Low) — `getNextQuestion` validiert seine Eingabe nicht (kein Zod-Schema wie `saveRun`)
+
 ## Backlog — bewusst offen
 
 Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht. Diese Punkte haben **kein Acceptance Criterion**; sie werden erst dann Aufgaben, wenn jemand sie ausdrücklich in die Spec holt (`/refine PROJ-2`).

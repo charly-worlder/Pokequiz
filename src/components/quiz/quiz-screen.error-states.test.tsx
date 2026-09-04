@@ -10,7 +10,11 @@ import type { Question } from '@/lib/quiz/question-action'
  * *server*, so blocking requests in a browser does not reach it. Here the
  * action is mocked, which is the only place the outage is reproducible.
  *
- * Covers AC-16, AC-17, AC-18, AC-19, EC-7, EC-10.
+ * Covers AC-16, AC-17, AC-18, AC-19, EC-7, EC-10 — sowie die Abnahmetests zu
+ * BUG-7, BUG-8, BUG-10 und BUG-13 aus dem QA-Lauf vom 2026-09-04. Alle vier
+ * beschreiben Zustände, die man beim Anschauen nicht sieht: ein Ergebnis, das
+ * gespeichert *aussieht*, eine Runde, die hängt, ein Klick, der nichts tut, und
+ * eine Anfrageschleife, die nur im Server-Log auffällt.
  */
 
 const { getNextQuestion, repairImageUrl, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
@@ -23,7 +27,9 @@ const { getNextQuestion, repairImageUrl, saveRun, getPersonalBest, push } = vi.h
 
 vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion, repairImageUrl }))
 vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
+// `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
+// benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
 vi.mock('next/image', () => ({
   default: ({ src, alt, onLoad, onError }: Record<string, unknown>) => (
     // eslint-disable-next-line @next/next/no-img-element
@@ -232,4 +238,123 @@ describe('QuizScreen — Fehlerpfade', () => {
     // Genau ein Abruf für die erste Frage — die weiteren Klicks laufen ins Leere.
     expect(getNextQuestion).toHaveBeenCalledTimes(1)
   })
+// --- Abnahmetests zum QA-Lauf vom 2026-09-04 -----------------------------
+
+  // BUG-7 (High): `saveRun` wurde ohne try/catch aufgerufen. Ein Transport-
+  // Fehler ließ alle folgenden Zeilen aus — `saveState` blieb auf 'saving',
+  // der Ergebnis-Screen sah aus wie ein gespeichertes Ergebnis, und die
+  // Fehler-UI aus EC-3 war unerreichbar.
+  it('EC-3 / BUG-7: ein Transport-Fehler beim Speichern zeigt Hinweis und Wiederholung', async () => {
+    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
+    saveRun.mockRejectedValue(new TypeError('Failed to fetch'))
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/konnte noch nicht gespeichert werden/)).toBeInTheDocument()
+    )
+    expect(screen.getByRole('button', { name: 'Erneut speichern' })).toBeInTheDocument()
+
+    // Und der Wiederholungsversuch geht durch, sobald die Verbindung steht.
+    saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut speichern' }))
+    await waitFor(() =>
+      expect(screen.queryByText(/konnte noch nicht gespeichert werden/)).not.toBeInTheDocument()
+    )
+  })
+
+  // BUG-8 (High): Die offizielle Bildadresse ist im Normalfall *dieselbe*, die
+  // schon gescheitert ist. Sie erneut zu setzen ließ `ImageProbe`s `key`
+  // unverändert — der Browser lud nicht neu, `onError` feuerte kein zweites
+  // Mal, und die Runde hing dauerhaft auf „Runde wird vorbereitet …".
+  //
+  // Der Test feuert `error` deshalb **genau einmal**. Ein zweites Feuern von
+  // Hand ist genau das, was der Browser nicht tut, und würde den Hänger
+  // zudecken: Der Fehler steckt darin, dass es kein zweites Ereignis gibt.
+  it('EC-6 / BUG-8: eine identische Reparaturadresse verwirft die Frage, statt hängenzubleiben', async () => {
+    let served = 0
+    getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
+    // Die Rückfallebene liefert exakt die konstruierte Adresse zurück.
+    repairImageUrl.mockImplementation(async (id: number) => `https://example.test/${id}.png`)
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() =>
+      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/1.png')).toBe(true)
+    )
+    expect(getNextQuestion).toHaveBeenCalledTimes(1)
+
+    failImages() // genau einmal
+    await waitFor(() => expect(repairImageUrl).toHaveBeenCalledWith(1))
+
+    // Die Runde muss von sich aus weitergehen: verwerfen und neu ziehen (EC-6).
+    // Vor dem Fix bleibt es bei einer Frage und einer Adresse — für immer.
+    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/2.png')).toBe(true)
+    )
+  })
+
+  // BUG-13 (Medium): Die Verwurfsgrenze griff nur, wenn der Spieler wartete.
+  // Fiel die Bildquelle aus, während er noch antwortete, zog das Vorladen
+  // endlos nach — je vier Namensabfragen an die PokeAPI, ohne Backoff.
+  it('AC-31 / BUG-13: ein Bildausfall während der Antwort zieht nicht endlos nach', async () => {
+    let served = 0
+    getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() => expect(images().length).toBeGreaterThan(0))
+    loadImages()
+    await waitFor(() => expect(screen.getByText('Name1')).toBeInTheDocument())
+
+    // Ab hier scheitert jedes *vorgeladene* Bild; die sichtbare Frage bleibt.
+    for (let i = 0; i < 10; i++) {
+      images()
+        .filter((img) => img.getAttribute('src') !== 'https://example.test/1.png')
+        .forEach((img) => fireEvent.error(img))
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    // 1 Start + 1 Vorladen + höchstens 3 Verwürfe. Ohne die Grenze läuft das
+    // hier zweistellig weiter.
+    expect(getNextQuestion.mock.calls.length).toBeLessThanOrEqual(5)
+    // Die laufende Frage wird davon nicht angetastet.
+    expect(screen.getByText('Name1')).toBeInTheDocument()
+  })
+
+  // BUG-10 (Medium): AC-9 verlangt eine gestartete Runde, der Code führte auf
+  // den Startbildschirm zurück — ein zusätzlicher Klick, der gegen das
+  // PRD-Erfolgskriterium „direkt eine zweite Runde" arbeitet.
+  it('AC-9 / BUG-10: „Nochmal spielen" startet unmittelbar eine neue Runde', async () => {
+    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument()
+    )
+
+    const callsBefore = getNextQuestion.mock.calls.length
+    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(5) })
+    fireEvent.click(screen.getByRole('button', { name: 'Nochmal spielen' }))
+
+    await waitFor(() => expect(getNextQuestion.mock.calls.length).toBeGreaterThan(callsBefore))
+    // Kein Umweg über den Startbildschirm.
+    expect(screen.queryByRole('button', { name: 'Runde starten' })).not.toBeInTheDocument()
+
+    await waitFor(() => expect(images().length).toBeGreaterThan(0))
+    loadImages()
+    await waitFor(() => expect(screen.getByText('Name5')).toBeInTheDocument())
+    // Serie 0 und zurückgesetzte Uhr (AC-9).
+    expect(screen.getByText('0')).toBeInTheDocument()
+    expect(screen.getByText('0:00')).toBeInTheDocument()
+  })
 })
+
