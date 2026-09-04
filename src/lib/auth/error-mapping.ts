@@ -55,15 +55,27 @@ export function mapRegisterError(error: AuthErrorLike): ActionState {
   return { error: NETWORK_ERROR_MESSAGE }
 }
 
-// spec.md AC-7, AC-8, EC-4 — verified: wrong password and unknown email both
-// return status 400 / code "invalid_credentials", so no branching is needed
-// to keep the message identical.
+// spec.md AC-7, AC-8, EC-4, EC-6 — wrong password and unknown email both return
+// status 400 / code "invalid_credentials", so both land on the same message and
+// AC-7 holds without any branching between them.
+//
+// What this must NOT do is treat every other failure as a wrong password. It
+// used to: anything that was not a 429 fell through to WRONG_CREDENTIALS, so an
+// outage of Supabase Auth told the user their password was wrong (BUG-9). They
+// then reset a password that was never the problem, while the registration path
+// reported the same outage correctly. Only statuses that really mean "these
+// credentials were rejected" produce that message now; everything else — no
+// status at all, a 5xx, a transport failure — is reported as what it is.
 export function mapLoginError(error: AuthErrorLike): ActionState {
   if (error.status === 429) {
     return { error: THROTTLED_MESSAGE }
   }
 
-  return { error: WRONG_CREDENTIALS_MESSAGE }
+  if (error.status === 400 || error.status === 401) {
+    return { error: WRONG_CREDENTIALS_MESSAGE }
+  }
+
+  return { error: NETWORK_ERROR_MESSAGE }
 }
 
 export function mapPasswordResetRequestError(error: AuthErrorLike | null): ActionState {

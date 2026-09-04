@@ -55,3 +55,30 @@ describe('loginSchema', () => {
     expect(loginSchema.safeParse({ email: 'ash@example.com', password: 'x' }).success).toBe(true)
   })
 })
+
+/**
+ * BUG-11: Ein Passwort über bcrypts 72-Byte-Grenze wurde von Supabase mit einem
+ * 400 abgelehnt, und die App zeigte „Die Verbindung ist fehlgeschlagen" — ein
+ * Netzwerkfehler für ein Feldproblem, ohne Hinweis, was zu ändern wäre.
+ * Passwortmanager erzeugen solche Passphrasen.
+ */
+describe('passwordSchema — Obergrenze (BUG-11)', () => {
+  it('nimmt exakt 72 Zeichen an', () => {
+    expect(passwordSchema.safeParse('a'.repeat(72)).success).toBe(true)
+  })
+
+  it('lehnt 73 Zeichen mit einer Feldmeldung ab', () => {
+    const result = passwordSchema.safeParse('a'.repeat(73))
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('Höchstens 72 Zeichen')
+    }
+  })
+
+  it('zählt Bytes, nicht Zeichen — 40 Umlaute sind 80 Byte und damit zu lang', () => {
+    // "ä" ist in UTF-8 zwei Byte. Eine reine Zeichenzählung würde das
+    // durchlassen und dem Nutzer denselben verwirrenden Fehler zurückgeben.
+    expect(passwordSchema.safeParse('ä'.repeat(40)).success).toBe(false)
+    expect(passwordSchema.safeParse('ä'.repeat(36)).success).toBe(true)
+  })
+})

@@ -72,12 +72,31 @@ describe('/auth/confirm', () => {
     expect(res.headers.get('location')).toBe('/reset-password')
   })
 
-  it('allows a different in-app next', async () => {
+  // BUG-20. The guard used to ban prefixes — https:// and // — and pass
+  // everything else. `/\evil.com` walked straight through it, because browsers
+  // normalise the backslash and the value becomes protocol-relative. The
+  // allowlist that replaced it is checked here against the whole family of
+  // encodings, not just the two that were originally imagined.
+  //
+  // Note these need a VALID token: with an invalid one the route takes the
+  // error path and never reaches the guard at all, so the test would pass while
+  // proving nothing. That is exactly how the first counter-check looked green.
+  it.each([
+    ['backslash', '/\\evil.example'],
+    ['double backslash', '\\\\evil.example'],
+    ['mixed slash and backslash', '/\\/evil.example'],
+    ['absolute http', 'http://evil.example'],
+    ['absolute https', 'https://evil.example'],
+    ['protocol-relative', '//evil.example'],
+    ['encoded protocol-relative', '%2f%2fevil.example'],
+    ['tab-separated', '/\t/evil.example'],
+    ['an in-app path that is not on the list', '/some/other/page'],
+  ])('refuses next=%s and falls back to the reset page', async (_label, next) => {
     verifyOtp.mockResolvedValue({ error: null })
 
-    const res = await call('?token_hash=abc123&type=recovery&next=/')
+    const res = await call(`?token_hash=abc123&type=recovery&next=${encodeURIComponent(next)}`)
 
-    expect(res.headers.get('location')).toBe('/')
+    expect(res.headers.get('location')).toBe('/reset-password')
   })
 
   // BUG-16. The first version redirected to an absolute URL built from

@@ -15,14 +15,23 @@ import { createClient } from '@/lib/supabase/server'
 //
 // design.md → Technical Decisions (2026-09-03) has the full trace.
 
-// Only same-origin, non-protocol-relative paths. Without this check `next` is
-// an open redirect: the link arrives by email, so an attacker who can get a
-// victim to request a reset could otherwise bounce them to another host from a
-// URL that starts with our own domain.
+// Where this route is allowed to send someone, as an explicit list.
+//
+// The previous version banned prefixes instead — it rejected `https://` and
+// `//` and let everything else through. `/\evil.com` slipped past it: browsers
+// normalise the backslash to a slash, so the value becomes protocol-relative
+// and points at another host (BUG-20). The tests covered exactly the two
+// variants that had been thought of while writing them, which is the failure
+// mode of every ban list: it only ever knows the attacks its author imagined.
+//
+// An allowlist inverts that. Anything not named here goes to the reset page,
+// whatever clever encoding it uses. Adding a destination is a deliberate edit.
+const ALLOWED_NEXT = ['/reset-password'] as const
+
 function safeNext(next: string | null): string {
-  if (!next) return '/reset-password'
-  if (!next.startsWith('/') || next.startsWith('//')) return '/reset-password'
-  return next
+  return ALLOWED_NEXT.includes(next as (typeof ALLOWED_NEXT)[number])
+    ? (next as string)
+    : '/reset-password'
 }
 
 // Redirects with a RELATIVE Location, deliberately.
