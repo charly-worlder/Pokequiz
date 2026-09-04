@@ -224,5 +224,543 @@ Genau dieser Fall fehlte bisher in jeder Suite: Alle bisherigen Prüfungen simul
 - **Edge Cases:** 4 von 6 verifiziert, 2 nicht verifiziert (EC-4 gleiche Ursache wie AC-8; EC-6 aus dem Erstlauf abgedeckt)
 - **Bugs:** BUG-3 und BUG-4 **behoben und verifiziert**; **BUG-5 neu (Low)**
 - **Security:** 4 von 6 Prüfungen verifiziert, 2 offen (Brute Force, Massen-Registrierung)
-- **Production Ready:** **JA für diesen Stand** — kein kritischer oder hoher Fehler offen. Mit zwei Auflagen, die vor dem öffentlichen Start zu erledigen sind: **AC-8 gegen das gehostete Projekt prüfen** und **T4 im Dashboard setzen**
+- **Production Ready:** **JA für diesen Stand** — kein kritischer oder hoher Fehler offen. Mit ~~zwei~~ **drei** Auflagen, die vor dem öffentlichen Start zu erledigen sind: **AC-8 gegen das gehostete Projekt prüfen**, **T4 im Dashboard setzen** und **den Warnhinweis am Trainername-Feld ergänzen** (dritte Auflage nachgetragen am 2026-09-03, siehe Nachtrag unten)
 - **Weiterhin ungeprüft:** Firefox und Safari — in keinem Lauf getestet, alles lief in Chromium
+
+---
+
+## Nachtrag — 2026-09-03: Deploy-Blocker aus der Datenschutzprüfung zu PROJ-3
+
+**Herkunft:** Dies ist **kein Befund aus einem QA-Lauf.** Er stammt aus `/dsgvo PROJ-3` vom 2026-09-03 und wird hier vermerkt, weil er PROJ-1 betrifft und in dieselbe Reihe gehört wie AC-8 und T4: etwas, das den jetzigen Stand nicht kaputt macht, aber vor dem öffentlichen Start erledigt sein muss.
+
+### Offener Vertragsmangel: Der Trainername wird veröffentlicht, ohne dass die Registrierung es sagt
+
+**Sachverhalt.** Drei Festlegungen greifen ineinander, jede für sich unauffällig:
+
+1. `spec.md` → AC-1 nimmt den Trainernamen bei der Registrierung entgegen.
+2. `spec.md` → Decision Log: „Trainername ist nach der Registrierung dauerhaft fix." Es gibt keinen Änderungsweg — auch nicht in der Datenbank, wo `0001_profiles.sql` bewusst **keine** `update`-Policy hat.
+3. `0001_profiles.sql` macht den Namen für **alle angemeldeten Nutzer** lesbar (`profiles_select_authenticated`).
+
+**Kein einziges AC verlangt, dass der Nutzer davon erfährt.** AC-14 fordert lediglich einen sichtbaren Link zur Datenschutzerklärung vor dem Absenden — das ist eine andere Zusage.
+
+**Warum es erst jetzt auffällt.** Bis einschließlich PROJ-2 war der Trainername zwar für angemeldete Nutzer *lesbar*, wurde aber an keiner Stelle der Oberfläche **angezeigt**. Der Nutzer-Chip in der Kopfzeile zeigt jedem nur seinen eigenen. PROJ-3 ist der erste Ort, an dem der Name tatsächlich vor anderen Menschen erscheint — und dann unwiderruflich.
+
+**Wirkung.** Ein Nutzer trägt seinen echten Namen ein, ohne zu wissen, dass er für alle anderen Spieler sichtbar und nachträglich nicht mehr änderbar ist. Der einzige Rückweg ist das Löschen des gesamten Kontos, und den gibt es erst mit PROJ-4. Das Publikum schließt laut `docs/PRD.md` absehbar Minderjährige ein — genau der Grund, aus dem dort die Datenschutz-Haltung `standard` gewählt wurde.
+
+**Was mindestens fehlt.** Ein Warnhinweis am Trainername-Feld im Registrierungsformular, der **beide** Hälften sagt: für andere Spieler sichtbar **und** später nicht änderbar. Eine Hälfte allein genügt nicht — „öffentlich" ohne „endgültig" verschweigt genau den Teil, der die Entscheidung unumkehrbar macht.
+
+**Priorität: Blocker für `/deploy`**, gleichrangig mit AC-8 und T4. Ein Unterschied zu jenen beiden: Die sind erst gegen das gehostete Projekt prüfbar — dieser hier ist **sofort behebbar**.
+
+**Der Weg dorthin.** Der Hinweis ändert das Verhalten von PROJ-1 und braucht deshalb ein eigenes Acceptance Criterion. Route laut `.claude/rules/general.md` → Change Routing: **`/refine PROJ-1`** (AC ergänzen) → `/build` → `/qa`. `spec.md` wird **nicht** auf diesem Weg angefasst; sie ist der Vertrag und gehört `/refine`.
+
+**Nicht Teil dieses Blockers, aber offen:** ob der Trainername (mindestens einmalig) änderbar sein sollte. Das ist eine Rechtsfrage, keine QA-Frage — sie liegt in `docs/privacy.md` → „Für einen Anwalt / Datenschutzbeauftragten".
+
+---
+
+## QA-Lauf — 2026-09-03, nach AC-15 (Hinweis am Trainername-Feld)
+
+**Anlass:** `/build` hat T14 umgesetzt (AC-15). Geprüft wurde jedoch **nicht nur das Delta**: Alle 15 AC-IDs und 6 EC-IDs wurden in diesem Lauf neu verifiziert, ohne ein einziges Häkchen aus den Läufen vom 2026-09-01 und 2026-09-02 zu übernehmen. Das war eine bewusste Entscheidung — und sie hat sich gelohnt: Zwei der drei High-Bugs unten sind **Altlasten**, die in den früheren Läufen nicht gefunden wurden und nichts mit AC-15 zu tun haben.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten, die den Build nicht gesehen haben — Bahn A (Acceptance + Regression + Testsuite), Bahn B (Security-Red-Team). Beide gegen die laufende App (`http://localhost:3000`) und das lokale Supabase. Zusammenführung, Bewertung und dieser Report: Hauptkontext.
+
+**Bug-Nummerierung:** Die Bahnen haben unabhängig voneinander bei BUG-1 begonnen. Hier durchnummeriert ab **BUG-6**, weil BUG-1/3/4/5 in diesem Feature bereits vergeben sind.
+
+### Acceptance Criteria
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-1 | [x] PASS | `registerAction` per HTTP → `x-action-redirect: /`, DB-Gegenprobe: Profil angelegt, Passwort bcrypt, keine Bestätigung nötig. Passwort < 8 → Feldfehler; Supabase lehnt zusätzlich serverseitig ab (`422 weak_password`) |
+| AC-2 | [x] PASS | Registrierung mit kleingeschriebener Variante eines vergebenen Namens → Feldfehler; Durchsetzung per `profiles_trainer_name_lower_key` (`0001_profiles.sql:13`) |
+| AC-3 | [x] PASS | Vergebene E-Mail → Feldfehler mit Login-Link (`error-mapping.ts:43-45`, `register-view.tsx:86-96`) |
+| AC-4 | [x] PASS | Korrekter Login → `x-action-redirect: /;push` + Session-Cookie; im Browser bestätigt |
+| AC-5 | [x] PASS | Cookie ist persistent (`Max-Age=34560000`), nicht sitzungsgebunden; `storageState` in frischem Browser-Kontext → `/` liefert 200 mit Startbildschirm |
+| AC-6 | [x] PASS | `logoutAction` → Cookie `Max-Age=0`, Redirect `/login`; danach `/` → 307 |
+| AC-7 | [x] PASS | Falsches Passwort und unbekannte Adresse liefern **identischen** String, in curl und Browser; `error-mapping.ts:61-67` verzweigt nur bei 429 |
+| AC-8 | [!] **FAIL (lokal)** / NOT VERIFIED (hosted) | 35 Fehl-Logins in Folge, **kein einziges 429**, danach loggt das korrekte Passwort normal ein. Ursache belegt: `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt im lokalen Auth-Container, obwohl `config.toml:209` es setzt. → **BUG-7** |
+| AC-10 | [x] PASS | Gleiche Meldung unabhängig von Kontoexistenz; Mailpit enthält genau **eine** Mail (für die existierende Adresse), keine für die unbekannte |
+| AC-11 | [!] **TEILWEISE** | Im **selben** Browser vollständig grün (Reset angefordert → Mail → Link → neues Passwort → Login damit erfolgreich). **Über Gerätegrenzen hinweg gebrochen** → **BUG-6** |
+| AC-12 | [x] PASS | Benutzter und tokenloser Link → „Dieser Link ist ungültig oder abgelaufen." + „Neuen Link anfordern"; serverseitig zusätzlich abgesichert (`actions.ts:146-151`) |
+| AC-13 | [x] PASS | Leere Formulare → alle Feldfehler gleichzeitig; `framenavigated` auf dem Hauptframe **nicht** ausgelöst → kein Reload |
+| AC-14 | [!] **Wortlaut erfüllt, Ziel defekt** | Link „Datenschutzerklärung" sichtbar mit `href="/privacy"` (`register-view.tsx:114-120`) — aber `GET /privacy` → **404** → **BUG-10** |
+| AC-15 | [x] PASS | Hinweistext ohne Klick/Hover sichtbar (`register-view.tsx:68-71`), keine Checkbox im Formular; Unit-Tests grün |
+
+_AC-9 existiert nicht — laut Decision Log gestrichen._
+
+### Edge Cases
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| EC-1 | [x] PASS | 3 **parallele** Registrierungen mit demselben Trainernamen → 1 Erfolg, 2 Ablehnungen; DB: genau 1 Profil, **0** verwaiste `auth.users` ohne Profil. Zweiter Lauf mit Groß-/Kleinvarianten identisch. Garantie im Code bestätigt: Unique-Index + `SECURITY DEFINER`-Trigger in derselben Transaktion (`0001_profiles.sql:13,28-51`) |
+| EC-2 | [x] PASS | `/`, `/?x=1`, `/some/deep/path`, `/api/whatever`, `/nonexistent` → alle 307 auf `/login` (Query bleibt erhalten); `/login`, `/reset-password` → 200; eingeloggt auf `/login` → 307 auf `/` |
+| EC-3 | [x] PASS | Unbekannte Adresse → identische Meldung, **keine** zusätzliche Mail in Mailpit |
+| EC-4 | [!] NOT VERIFIED / FAIL lokal | Deckungsgleich mit AC-8: Wo das Limit gar nicht greift, kann „bleibt weiterhin gesperrt" nicht eintreten |
+| EC-5 | [x] PASS | Leerzeichen, 2 Zeichen, 21 Zeichen, Emoji → jeweils feldspezifische Ablehnung; DB-CHECK zusätzlich vorhanden |
+| EC-6 | [!] **TEILWEISE FAIL** | Auth-Container per `docker pause` angehalten: Registrierung meldet korrekt „Verbindung fehlgeschlagen"; **Login meldet „E-Mail-Adresse oder Passwort ist falsch."** → **BUG-9** |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis | Beleg |
+|---------|----------|-------|
+| Authentication Bypass | [x] PASS | Ohne Session: `/` und `/api` → 307 auf `/login`; Guard `src/proxy.ts:52-56`, serverautoritative Prüfung per `getUser()` |
+| Autorisierung (Datenbankebene) | [x] PASS | Zweites Konto liest fremde Runden → `[]`; gefälschter `profile_id`-INSERT → `403 / 42501`. Anon ohne Session sieht auf `profiles` und `runs` nichts |
+| Input Injection | [x] PASS | XSS-Trainername **unter Umgehung der App-Validierung** direkt an Supabase → vom DB-CHECK abgelehnt. Defense in Depth wirkt (Zod **und** Constraint) |
+| Brute Force auf Zugangsdaten | [!] **FAIL** | 35 Versuche ohne Drosselung → BUG-7 |
+| Account-Enumeration (Login/Reset) | [x] PASS | Identische Meldungen und Codepfade (`error-mapping.ts:61-75`) |
+| Account-Enumeration (Registrierung) | [x] Bekannt, by design | Vergebene E-Mail wird offen gemeldet — dokumentierte Produktentscheidung (2026-08-31), kein Bug |
+| Bulk-Signup | [!] NOT VERIFIED — nicht implementiert | 10 Konten per Schleife angelegt, alle 200, kein CAPTCHA. AC-9 bewusst gestrichen; reaktiv geplant |
+| Exponierte Secrets | [x] PASS | `.next/` durchsucht: kein Service-Role-Key, kein `SECRET_KEY`, kein `JWT_SECRET` im Bundle. Nur `NEXT_PUBLIC_*` erreicht den Client |
+| Sensible Daten in API-Antworten | [x] PASS | `profiles` gibt nur `id` + `trainer_name` heraus, keine E-Mail |
+| Zugangsdaten in der URL | [x] PASS | Alle vier Formulare `method="post"`, kein nativer GET-Fallback |
+| Security-Header | [!] **FAIL** | Keiner von `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` gesetzt → **BUG-12** |
+
+### Bugs
+
+#### BUG-6: Passwort-Reset funktioniert nur in dem Browser, in dem er angefordert wurde
+- **Severity: High** · betrifft **AC-11**
+- **Ursache:** Der Reset-Link ist PKCE. Der `code_verifier` liegt als Cookie **auf dem anfordernden Gerät** (`Set-Cookie: sb-127-auth-token-code-verifier=…` in der Antwort von `requestPasswordResetAction`). Ohne dieses Cookie ist der Tausch nicht möglich.
+- **Reproduktion:** Konto anlegen → in Browser-Kontext A „Passwort vergessen?" absenden → Link aus dem Postfach in **frischem** Kontext B öffnen → „Dieser Link ist ungültig oder abgelaufen.", obwohl der Link frisch und unbenutzt ist.
+- **Wirkung:** Genau der Alltagsfall „am Rechner anfordern, Mail am Handy öffnen" ist gebrochen — und die Meldung ist dabei **sachlich falsch**: Sie behauptet einen abgelaufenen Link, wo ein gültiger vorliegt. Der Nutzer fordert einen neuen an, mit demselben Ergebnis. Das ist eine Sackgasse für jeden, der sein Passwort wirklich vergessen hat.
+- **Nicht durch AC-15 verursacht** — Altlast, in den Läufen vom 01./02.09. nicht entdeckt, weil dort nur innerhalb **eines** Kontexts geprüft wurde. `design.md` → Technical Decisions behauptet, die clientseitige Lösung decke „beide Formen" ab; für PKCE über Gerätegrenzen gilt das nicht.
+
+#### BUG-7: Keine wirksame Drosselung auf dem Zugangsdaten-Pfad (lokal nachgewiesen)
+- **Severity: High** · betrifft **AC-8, EC-4**
+- 35 Fehl-Logins gegen dasselbe Konto von derselben IP: keine einzige Ablehnung; danach loggt das korrekte Passwort normal ein.
+- **Ursache belegt:** `docker exec … env | grep RATE_LIMIT` zeigt, dass `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` im lokalen Auth-Container **nicht gesetzt** ist, obwohl `supabase/config.toml:209` `sign_in_sign_ups = 30` konfiguriert.
+- **Einordnung:** Inhaltlich die bekannte Open Question — neu ist die Beweislage. Bisher stand „nicht verifizierbar"; jetzt ist **demonstriert**, dass unbegrenztes Durchprobieren lokal funktioniert. Die App hat bewusst keinen eigenen Zähler (Produktentscheidung); der einzige vorgesehene Schutz ist Supabases Per-IP-Regel — die auch im funktionierenden Zustand weder verteilte noch geduldige kontobezogene Angriffe stoppt.
+- **Nicht lokal reparierbar**, aber vor dem Livegang verifizierungspflichtig.
+
+#### BUG-8: Offene `[user]`-Aufgabe T4 auf dem Zugangsdaten-Pfad
+- **Severity: High** (nach QA-Regel für offene `[user]`-Tasks auf Credential-Pfaden) · betrifft **AC-1, AC-11**
+- `tasks.md:17` — Passwort-Mindestlänge 8 im gehosteten Supabase-Projekt: nicht abgehakt.
+- **Entlastender Kontext:** Der lokale Spiegel ist gesetzt **und nachweislich wirksam** (`config.toml:184`; direkter API-Signup mit 5 Zeichen → `422 weak_password`). Das gehostete Projekt existiert noch nicht, die Aufgabe ist also strukturell nicht erledigbar — kein Versäumnis, aber ein echtes Gate vor `/deploy`.
+
+#### BUG-9: Login meldet bei Supabase-Ausfall „falsches Passwort" statt Netzwerkfehler
+- **Severity: Medium** · betrifft **EC-6**
+- `error-mapping.ts:61-67`: `mapLoginError` verzweigt nur auf 429; jeder andere Fehler — auch ein Transportfehler ohne Status — fällt auf `WRONG_CREDENTIALS_MESSAGE`.
+- **Reproduktion:** `docker pause supabase_auth_…`, dann Login mit **korrekten** Zugangsdaten → nach ~61 s „E-Mail-Adresse oder Passwort ist falsch."
+- **Wirkung:** Der Nutzer hält sein Passwort für falsch und läuft in den Reset — statt es erneut zu versuchen. Der Registrierungspfad macht es richtig (`mapRegisterError` fällt auf `NETWORK_ERROR_MESSAGE`, Zeile 55); nur der Login-Pfad nicht.
+- **Teilregression:** EC-6 galt am 01.09. als vollständig grün. Der damalige Fix (`run-action.ts`) behob die rohe Browser-Fehlerseite; diese Fehlklassifizierung *innerhalb* der App blieb unentdeckt.
+
+#### BUG-10: Datenschutz-Link im Registrierungsformular zeigt auf 404
+- **Severity: Medium** · betrifft **AC-14**
+- `register-view.tsx:116` verlinkt `/privacy`; `GET /privacy` → **404** (curl und Browser bestätigt). `/imprint` ebenfalls 404, dort aber nirgends verlinkt.
+- **Inkonsistent zur eigenen Regel des Projekts:** `site-footer.tsx:11` hält `LEGAL_PAGES` bewusst leer, „damit kein toter Link entsteht, bis PROJ-4 die Seite baut". Im Registrierungsformular wurde derselbe Gedanke nicht angewandt.
+- AC-14 ist im Wortlaut erfüllt („ein Link ist sichtbar") — der Vertrag hat nur nie verlangt, dass er irgendwo hinführt.
+
+#### BUG-11: Passwort über 72 Zeichen scheitert mit „Verbindung fehlgeschlagen"
+- **Severity: Medium** · betrifft **AC-1, AC-11**
+- Registrierung mit 76-Zeichen-Passwort → „Die Verbindung ist fehlgeschlagen." Tatsächliche Ursache: `400 validation_failed "Password cannot be longer than 72 characters"` (bcrypt-Grenze). Exakt 72 Zeichen → 200.
+- `mapRegisterError` hat für 400 keinen Zweig (`error-mapping.ts:42-56`); `updatePasswordAction` bildet jeden Fehler auf `NETWORK_ERROR_MESSAGE` ab (`actions.ts:155-157`) — betrifft also auch den Reset-Pfad.
+- **Wirkung:** Passwortmanager erzeugen solche Passphrasen. Der Nutzer bekommt kein Feld-Feedback und keinen Hinweis, was zu tun wäre.
+
+#### BUG-12: Security-Header fehlen vollständig
+- **Severity: Medium**
+- `curl -i http://localhost:3000/login`: weder `X-Frame-Options` noch `X-Content-Type-Options` noch `Referrer-Policy`; keine Header-Konfiguration in `next.config.ts` oder `src/proxy.ts`.
+- `.claude/rules/security.md` verlangt alle vier. Fehlendes `X-Frame-Options`/`frame-ancestors` bedeutet Clickjacking-Risiko auf der Login-Seite. HSTS ist lokal über HTTP nicht prüfbar, die anderen drei sind es und fehlen.
+- Wird typischerweise beim Host konfiguriert — muss dort gegen die Live-URL verifiziert werden.
+
+#### BUG-13: Session-Cookie ohne `HttpOnly` und ohne `Secure`
+- **Severity: Medium** — **Bewertung ausdrücklich offen, siehe unten**
+- `Set-Cookie: sb-127-auth-token=…; Path=/; Expires=…; Max-Age=34560000; SameSite=lax` — kein `HttpOnly`, kein `Secure`. Access- und Refresh-Token sind damit per `document.cookie` lesbar.
+- **Warum es so ist:** Der clientseitige Reset-Pfad liest die Sitzung im Browser (`getSession()`), was ein `HttpOnly`-Cookie ausschließen würde. Das ist Folge einer Designentscheidung, nicht ein vergessenes Flag.
+- **Ehrliche Einordnung:** Diesen Punkt hat die **Acceptance-Bahn** nebenbei bemerkt; die Security-Bahn hatte ihn nicht auf der Liste und hat ihn **nicht bewertet**. Der beobachtete Befund (die Cookie-Flags) ist gesichert, das Severity-Urteil ist es nicht. Gehört vor dem Livegang bewusst entschieden, zusammen mit BUG-6 — beide hängen am selben clientseitigen Reset-Design.
+
+#### BUG-14: „Stattdessen einloggen" erscheint bei jedem E-Mail-Feldfehler
+- **Severity: Low** · `register-view.tsx:86-96` koppelt den Hinweis an *jeden* Fehler am E-Mail-Feld, also auch an „Bitte eine gültige E-Mail-Adresse eingeben", wo er sinnlos ist.
+
+#### BUG-15: Codekommentar widerspricht dem beobachteten Verhalten
+- **Severity: Low** · `actions.ts:115-118` behauptet, der Recovery-Link liefere die Tokens „always" im URL-Fragment und „never a server-readable `?code=`". Gemessen wurde genau die `?code=`-Form. `design.md` beschreibt die Doppeldeutigkeit korrekt, der Kommentar nicht — irreführend für den nächsten, der BUG-6 anfasst.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 11 Dateien, 96 Tests, alle grün** (2,50 s).
+- **Bestehende Playwright-Suite als Regression: 14 von 15 grün.** Der eine Fehlschlag — `tests/PROJ-2-quiz-round.spec.ts:41` in Chromium, „Erste Frage brauchte 3880 ms, erlaubt sind 3000 ms" — war bei Einzelausführung grün und in Firefox und Mobile Safari grün. **Einstufung: Flake unter 15 parallelen Workern gegen den Dev-Server, kein PROJ-1-Regressionsbruch.** Erwähnenswert bleibt: Das AC-2-Zeitbudget von PROJ-2 hat unter Last **keine Reserve**.
+- **Geteilte App-Shell und Auth (PROJ-2) intakt:** ausgeloggte Kopfzeile zeigt die Merkzeile (AC-22), eingeloggte den Trainername-Chip (AC-21), `/` ausgeloggt → 307. Der PROJ-2-Kernpfad läuft in drei Browsern durch und speichert Runden.
+- **Datenschicht unverändert:** `pg_policies` bestätigt `profiles_select_authenticated`, `runs_select_own`, `runs_insert_own`; `ON DELETE CASCADE` vorhanden. Deckt sich mit `docs/data-model.md`.
+- Kein Feature steht auf „Deployed" — außer PROJ-2 gab es nichts zu regressionsprüfen.
+
+### Unit-Tests aus diesem Lauf
+
+Keine neu geschrieben. Die drei Tests zu AC-15 (`register-view.test.tsx`) stammen aus dem `/build`-Lauf und wurden dort mit Rot-Nachweis geführt; sie liefen hier als Regression grün mit. Für die neuen Bugs sind Tests Sache des Fixes, nicht dieses Laufs.
+
+### Not Verified In This Run
+
+- [!] **AC-8 / EC-4 gegen das gehostete Projekt** — lokal nicht auslösbar (Ursache in BUG-7 belegt). Zu prüfen nach dem ersten `/deploy`: ~35 falsche Logins gegen die öffentliche Projekt-URL, auf 429. Einstellung: **Dashboard → Authentication → Rate Limits → `sign_in_sign_ups`**
+- [!] **T4** — Wert im gehosteten Projekt nicht beobachtbar, weil es das Projekt nicht gibt. **Dashboard → Authentication → Sign In / Providers → Email → Minimum password length = 8**
+- [!] **Site URL / Redirect URLs im gehosteten Projekt** — lokal korrekt, hosted nicht prüfbar
+- [!] **Security-Header gegen die Live-URL** — lokal fehlen alle drei prüfbaren (BUG-12); HSTS erst über HTTPS beurteilbar
+- [!] **Responsives Layout bei 375 / 768 / 1440 px** — kein Viewport-Urteil. Die E2E-Suite fährt „Mobile Safari", prüft dort aber Funktion, nicht Layout
+- [!] **Cross-Browser über Chromium/Firefox/WebKit hinaus** — echtes Safari, ältere Engines nicht verfügbar
+- [!] **DevTools-Prüfungen** — Konsole, Netzwerk-Tab, berechnete Styles nicht durchgeführt
+- [!] **Verhalten ohne JavaScript** — als bekannte Einschränkung in `design.md` dokumentiert, in diesem Lauf nicht nachgestellt
+- [!] **Severity-Bewertung von BUG-13** — von keiner der beiden Bahnen abschließend beurteilt (siehe dort)
+
+### Verdikt
+
+- **Acceptance Criteria:** 11 von 14 geprüften bestanden · AC-8 **FAIL** (lokal) · AC-11 **teilweise** (im selben Browser grün, geräteübergreifend gebrochen) · AC-14 im Wortlaut erfüllt, Ziel defekt
+- **Edge Cases:** 4 von 6 bestanden · EC-4 nicht verifizierbar · EC-6 **teilweise FAIL**
+- **Bugs:** 10 neu — **3 High** (BUG-6, BUG-7, BUG-8), **5 Medium** (BUG-9 bis BUG-13), **2 Low** (BUG-14, BUG-15)
+- **Security:** 8 Prüfungen mit Beleg bestanden, **2 mit Befund** (Brute Force, Security-Header), 1 NOT VERIFIED (Bulk-Signup, bewusst nicht implementiert)
+- **Automatisierte Tests:** 96/96 grün · E2E 14/15 (der eine Fehlschlag ein Flake, einzeln grün)
+- **Production Ready: NEIN** — drei offene High-Bugs.
+
+> **Was „NEIN" hier heißt und was nicht.** Es heißt nicht, dass AC-15 oder der Build vom 03.09. etwas kaputt gemacht hätten — AC-15 ist grün, und die Regression ist sauber. Es heißt, dass ein **vollständiger** Sweep zwei High-Bugs gefunden hat, die in den Läufen vom 01./02.09. durchgerutscht sind: der geräteübergreifende Passwort-Reset (**BUG-6**) und die nun nachgewiesene fehlende Drosselung (**BUG-7**). PROJ-1 stand seit dem 02.09. auf `Approved` — nach diesem Lauf zu Unrecht.
+
+> **Der wichtigste einzelne Befund ist BUG-6.** Ein Nutzer, der sein Passwort vergisst, es am Rechner zurücksetzen will und die Mail am Handy öffnet, kommt nicht wieder in sein Konto — und die App sagt ihm dabei etwas Falsches. Für ein Produkt ohne E-Mail-Bestätigung ist der Reset der einzige Weg zurück ins Konto.
+
+---
+
+## QA-Lauf — 2026-09-03 (zweiter Lauf des Tages), nach EC-7 und BUG-13
+
+**Anlass:** `/build` hat den Passwort-Reset auf `token_hash` + `verifyOtp` umgestellt (T15–T17) und das Session-Cookie auf `HttpOnly`/`Secure` (BUG-13). Erneut **vollständiger Sweep**: alle 15 AC-IDs und jetzt 7 EC-IDs neu verifiziert, nichts aus früheren Läufen übernommen.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten ohne Kenntnis des Builds — Bahn A (Acceptance + Regression + Testsuite), Bahn B (Security-Red-Team). Zusammenführung und Bewertung: Hauptkontext.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-16** (BUG-1 bis BUG-15 sind vergeben).
+
+### Was dieser Lauf bestätigt hat
+
+- **BUG-13 geschlossen.** Unabhängig nachgemessen: Dev `HttpOnly; SameSite=lax`, Produktions-Build zusätzlich `Secure`. Die geteilte Ablage der Cookie-Optionen wurde als Schutz gegen Flag-Verlust beim Session-Refresh erkannt.
+- **BUG-15 geschlossen** (irreführender Codekommentar korrigiert).
+- **Die Geräte-Bindung aus BUG-6 ist tatsächlich weg.** Bahn A hat den Token in einem **frisch gestarteten Firefox mit null Cookies** eingelöst und das Passwort gesetzt — die PKCE-Abhängigkeit vom anfordernden Gerät existiert nicht mehr.
+- **`/auth/confirm` besteht die Red-Team-Prüfung:** Open-Redirect abgewehrt (auch mit gültigem Token), kein Sitzungs-Erschleichen, Token kontogebunden und einmalig.
+- **Regression sauber:** `npm test` 102/102, E2E 15/15 über Chromium, Firefox und Mobile Safari, PROJ-2-Kernpfad und geteilte App-Shell intakt.
+
+**Und trotzdem ist AC-11/EC-7 FAIL** — aus einem Grund, der mit BUG-6 nichts zu tun hat. Siehe BUG-16.
+
+### Acceptance Criteria
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-1 | [x] PASS | Registrierung → Redirect auf `/`, Chip mit Trainername, `profiles`-Zeile per psql bestätigt; Passwort < 8 abgelehnt (`validation/auth.ts:12`) |
+| AC-2 | [x] PASS | Abweichende Groß-/Kleinschreibung → Feldfehler; Unique-Index `0001_profiles.sql:16` |
+| AC-3 | [x] PASS | Vergebene E-Mail → Feldfehler mit Login-Umschalter (`register-view.tsx:96-106`) |
+| AC-4 | [x] PASS | Login mit korrekten Daten → `/` |
+| AC-5 | [x] PASS | Cookie persistent (Ablauf 2027-10-08, `httpOnly=true`); **neuer Browser-Prozess** mit persistiertem Cookie öffnet `/` mit 200 |
+| AC-6 | [x] PASS | „Abmelden" → `/login`; anschließendes `GET /` → `/login` |
+| AC-7 | [x] PASS | Falsches Passwort und unbekannte Adresse wortgleich (245 ms / 133 ms); `error-mapping.ts:61-67` verzweigt nicht |
+| AC-8 | [!] NOT VERIFIED | 40 Fehl-Logins → 40× 400, kein 429. Ursache nachgeprüft: `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt in der Container-Umgebung, obwohl `config.toml:209` es setzt. Nur gehostet prüfbar → **BUG-7** (unverändert) |
+| AC-10 | [x] PASS | Gleiche Meldung unabhängig von Kontoexistenz; Mail „Passwort zurücksetzen" trifft ein, Link zeigt auf `/auth/confirm?token_hash=…` |
+| AC-11 | [ ] **FAIL** | Über den **tatsächlich versendeten** Link ist kein Passwortwechsel möglich → **BUG-16**. Mit host-korrigiertem Link läuft die Kette vollständig durch (Formular → 7 Zeichen abgelehnt → Passwort gesetzt → Redirect → Login mit neuem Passwort erfolgreich, altes abgelehnt) |
+| AC-12 | [x] PASS | Benutzter und manipulierter Token → `?error=1`, Seite zeigt Fehlerzustand mit „Neuen Link anfordern". **Einschränkung:** durch BUG-16 erscheint dieselbe Meldung auch bei gültigen Links |
+| AC-13 | [x] PASS | Leere Formulare → alle Feldmeldungen; JS-Sentinel überlebt das Absenden → kein Reload |
+| AC-14 | [!] Wortlaut erfüllt, Ziel defekt | Link sichtbar mit `href="/privacy"`, aber `GET /privacy` → 404 → **BUG-10** (unverändert) |
+| AC-15 | [x] PASS | Hinweistext ohne Klick/Hover sichtbar, Wortlaut zeichengenau wie im Vertrag (`register-view.tsx:76-79`) |
+
+### Edge Cases
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| EC-1 | [x] PASS | Echter Race: zwei parallele Signups mit gleichem Namen in verschiedener Schreibweise → 200 + 500, genau **eine** `profiles`-Zeile; Trigger und Unique-Index in derselben Transaktion |
+| EC-2 | [x] PASS | `/` und `/leaderboard` ohne Sitzung → 307 auf `/login` |
+| EC-3 | [x] PASS | Reset für unbekannte Adresse: zeichengleiche Meldung, **keine** Mail in Mailpit |
+| EC-4 | [!] NOT VERIFIED | Deckungsgleich mit AC-8 |
+| EC-5 | [x] PASS | „ab", 21 Zeichen, Leerzeichen, Emoji, leer → jeweils Feldmeldung; serverseitig identisch abgesichert (`actions.ts:28-36`) |
+| EC-6 | [x] PASS | Login-POST gekappt → „Die Verbindung ist fehlgeschlagen."; **E-Mail und Passwort bleiben erhalten**, Button wieder aktiv |
+| EC-7 | [ ] **FAIL** | Die **Geräte-Unabhängigkeit selbst ist nachgewiesen** (frischer Firefox, null Cookies, host-korrigierter Link → Formular erscheint, Passwort setzbar). Der real versendete Link scheitert aber in **jedem** Browser, auch im anfordernden → **BUG-16** |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis | Beleg |
+|---------|----------|-------|
+| Authentication Bypass | [x] PASS | `/` ohne Sitzung → 307; `getUser()` statt Signaturprüfung (`proxy.ts:51-53`) |
+| Autorisierung (RLS) | [x] PASS | Mit echtem Bearer-Token von Nutzer X gegen Daten von Nutzer Y: Lesen → `[]`, gefälschter INSERT → `42501`, UPDATE/DELETE → 0 Zeilen |
+| Sensible Felder | [x] PASS | `profiles` gibt nur `id`, `trainer_name`, `created_at` heraus — keine E-Mail |
+| Input Injection | [x] PASS | XSS- und SQL-Payloads unter Umgehung der App direkt an Supabase → `23514` vom Check-Constraint, **kein verwaistes Konto** |
+| Brute Force | [!] **FAIL** | 30 Fehlversuche ohne Drosselung → **BUG-7** |
+| Account-Enumeration (Login/Reset) | [x] PASS | Identische Meldungen und Codepfade |
+| Exponierte Secrets | [x] PASS | `.next/static` durchsucht nach `sb_secret`, `service_role`, `JWT_SECRET` → kein Treffer |
+| Zugangsdaten in der URL | [x] PASS | Alle vier Formulare `method="post"` |
+| Session-Cookie-Flags | [x] **PASS (neu)** | Dev `HttpOnly; SameSite=lax`; Produktions-Build zusätzlich `Secure` (`cookie-options.ts:19-23`) — **BUG-13 geschlossen** |
+| `/auth/confirm` | [x] PASS | Fehlender/manipulierter Token → `error=1` ohne Sitzung; `next=//evil.com` abgewehrt (`route.ts:22-26`); Sitzung nur bei erfolgreichem `verifyOtp` |
+| Security-Header | [!] **FAIL** | Weder Dev noch Prod liefern die vier geforderten Header → **BUG-12** (unverändert), dazu **BUG-19** |
+
+### Bugs
+
+#### BUG-16: Der versendete Reset-Link führt immer zu „Link ungültig oder abgelaufen"
+- **Severity: High** · betrifft **AC-11, AC-12, EC-7**
+- **Dies ist ein neuer Fehler, eingeführt durch den Fix vom selben Tag** — nicht der alte BUG-6. Dessen Ursache (PKCE-Bindung ans Gerät) ist nachweislich beseitigt.
+- **Mechanik:** Der Mail-Link trägt den Host aus `{{ .SiteURL }}`, lokal `http://127.0.0.1:3000` (`config.toml:158`). `/auth/confirm` löst den Token korrekt ein und setzt das Cookie auf der Domain, unter der es aufgerufen wurde — **leitet aber auf einen anderen Host um**: `request.nextUrl.clone()` (`route.ts:34`) liefert `localhost:3000`, unabhängig vom eingehenden Host. Der Browser folgt nach `localhost`, schickt das auf `127.0.0.1` gesetzte Cookie nicht mit, `reset-password/page.tsx` sieht keinen Nutzer und rendert den AC-12-Fehlerzustand — über einen frischen, gültigen Link.
+- **Selbst reproduziert:** `curl -i "http://127.0.0.1:3000/auth/confirm?token_hash=bogus&type=recovery"` → `location: http://localhost:3000/reset-password?error=1`.
+- **Wirkung:** Der Passwort-Reset ist im aktuellen Stand **vollständig unbenutzbar** — in jedem Browser, auch in dem, der ihn angefordert hat. Da es keine E-Mail-Bestätigung gibt, ist er der einzige Weg zurück ins Konto.
+- **Warum der Build ihn nicht gefunden hat:** Die Verifikation dort rief `/auth/confirm` direkt über `localhost` auf, statt dem Link zu folgen, wie er in der Mail steht. Anfrage-Host und Redirect-Host waren dadurch zufällig identisch, und der Mismatch konnte nicht auftreten. Geprüft wurde die eigene Konstruktion, nicht das ausgelieferte Artefakt.
+- **Produktionsrisiko über den lokalen Fall hinaus:** Sobald Site-URL und der Host, den `request.nextUrl` liefert, auseinanderfallen — `www` gegen Apex-Domain, ein Proxy oder ein Domain-Alias —, kehrt exakt dieser Fehler zurück. Der Fix muss den Host der eingehenden Anfrage respektieren, nicht einen abgeleiteten.
+
+#### BUG-17: `/reset-password` akzeptiert jede normale Sitzung, nicht nur eine Recovery-Sitzung
+- **Severity: Medium** · **Altlast, nicht von diesem Build eingeführt**
+- `reset-password/page.tsx` prüft nur, ob **ein Nutzer** angemeldet ist; `updatePasswordAction` (`actions.ts:152-158`) ebenso. Beide unterscheiden nicht zwischen einer Recovery-Sitzung und einer gewöhnlichen.
+- **Wirkung:** Wer an einem offen gelassenen, angemeldeten Gerät sitzt, kann `/reset-password` aufrufen und das Passwort **ohne Eingabe des alten** ändern — und sperrt den Eigentümer damit dauerhaft aus.
+- `design.md` sagt „nur über `/auth/confirm` erreichbar". Im Code steht diese Bindung nicht; das Dokument beschreibt eine Absicht, keine Durchsetzung.
+- **Einordnung der Bewertung:** Von der Acceptance-Bahn als außerhalb ihres Scopes gemeldet; die Security-Bahn hatte den Punkt nicht auf ihrer Liste und hat ihn **nicht bewertet**. Der Befund ist belegt, das Severity-Urteil stammt von der Zusammenführung, nicht von einer der Prüfbahnen.
+
+#### BUG-18: Jeder 500 bei der Registrierung wird als „Trainername bereits vergeben" angezeigt
+- **Severity: Low** · betrifft **AC-3**
+- `error-mapping.ts:51-53` bildet jeden Status 500 auf die Trainernamen-Meldung ab, mit dem Kommentar „nothing else in this flow produces a 500". Widerlegt: Zwei gleichzeitige Registrierungen mit **derselben E-Mail** liefern 500 mit `duplicate key … users_email_partial_key`.
+- **Wirkung:** Der Nutzer sieht einen Trainernamen-Fehler für ein E-Mail-Duplikat und ändert das falsche Feld.
+
+#### BUG-19: `X-Powered-By: Next.js` wird ausgeliefert
+- **Severity: Low** · Verrät das Framework und seine Version an jeden Aufrufer, ohne Nutzen. Abschaltbar über `poweredByHeader: false` in `next.config.ts` — gehört zusammen mit BUG-12 erledigt.
+
+#### Unverändert offen aus dem vorherigen Lauf
+- **BUG-7 (High)** — AC-8, keine wirksame Drosselung; 30 bzw. 40 Fehlversuche ohne 429. Die Security-Bahn schärft nach: Selbst wenn das Limit gehostet greift, ist es **per IP** — Credential Stuffing über wechselnde IPs bleibt ungebremst, weil es keinen kontobezogenen Zähler und kein CAPTCHA gibt.
+- **BUG-8 (High)** — offene `[user]`-Aufgaben auf dem Zugangsdaten-Pfad. **Jetzt zwei:** T4 (Passwort-Mindestlänge) und neu **T18** (Reset-Vorlage im gehosteten Projekt). Ohne T18 verschickt die Produktion wieder den PKCE-Standardlink und die Geräte-Bindung aus BUG-6 ist zurück.
+- **BUG-10 (Medium)** — Datenschutz-Link → 404.
+- **BUG-12 (Medium)** — Security-Header fehlen, in Dev **und** im Produktions-Build.
+- **BUG-14 (Low)** — „Stattdessen einloggen" erscheint bei jedem E-Mail-Feldfehler.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 12 Dateien, 102 Tests, alle grün.**
+- **E2E-Suite: 15/15 grün** über Chromium, Firefox und Mobile Safari — anders als im Vorlauf **kein** Flake.
+- **PROJ-2-Kernpfad intakt:** „Runde spielen bis zum gespeicherten Ergebnis" und „Angemeldet ins Spiel, nach dem Abmelden wieder gesperrt" grün.
+- **Geteilte App-Shell und Proxy intakt:** Trainername-Chip und „Abmelden" rendern, `logoutAction` beendet die Sitzung, `/` und `/leaderboard` ohne Sitzung → 307, mit Sitzung `/login` → `/`.
+- **`npm run lint`: grün.**
+
+### Not Verified In This Run
+
+- [!] **AC-8 / EC-4 gehostet** — `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt in der lokalen Container-Umgebung. Prüfung nach dem ersten `/deploy`: ~35 Fehlversuche gegen die Live-URL. Stelle: **Dashboard → Authentication → Rate Limits → `sign_in_sign_ups`**
+- [!] **T4 / T18** — gehostete Dashboard-Einstellungen von hier aus nicht einsehbar; nur der lokale Spiegel ist belegt
+- [!] **Verteilter bzw. kontobezogener Brute-Force in Produktion** — strukturell offen, von hier aus nicht messbar
+- [!] **Verhalten des Reset-Links unter echter Produktions-Domain** — hängt an BUG-16 und T18
+- [!] **Responsives Layout bei 375 / 768 / 1440 px** — kein Viewport-Urteil. Die E2E-Suite fährt ein iPhone-13-Profil, prüft dort aber Funktion, nicht Layout
+- [!] **Cross-Browser über Chromium/Firefox/WebKit hinaus** — nicht verfügbar
+- [!] **DevTools-Prüfungen** — Konsole, Netzwerk-Tab, berechnete Styles nicht durchgeführt
+- [!] **Severity-Bewertung von BUG-17** — von keiner Prüfbahn abschließend beurteilt (siehe dort)
+
+### Verdikt
+
+- **Acceptance Criteria:** 12 von 14 geprüften bestanden · **AC-11 FAIL** · AC-8 nicht verifizierbar · AC-14 im Wortlaut erfüllt, Ziel defekt
+- **Edge Cases:** 5 von 7 bestanden · **EC-7 FAIL** · EC-4 nicht verifizierbar
+- **Bugs:** 4 neu — **1 High** (BUG-16), 1 Medium (BUG-17), 2 Low (BUG-18, BUG-19). Unverändert offen: 2 High (BUG-7, BUG-8), 2 Medium (BUG-10, BUG-12), 1 Low (BUG-14). **Geschlossen: BUG-13, BUG-15**
+- **Security:** 10 Prüfungen mit Beleg bestanden, 2 mit Befund (Brute Force, Security-Header)
+- **Automatisierte Tests:** 102/102 · E2E 15/15 · Lint grün
+- **Production Ready: NEIN** — drei offene High-Bugs.
+
+> **Der Fix hat sein Ziel erreicht und ist trotzdem nicht fertig.** Die Geräte-Bindung, wegen der dieser Umbau gemacht wurde, ist beseitigt — nachgewiesen in einem frischen Browser ohne ein einziges Cookie. Darüber gelegt hat sich ein neuer Fehler derselben Klasse: Wieder scheitert der Reset, wieder mit einer Meldung, die etwas Falsches behauptet, diesmal wegen eines Host-Mismatches statt eines fehlenden Cookies. Für den Nutzer ist das Ergebnis identisch mit vorher.
+
+> **Warum der Build das nicht gesehen hat, ist die wichtigere Lehre.** Die Verifikation dort hat `/auth/confirm` direkt über `localhost` aufgerufen, statt dem Link zu folgen, wie er in der Mail steht. Damit waren Anfrage-Host und Redirect-Host zufällig gleich und der Fehler unsichtbar. Geprüft wurde die eigene Konstruktion, nicht das ausgelieferte Artefakt — genau der Unterschied, den ein unabhängiger Verifizierer aufdeckt und der Erbauer strukturell übersieht.
+
+---
+
+## QA-Lauf — 2026-09-03 (dritter Lauf des Tages), nach dem BUG-16-Fix
+
+**Anlass:** `/build` hat die Weiterleitung in `/auth/confirm` auf ein relatives Ziel umgestellt und `site_url` an den Host angeglichen, unter dem die App ausgeliefert wird. Erneut vollständiger Sweep, nichts aus früheren Läufen übernommen.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten ohne Kenntnis des Builds. Der Acceptance-Bahn wurde diesmal ausdrücklich untersagt, eine URL selbst zusammenzusetzen — sie musste den Link **unverändert aus dem Postfach** holen. Der Security-Bahn wurde die im Vorlauf zwischen den Bahnen durchgefallene Frage (Recovery- vs. normale Sitzung) ausdrücklich zugewiesen.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-20**.
+
+### Der Reset funktioniert — beide Fehler sind geschlossen
+
+- **AC-11 PASS** und **EC-7 PASS.** Die Acceptance-Bahn hat den Link **exakt so, wie er in der Mail steht** in einem frisch gestarteten Browser mit leerem Cookie-Jar geöffnet: Formular erscheint, zu kurzes Passwort wird abgelehnt, gültiges wird gesetzt, Weiterleitung auf `/`. In einem **dritten** frischen Browser danach: altes Passwort abgelehnt, neues akzeptiert.
+- **AC-12 PASS** für die drei prüfbaren Fälle (benutzt, manipuliert, ohne Link).
+- **BUG-6 und BUG-16 sind damit beide geschlossen.**
+- Bestätigt durch die Security-Bahn: relative `Location` ohne Host-Rekonstruktion, Token einmalig verwendbar.
+
+### Acceptance Criteria
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-1 | [x] PASS | Registrierung → `/`, Profil-Zeile mit exaktem Trainernamen; `enable_confirmations = false`; Passwort < 8 doppelt abgelehnt (Zod **und** Auth-API `422 weak_password`) |
+| AC-2 | [x] PASS | Groß geschriebene Variante eines vergebenen Namens → Feldfehler; Unique-Index auf `lower(trainer_name)` |
+| AC-3 | [x] PASS | Doppelte Adresse → Feldfehler mit Umschalter; auch die **groß geschriebene** Adressvariante wird als Duplikat erkannt |
+| AC-4 | [x] PASS | Korrekte Zugangsdaten → `/` |
+| AC-5 | [x] PASS | Browser **vollständig geschlossen**, neuer Browser mit persistiertem Cookie-Jar → bleibt auf `/`; Cookie `httpOnly`, Ablauf 2027 |
+| AC-6 | [x] PASS | „Abmelden" → `/login`; danach `/` → 307 |
+| AC-7 | [x] PASS | Beide Fehlerfälle zeichengleich; `error-mapping.ts:61-67` ohne Verzweigung |
+| AC-8 | [!] NOT VERIFIED | 45 Fehlversuche → 45× 400, kein 429. `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt in der Container-Umgebung. Zusätzlich **BUG-21** |
+| AC-10 | [x] PASS | Gleiche Meldung unabhängig von Kontoexistenz; Mail < 1 s in Mailpit, für die unbekannte Adresse **0 Mails** |
+| AC-11 | [x] **PASS** | Vollständige Kette über den **unveränderten Mail-Link** in frischem Browser; neues Passwort gilt, altes nicht mehr |
+| AC-12 | [x] PASS (teilweise) | Benutzt, manipuliert, ohne Link → Fehlerzustand ohne Passwortfeld. **Abgelaufener** Link nicht prüfbar (1 h Gültigkeit) |
+| AC-13 | [x] PASS | Drei bzw. zwei Feldmeldungen; gesetzter JS-Sentinel überlebt das Absenden → kein Reload |
+| AC-14 | [!] Wortlaut erfüllt, Ziel defekt | Link sichtbar, `/privacy` → **404** → **BUG-10** |
+| AC-15 | [x] PASS | Hinweis ohne Klick/Hover sichtbar, Text **wortgleich** mit dem Vertrag, keine Checkbox |
+
+### Edge Cases
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| EC-1 | [x] PASS | Echter Race provoziert: gleichzeitige Signups mit `race_…` und `RACE_…` → 200 + `23505`; **eine** Zeile in der DB, `auth.users` = `profiles` = 28, **0 Konten ohne Profil** |
+| EC-2 | [x] PASS | `/`, `/quiz`, `/profile`, `/irgendwas` → je 307 auf `/login`; `/login`, `/reset-password` → 200 |
+| EC-3 | [x] PASS | Zeichengleiche Meldung, Mailpit-Suche für die unbekannte Adresse → 0 Mails |
+| EC-4 | [!] NOT VERIFIED | Gleiche Ursache wie AC-8 |
+| EC-5 | [x] PASS | `ab`, 21 Zeichen, Leerzeichen, Emoji, Bindestrich → je feldspezifische Meldung |
+| EC-6 | [x] PASS mit Einschränkung | Transportfehler: Meldung erscheint, **beide Eingaben bleiben erhalten**, zweiter Klick loggt ohne Neueingabe ein. Der Vertragsfall „Verbindung **zu Supabase Auth** schlägt fehl" ist damit nicht abgedeckt → **BUG-9** |
+| EC-7 | [x] **PASS** | Link unverändert aus dem Postfach, frischer Browser mit leerem Cookie-Jar → Formular, Passwort gesetzt, Weiterleitung. Kein `code_verifier` nötig |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis | Beleg |
+|---------|----------|-------|
+| Auth-Bypass | [x] PASS | `/` ohne Sitzung → 307; `getUser()` im Proxy |
+| Autorisierung (RLS) | [x] PASS | Anon → `[]`; als Nutzer X fremde Runden auch mit `?profile_id=eq.<opfer>` → `[]`; `profiles` ohne E-Mail |
+| Input Injection | [x] PASS | XSS und SQL als Trainername direkt an Supabase → `23514` vom Constraint, `profiles` unversehrt |
+| Brute Force | [!] **FAIL** | 35 Fehlversuche ohne 429 → **BUG-7** |
+| Enumeration (Login/Reset) | [x] PASS | Identische Meldungen und Codepfade |
+| Exponierte Secrets | [x] PASS | Kein `service_role`, `sb_secret_`, JWT-Secret im Bundle; kein Browser-Client mehr vorhanden |
+| Zugangsdaten in der URL | [x] PASS | Alle vier Formulare `method="post"`, im gerenderten HTML bestätigt |
+| Session-Cookie-Flags | [x] PASS | Prod `httpOnly, secure, sameSite=lax`; Dev ohne `secure` (korrekt) |
+| `/auth/confirm` — Token | [x] PASS | Einmalig verwendbar; Müll- und Fehlparameter → `?error=1` |
+| `/auth/confirm` — Redirect-Ziel | [x] PASS | Relative `Location`, kein Host aus Request oder Header rekonstruiert |
+| `/auth/confirm` — `next`-Parameter | [!] **FAIL** | Backslash-Variante nicht abgefangen → **BUG-20** |
+| Recovery- vs. normale Sitzung | [!] **FAIL** | Nicht unterschieden → **BUG-17**, jetzt bewertet |
+| Security-Header | [!] **FAIL** | Auch im Produktions-Build abwesend → **BUG-12** |
+
+### Bugs
+
+#### BUG-20: Open Redirect an `/auth/confirm` über einen Backslash
+- **Severity: Medium** · neu, in dem Code, der BUG-16 beheben sollte
+- `safeNext` (`route.ts:22-26`) blockt `https://…` und `//…`, lässt aber **`/\evil.com`** durch. Browser normalisieren `\` zu `/`, daraus wird `//evil.com` — ein protokoll-relatives Ziel auf einen fremden Host.
+- **Selbst nachgestellt** mit einem über die Admin-API erzeugten gültigen Recovery-Token: `GET /auth/confirm?token_hash=<gültig>&type=recovery&next=/\evil.com` → `location: /\evil.com`. Zum Vergleich blockiert: `next=https://evil.com` und `next=//evil.com` → beide `/reset-password`.
+- **Wichtig für die Reproduktion:** Mit einem *ungültigen* Token greift immer der Fehlerpfad, und der Test sieht grün aus, ohne `safeNext` je erreicht zu haben. Genau daran ist meine erste Gegenprobe gescheitert.
+- **Wirkung:** Ein Angreifer fordert für sein **eigenes** Konto einen Reset an und hat damit eine Weiterleitung auf unserer vertrauenswürdigen Domain, die auf einen beliebigen fremden Host zeigt — ein klassischer Phishing-Baustein.
+- **Warum die Tests es nicht gefangen haben:** Die Unit-Tests prüfen genau die zwei Varianten, an die beim Schreiben gedacht wurde. Der Kommentar im Code behauptet dabei, die Prüfung verhindere Open Redirects — sie tut es unvollständig. Eine Positivliste erlaubter Ziele wäre robuster als eine Liste verbotener Präfixe.
+
+#### BUG-21: Die zugesagte IP-Drosselung kann die Nutzer-IP gar nicht sehen
+- **Severity: Medium** · betrifft **AC-8, EC-4** · code-belegt, laufzeitseitig lokal nicht entscheidbar
+- Login und Registrierung laufen ausschließlich über Server Actions; der Supabase-Client wird serverseitig gebaut (`supabase/server.ts:9-33`) und reicht **keine** Client-Header weiter (`grep -rn "x-forwarded\|global:" src/` findet nichts).
+- **Folge:** Supabase sieht für jeden Nutzer dieselbe IP — die des Anwendungsservers. AC-8 verspricht aber „30 Versuche **von derselben IP-Adresse**".
+- **Zwei mögliche Ausgänge, beide schlecht:** Entweder verbraucht ein einzelner Angreifer das Kontingent **aller** Nutzer und sperrt sie gemeinsam aus, oder das Limit greift nie so, wie der Vertrag es beschreibt.
+- Das ist ein **eigenständiger** Befund neben BUG-7: Dort geht es darum, dass lokal gar nichts greift; hier darum, dass die Zusage auch im gehosteten Betrieb strukturell nicht erfüllbar ist. Vor dem Launch gegen das gehostete Projekt zu prüfen — und gegebenenfalls per `/refine` neu zu formulieren.
+
+#### BUG-17 (aus dem Vorlauf): jetzt bewertet — Passwortwechsel ohne Kenntnis des alten
+- **Severity: Medium (High-nah)** — von der Security-Bahn ausdrücklich beurteilt, nicht mehr vom Owner geschätzt
+- Auf zwei Ebenen belegt: `/reset-password` rendert mit einer **normalen** Login-Sitzung das Formular (HTTP 200, nicht der Ungültig-Zustand); und `PUT /auth/v1/user` mit einem gewöhnlichen Session-Token ändert das Passwort ohne das alte (`SECURE_PASSWORD_CHANGE` ist aus).
+- `design.md` verspricht ausdrücklich „nur mit gültiger Recovery-Sitzung" und eine erneute serverseitige Prüfung. Beides steht so nicht im Code (`actions.ts:153-166`, `reset-password/page.tsx:30-36`).
+- **Wirkung:** Wer eine bestehende Sitzung erreicht — geteiltes oder offen gelassenes Gerät, und die Sitzung läuft laut AC-5 **nie** ab —, ändert still das Passwort und sperrt den Eigentümer aus.
+
+#### BUG-22: Abmelden beendet die Sitzung auf allen Geräten
+- **Severity: Low** · Beobachtung, von keinem AC beschrieben
+- `logoutAction` (`actions.ts:89-93`) ruft `signOut()` im Standard-Scope `global` auf. Der Acceptance-Bahn ist es aufgefallen, weil ihr erster AC-5-Versuch daran scheiterte: Ein Logout in einer zweiten Sitzung entwertete die erste.
+- Weder AC-5 noch AC-6 sagen, was hier gelten soll. Das ist keine Fehlfunktion, sondern eine **Lücke im Vertrag** — Kandidat für `/refine`, nicht für einen Fix.
+
+#### BUG-23: „Bestenliste" in der Kopfzeile führt für jeden angemeldeten Nutzer auf eine 404
+- **Severity: Medium** · **gehört nicht zu PROJ-1**
+- `site-header.tsx:44` verlinkt `/leaderboard`; die Route existiert nicht (PROJ-3 ist `Planned`).
+- Die App-Shell gehört laut `docs/app-shell.md` zu **PROJ-2**. Dieselbe Regel, die dort für die Fußzeile befolgt wurde („kein Link, solange die Zielseite fehlt"), wurde für die Kopfzeile nicht angewandt — genau wie bei BUG-10 im Registrierungsformular.
+
+#### Unverändert offen aus den Vorläufen
+- **BUG-7 (High)** — AC-8: 35 bzw. 45 Fehlversuche ohne Drosselung. Lokal nicht behebbar.
+- **BUG-8 (High)** — offene `[user]`-Aufgaben T4 und T18 auf dem Zugangsdaten-Pfad. Lokal nicht behebbar.
+- **BUG-9 (Medium)** — Login meldet einen Auth-Ausfall als „Passwort falsch". Diesmal **bewusst nur code-belegt**: Ein Laufzeit-Nachweis hätte das Anhalten des Auth-Containers erfordert und die parallel laufende zweite Bahn gestört. Sauber begründete Entscheidung der Bahn, kein Versäumnis.
+- **BUG-10 (Medium)** — Datenschutz-Link → 404.
+- **BUG-12 (Medium)** — Security-Header fehlen, auch im Produktions-Build.
+- **BUG-14, BUG-18, BUG-19 (Low)** — unverändert.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 12 Dateien, 105 Tests, alle grün.**
+- **`npx playwright test`: 24/24 grün in 29 s bei voller Parallelität mit 16 Workern — keine Flakes, kein Einzel-Nachlauf nötig.** Das ist eine Verbesserung gegenüber den beiden Vorläufen, in denen PROJ-2-Tests unter Last wackelten.
+- **PROJ-2 ohne Regression:** alle vier E2E-Journeys in drei Browsern grün, dazu manuell Kopfzeile, „Runde starten", vier Antwortoptionen und sichtbares Bild.
+- **`npm run lint`: grün.**
+- **`npm run build`: grün** — von der Acceptance-Bahn nicht ausgeführt, vom Owner nach Abschluss der Bahnen nachgeholt.
+
+### Not Verified In This Run
+
+- [!] **AC-8 / EC-4** — lokal nicht auslösbar; `GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS` fehlt im Container. Prüfung nach dem ersten `/deploy`: ~35 Fehlversuche gegen die Live-URL. **Dashboard → Authentication → Rate Limits → `sign_in_sign_ups`**
+- [!] **T4 / T18** — nur im gehosteten Projekt beobachtbar; lokale Spiegel beide verifiziert
+- [!] **BUG-21 zur Laufzeit** — die Frage, welche IP Supabase tatsächlich sieht, ist erst gegen das gehostete Projekt entscheidbar
+- [!] **AC-12, Teilfall „abgelaufener Link"** — Gültigkeit 1 h, im Testfenster nicht herbeiführbar
+- [!] **BUG-9 zur Laufzeit** — Auth-Ausfall bewusst nicht provoziert (parallele Bahn), Befund rein code-belegt
+- [!] **Cross-Browser über Chromium, Firefox und WebKit hinaus** — keine weiteren Engines installiert
+- [!] **Responsives Layout-Urteil bei 375 / 768 / 1440 px** — kein visuelles Urteil; das iPhone-13-Profil belegt Funktion, nicht Gestaltung
+- [!] **DevTools-Prüfungen** — nicht durchführbar
+- [!] **Verhalten ohne JavaScript** — bekannte Einschränkung laut `design.md`, kein AC
+
+### Verdikt
+
+- **Acceptance Criteria:** 13 von 14 geprüften bestanden · AC-8 nicht verifizierbar · AC-14 im Wortlaut erfüllt, Ziel defekt. **AC-11 erstmals PASS**
+- **Edge Cases:** 6 von 7 bestanden · EC-4 nicht verifizierbar. **EC-7 erstmals PASS**
+- **Bugs:** 4 neu — **0 High**, 3 Medium (BUG-20, BUG-21, BUG-23), 1 Low (BUG-22). BUG-17 aus dem Vorlauf jetzt bewertet (Medium, High-nah)
+- **Geschlossen in diesem Lauf: BUG-6, BUG-16** (dazu BUG-13 und BUG-15 aus dem Vorlauf)
+- **Security:** 10 Prüfungen mit Beleg bestanden, 4 mit Befund
+- **Automatisierte Tests:** 105/105 · E2E 24/24 ohne Flake · Lint grün · Build grün
+- **Production Ready: NEIN** — zwei offene High-Bugs.
+
+> **Die beiden verbleibenden High-Bugs sind kein Code.** BUG-7 (Drosselung) und BUG-8 (T4, T18) hängen beide ausschließlich am **gehosteten Supabase-Projekt**, das es noch nicht gibt. Lokal ist an ihnen nichts zu reparieren: Der lokale Container setzt das Rate-Limit nicht durch, und die beiden Dashboard-Einstellungen existieren nirgends, wo man sie setzen könnte. **PROJ-1 kann `Approved` nicht erreichen, bevor dieses Projekt angelegt ist** — und dafür genügt das Anlegen, ein App-Deploy ist nicht nötig.
+
+> **BUG-21 ist der unangenehmste neue Befund**, weil er eine Zusage betrifft und nicht nur eine Umsetzung: AC-8 verspricht eine Drosselung „von derselben IP-Adresse", aber die Architektur — Login über Server Actions — lässt Supabase überhaupt nur die IP des Anwendungsservers sehen. Selbst ein korrekt konfiguriertes Limit würde dann entweder alle Nutzer gemeinsam aussperren oder nie greifen. Das ist vor dem Launch zu klären und gehört vermutlich in ein `/refine` von AC-8, nicht in einen Fix.
+
+---
+
+## QA-Lauf — 2026-09-04, Delta nach BUG-20/9/11 und den Link-Fixes (BUG-10/23)
+
+**Anlass und Scope:** `/build` hat vier Fixes geliefert — die Open-Redirect-Positivliste (BUG-20), die Ausfall-Meldung beim Login (BUG-9), die Passwort-Obergrenze (BUG-11) und die beiden toten Links (BUG-10 in PROJ-1, BUG-23 in PROJ-2s Kopfzeile). **Dies ist bewusst ein Delta-Lauf**, kein vierter vollständiger Sweep: Nach drei kompletten Durchgängen am Vortag mit konsistenten Ergebnissen wurden nur die betroffenen Kriterien neu verifiziert, plus Regression und die Testsuiten. Alles, was hier nicht als geprüft erscheint, trägt den Stand des Laufs vom 2026-09-03 (dritter Lauf) — nicht ein neues Häkchen.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten. Bahn A: AC-14, AC-7/EC-6, Passwortlänge, Reset über den echten Mail-Link, Regression, Suiten. Bahn B: `/auth/confirm` mit systematischem Angriff auf `next`, **mit gültigem Token**.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-24**.
+
+### Die vier Fixes — Ergebnis
+
+| Fix | Ergebnis | Beleg |
+|-----|----------|-------|
+| **BUG-20** Open Redirect | ✅ **geschlossen** | ~30 Varianten mit gültigem Recovery-Token — absolut, `//`, Backslash roh/kodiert, doppelt kodiert, Tab/Newline, `@`-Trick, Traversal, Null-Byte, 5000 Zeichen, `next` mehrfach — **jede** → `Location: /reset-password`. Auch `next=/` und `next=/login` kollabieren auf die Reset-Seite: Die Liste hat genau einen Eintrag |
+| **BUG-9** Ausfall als „Passwort falsch" | ⚠️ **teilweise** | Die Variante „Fehlerobjekt kommt zurück" ist per Unit-Test belegt (`error-mapping.test.ts:91-97`). Die Variante „Backend antwortet gar nicht" zeigt ein **anderes** Versagen → **BUG-24** |
+| **BUG-11** Passwort-Obergrenze | ✅ **geschlossen** | 73 Zeichen → Feldmeldung am Passwortfeld, kein Konto; **72 Zeichen → angenommen** (inklusiv, kein Off-by-one); 40 × `ä` (80 Byte) → abgelehnt. Aber: Meldung dabei irreführend → **BUG-25** |
+| **BUG-10** Datenschutz-Link → 404 | ✅ **geschlossen** | Hinweis sichtbar, **0** Anker im Absatz, **0** Treffer für `a[href*="privacy"]`; `/privacy` → 404, Build-Routenliste kennt sie nicht. AC-14 im neuen Wortlaut erfüllt |
+| **BUG-23** Kopfzeilen-Link → 404 (PROJ-2) | ✅ **geschlossen** | Kopfzeile angemeldet: Wortmarke, Chip, „Abmelden" — **0** `a[href*="leaderboard"]`, 0 Vorkommen „Bestenliste"; `/leaderboard` → 404. AC-21 im neuen Wortlaut erfüllt |
+
+### Neu verifizierte Kriterien
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-7 | [x] PASS | Falsches Passwort und unbekannte Adresse zeichengleich (`a === b` → `true`); 400 und 401 laufen auf dieselbe Konstante |
+| AC-10 | [x] PASS | Bestätigungsmeldung, Mail in Mailpit |
+| AC-11 | [x] PASS | Neues Passwort im fremden Kontext gesetzt; Login damit in einem **dritten** frischen Kontext erfolgreich |
+| AC-12 | [x] PASS | Benutzter Link und Müll-Token → Fehlerzustand mit „Neuen Link anfordern"; „abgelaufen" nach 1 h weiterhin nicht prüfbar |
+| AC-14 | [x] PASS | Neuer Wortlaut: Hinweis ja, Link nein, solange `/privacy` fehlt |
+| EC-6 | [ ] **FAIL** | Siehe BUG-24 |
+| EC-7 | [x] PASS | Link **unverändert** aus Mailpit, frischer Kontext ohne Cookies → Formular, Sitzung serverseitig über `verifyOtp` |
+| PROJ-2 AC-21 | [x] PASS | Neuer Wortlaut: kein Bestenlisten-Zugang, solange `/leaderboard` fehlt |
+
+### Bugs
+
+#### BUG-24: Login hängt bei nicht antwortendem Auth-Backend unbegrenzt — ohne Meldung, ohne „Erneut versuchen"
+- **Severity: Medium** · betrifft **EC-6**
+- **Beleg:** Auth-Container per `docker pause` angehalten (17:56:57Z), Login abgeschickt → Button **12 Sekunden** in „Einloggen …", `errors=[]`, sekündlich protokolliert. Erst das `unpause` (17:57:09Z) löste den Request; danach lief der Login regulär durch. Container danach `running, paused=false, healthy`.
+- **Ursache:** Im gesamten Auth-Pfad gibt es **keinen Timeout** — `grep -rn "AbortSignal\|timeout" src/lib/auth/ src/lib/supabase/` liefert null Treffer. Der PokeAPI-Client desselben Projekts hat genau das (`pokeapi/client.ts:106-111`). `error-mapping.ts` und `run-action.ts` greifen erst, wenn eine Antwort oder eine Exception zurückkommt — bei einem hängenden Backend kommt beides nie.
+- **Einordnung gegenüber BUG-9:** BUG-9 war „falsche Meldung, wenn ein Fehler zurückkommt" und ist behoben. BUG-24 ist „gar keine Meldung, wenn nichts zurückkommt". EC-6 verlangt „eine Fehlermeldung mit einer Erneut-versuchen-Möglichkeit" — für die häufigste Ausfallform bekommt der Nutzer unbegrenzt gar nichts.
+- **Nicht geprüft:** die Variante „Verbindung aktiv abgelehnt" (`docker stop`), weil das die parallele Bahn härter getroffen hätte. Dafür stehen die Unit-Tests.
+
+#### BUG-25: „Höchstens 72 Zeichen" bei einer Eingabe von 40 Zeichen
+- **Severity: Low** · betrifft **AC-1, AC-11**
+- 40 × `ä` = 40 Zeichen, 80 Byte → korrekt abgelehnt, aber die Meldung nennt eine Zeichenzahl, die der Nutzer nicht überschritten hat. Der Klammerzusatz erklärt das Prinzip, sagt aber weder die Byte-Grenze noch, um wie viel zu kürzen ist.
+- **Dazu:** Die 72-Byte-Grenze steht **nirgends im Vertrag** — AC-1/AC-11 kennen nur „mind. 8 Zeichen". Sinnvoll gebaut, aber unspezifiziert. Kandidat für `/refine`.
+
+#### Unverändert offen
+- **BUG-7 (High)** — Drosselung, nur gehostet prüfbar.
+- **BUG-8 (High)** — T4 und T18 offen. Bahn B stuft T18 als Medium ein („Template-Konfiguration, keine Credential-Prüfung"), Bahn A als High (Regel). Der Report führt beide unter BUG-8 weiter; die Regel des Skills ist eindeutig, und ohne T18 bricht EC-7 live.
+- **BUG-12** — Security-Header fehlen. **Abweichende Einstufung:** Bahn B nennt es diesmal **High** nach Checklisten-Lesart; die drei Vorläufe sagten Medium. Beides steht hier — nicht stillschweigend geglättet. Als Deploy-Blocker ist es ohnehin geführt.
+- **BUG-17 (Medium)** — bestätigt: gewöhnliche Passwort-Sitzung (`amr: password`) rendert das Reset-Formular. **Neu belegt:** `config.toml:245` `secure_password_change = false` — Step-up-Auth beim Passwortwechsel ist aus. Gehört zu einer Refine-Entscheidung.
+- **BUG-14, BUG-18, BUG-19, BUG-21, BUG-22** — unverändert.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 12 Dateien, 121 Tests, alle grün.**
+- **E2E: 24/24** über Chromium, Firefox, Mobile Safari — keine Flakes.
+- **PROJ-2 Kernpfad:** Runde starten, Bild + vier Optionen, Serie zählt hoch, neue Frage — intakt. AC-22 mitgeprüft.
+- **`npm run lint`** und **`npm run build`**: grün.
+
+### Not Verified In This Run
+
+- [!] **Alle nicht oben genannten AC/EC** — bewusst nicht neu geprüft (Delta-Lauf); Stand vom dritten Lauf am 2026-09-03 gilt
+- [!] **EC-6, Variante „aktiv abgelehnt"** — nicht provoziert, nur Unit-Tests
+- [!] **AC-12 „abgelaufen"** — 1 h Gültigkeit, nicht herbeiführbar
+- [!] **AC-7 Timing unter Last** — Messung enthielt ein fixes 4-s-Fenster, kein echter Verteilungsvergleich
+- [!] **AC-8 / EC-4, T4 / T18, BUG-21, Security-Header live** — nur gegen das gehostete Projekt entscheidbar
+- [!] **Responsive Darstellung und Kontrast** von AC-14/AC-15 — DOM-Sichtbarkeit geprüft, nicht Layout
+- [!] **Brute Force in diesem Lauf** — nicht Schwerpunkt der Security-Bahn; Stand vom Vortag gilt
+
+### Auch bemerkt (unverifiziert, nicht bewertet)
+- Nach der Reset-Anfrage trägt der anfordernde Kontext drei PKCE-Cookies (`…-code-verifier`), obwohl der Ablauf keinen `code_verifier` mehr benutzt — toter Ballast; die Namen tragen `127`, während `site_url` auf `localhost` steht.
+- `/reset-password` rendert bei gültigem Link die Kopfzeile im **angemeldeten** Zustand (Chip + „Abmelden"). PROJ-2s AC-22 nennt für `/reset-password` ausdrücklich den abgemeldeten Zustand — möglicher Widerspruch, gehört PROJ-2.
+
+### Verdikt
+
+- **Vier Fixes:** BUG-20, BUG-11, BUG-10, BUG-23 **geschlossen** · BUG-9 teilweise (Rest → BUG-24)
+- **Bugs neu:** 1 Medium (BUG-24), 1 Low (BUG-25)
+- **Automatisierte Tests:** 121/121 · E2E 24/24 · Lint und Build grün
+- **Production Ready: NEIN** — unverändert zwei High-Bugs (BUG-7, BUG-8), beide nur am gehosteten Projekt behebbar.
+
+> **Was dieser Lauf für den PR bedeutet:** Alles, was auf diesem Branch gebaut wurde, ist unabhängig bestätigt. Was PROJ-1 von `Approved` trennt, liegt nicht im Code, sondern im fehlenden gehosteten Supabase-Projekt. BUG-24 ist ein echter, neuer Befund — aber er beschreibt Verhalten, das **vor** diesem Branch schon so war (kein Timeout gab es nie), nicht eine Regression durch ihn.

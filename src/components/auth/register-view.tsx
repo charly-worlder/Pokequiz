@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -19,6 +20,19 @@ import {
 } from '@/components/ui/form'
 
 type RegisterValues = { trainerName: string; email: string; password: string }
+
+/**
+ * spec.md AC-14 — der Hinweis auf die Datenschutzerklärung steht immer, der
+ * Link erst, wenn die Seite existiert.
+ *
+ * Bis dahin zeigte er auf `/privacy` und damit auf eine 404 (BUG-10): im
+ * Wortlaut des alten AC erfüllt, in der Absicht verfehlt. `site-footer.tsx`
+ * folgt derselben Regel seit PROJ-2 mit einer leeren `LEGAL_PAGES`-Liste.
+ *
+ * **PROJ-4 baut `/privacy` und setzt dieses Flag auf `true`** — zusammen mit
+ * dem Eintrag in `LEGAL_PAGES`. Zwei Stellen, dieselbe Konvention.
+ */
+const PRIVACY_PAGE_EXISTS = false
 
 export function RegisterView({ onSwitchToLogin }: { onSwitchToLogin: () => void }) {
   const form = useForm<RegisterValues>({
@@ -64,6 +78,10 @@ export function RegisterView({ onSwitchToLogin }: { onSwitchToLogin: () => void 
               <FormControl>
                 <Input autoComplete="username" {...field} />
               </FormControl>
+              <FormDescription className="text-xs">
+                Dein Trainername ist für alle Spieler auf der Bestenliste sichtbar und kann
+                später nicht mehr geändert werden.
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
@@ -108,9 +126,13 @@ export function RegisterView({ onSwitchToLogin }: { onSwitchToLogin: () => void 
 
         <p className="text-xs text-muted-foreground">
           Mit der Registrierung akzeptierst du unsere{' '}
-          <Link href="/privacy" className="underline hover:text-foreground">
-            Datenschutzerklärung
-          </Link>
+          {PRIVACY_PAGE_EXISTS ? (
+            <Link href="/privacy" className="underline hover:text-foreground">
+              Datenschutzerklärung
+            </Link>
+          ) : (
+            'Datenschutzerklärung'
+          )}
           .
         </p>
 

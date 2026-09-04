@@ -112,10 +112,17 @@ export async function requestPasswordResetAction(
   const headerList = await headers()
   const origin = headerList.get('origin') ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''
 
-  // Supabase's recovery link always redirects with the session tokens in the
-  // URL fragment (#access_token=...), never a server-readable ?code= — so it
-  // goes straight to /reset-password, which handles the fragment client-side.
-  // No intermediate Route Handler can do this exchange; see design.md.
+  // The link's shape is decided by the email template, not here: it points at
+  // /auth/confirm with {{ .TokenHash }} (supabase/templates/recovery.html), so
+  // the token is redeemed server-side and works on any device (EC-7).
+  //
+  // The comment that used to sit here claimed the recovery link "always"
+  // arrives with the tokens in the URL fragment and never as a server-readable
+  // ?code=. That was wrong — ?code= was what our own client actually produced,
+  // and the belief is what kept the reset tied to one browser (BUG-6, BUG-15).
+  //
+  // redirectTo still names an allowed return target for Supabase's own
+  // validation; the template does not interpolate it.
   const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo: `${origin}/reset-password`,
   })

@@ -23,12 +23,14 @@
         +-- Bestätigungsmeldung, immer gleicher Wortlaut (AC-10, EC-3)
         +-- Zurück-Link -> LoginView
 
-/reset-password (Route, nur über den E-Mail-Link erreichbar, nicht verlinkt)
-+-- ResetPasswordForm (Client-Komponente — der Link liefert die Session nur im
-    |   URL-Fragment, das ist serverseitig unsichtbar, siehe Technical Decisions)
-    +-- "Link wird geprüft"-Zwischenzustand
+/auth/confirm (Server-Route, kein UI — Ziel des E-Mail-Links, ab 2026-09-03)
++-- verifyOtp({ type: 'recovery', token_hash }) -> setzt die Sitzung serverseitig
++-- Erfolg: Weiterleitung zu /reset-password · Fehler: zu /reset-password?error=1
+
+/reset-password (Route, nur über /auth/confirm erreichbar, nicht verlinkt)
++-- Serverseitige Sitzungsprüfung (die Sitzung besteht bereits, siehe Technical Decisions)
     +-- Fehlermeldung, wenn der Link ungültig oder abgelaufen ist (AC-12)
-    +-- Neues-Passwort-Feld
+    +-- ResetPasswordForm: Neues-Passwort-Feld
     +-- Absenden-Button "Passwort setzen"
 
 Proxy (`src/proxy.ts`, kein UI, appweit — hieß bis Next.js 16 "Middleware")
@@ -93,14 +95,21 @@ Passwort-Reset anfordern (Server Action, öffentlich)
   dieselbe Bestätigungsmeldung aus (AC-10, EC-3)
 - Existiert ein Konto zu dieser Adresse, verschickt Supabase Auth den Reset-Link zu /reset-password
 
-Neues Passwort setzen (Client-Komponente + Server Action, nur mit gültiger Recovery-Sitzung)
-- /reset-password prüft die Sitzung ausschließlich clientseitig: Der E-Mail-Link liefert die
-  Tokens ausschließlich im URL-Fragment (#access_token=... oder #error=...), das ein Server nie
-  sieht — der Browser-Supabase-Client erkennt es selbst (detectSessionInUrl, Standard) und setzt
-  die Sitzung als Cookie, bevor das Formular erscheint
+Reset-Link einlösen (Server-Route /auth/confirm, öffentlich — ab 2026-09-03)
+- Der E-Mail-Link zeigt auf /auth/confirm?token_hash=...&type=recovery&next=/reset-password.
+  Die Route ruft verifyOtp({ type, token_hash }) auf und setzt die Sitzung serverseitig als Cookie
+- Der token_hash ist an das Konto gebunden, nicht an den anfordernden Browser — deshalb funktioniert
+  der Link auf jedem Gerät (EC-7). Genau das konnte der alte Weg nicht: Er brauchte den
+  code_verifier als Cookie auf dem anfordernden Gerät (BUG-6)
+- Abgelehnt, wenn: token_hash fehlt, ungültig, abgelaufen oder bereits benutzt — Weiterleitung zu
+  /reset-password mit Fehlerkennzeichnung (AC-12)
+
+Neues Passwort setzen (Server-Komponente + Server Action, nur mit gültiger Recovery-Sitzung)
+- /reset-password prüft die Sitzung serverseitig; sie besteht zu diesem Zeitpunkt bereits, weil
+  /auth/confirm sie gesetzt hat. Kein clientseitiges Auslesen des URL-Fragments mehr
 - Erfolg: Passwort wird geändert (≥ 8 Zeichen, AC-11), die Server Action prüft die Sitzung
-  serverseitig zusätzlich (Verteidigung in der Tiefe), Weiterleitung zu /
-- Abgelehnt, wenn: das Fragment einen Fehler trägt oder nach der Prüfung keine Sitzung besteht —
+  erneut (Verteidigung in der Tiefe), Weiterleitung zu /
+- Abgelehnt, wenn: keine Sitzung besteht oder /auth/confirm einen Fehler gemeldet hat —
   Fehlermeldung statt Formular, mit der Möglichkeit einen neuen Link anzufordern (AC-12)
 
 Abmelden (Server Action, nur eingeloggt)
@@ -126,6 +135,7 @@ Routenschutz (Proxy `src/proxy.ts`, appweit)
 | Login-/Signup-Rate-Limit (`sign_in_sign_ups`) | Supabase Dashboard → Authentication → Rate Limits | Standardwert belassen (30 Versuche / 5 Minuten pro IP); nach dem ersten Deploy dort live gegen echte wiederholte Login-Versuche prüfen | Einziger Schutz gegen automatisiertes Durchprobieren — bewusst kein App-eigener Zähler (siehe Technical Decisions); lokal ließ sich das Limit nicht auslösen | AC-8, EC-4 |
 | Leaked-Password-Schutz | Supabase Dashboard → Authentication → Attack Protection | Bewusst aus | Reaktiv statt präventiv (siehe Technical Decisions); zusätzlich ein Paid-Plan-Feature | — |
 | Lokaler Spiegel der Passwort-Mindestlänge | `supabase/config.toml` → `[auth]` | `minimum_password_length = 8` (bereits gesetzt) | Damit `/qa` und die lokale Entwicklung gegen dieselbe Regel laufen wie später produktiv | AC-1, AC-11 |
+| E-Mail-Vorlage „Reset Password" | Supabase Dashboard → Authentication → Email Templates → Reset Password | Link auf `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password` setzen (identisch zur lokalen Vorlage in `supabase/templates/recovery.html`) | Ohne diese Vorlage verschickt das gehostete Projekt weiter den Standard-Link mit `?code=`, und BUG-6 ist in Produktion zurück — der Reset funktioniert dann nur auf dem anfordernden Gerät | AC-11, EC-7 |
 | Site URL & Redirect URLs | Supabase Dashboard → Authentication → URL Configuration | Site URL auf die echte Produktions-Domain setzen, Redirect URLs um `https://<domain>/**` erweitern | Ohne das bricht der Passwort-Reset-Link in Produktion genauso, wie er es hier lokal tat (siehe Technical Decisions) — geprüft mit demselben Verfahren wie AC-8, direkt nach dem ersten Deploy | AC-11, AC-12 |
 
 ## Technical Decisions
@@ -141,7 +151,8 @@ Routenschutz (Proxy `src/proxy.ts`, appweit)
 | Kein CAPTCHA bei der Registrierung im MVP | Bewusste produkttypische Entscheidung: reaktiv nachrüsten, wenn tatsächlich automatisierter Missbrauch auftritt, statt präventiv zu bauen — unabhängig von der geringen erwarteten Nutzerzahl (Product Decision, siehe `spec.md`) | CAPTCHA von Anfang an bauen | Registrierung bleibt bis zu einer Nachrüstung offen für Skripte; die 5/15-Min-Login-Sperre (AC-8) schützt nur den Login, nicht die Kontoerstellung selbst | 2026-08-31 |
 | Leaked-Password-Schutz (HaveIBeenPwned) bewusst nicht aktiviert | Dieselbe reaktive Logik; zusätzlich ein Paid-Plan-Feature bei Supabase, Projekt hat kein Budget über kostenlose Tiers hinaus (`docs/PRD.md` → Rahmenbedingungen) | Aktivieren und Kosten tragen | Passwörter aus bekannten Datenlecks werden nicht abgefangen | 2026-08-31 |
 | Nach erfolgreichem Passwort-Reset wird der Nutzer direkt eingeloggt statt zu `/login` zurückgeschickt | Die von Supabase erzeugte Recovery-Sitzung ist bereits eine gültige Sitzung; ein Zwischenschritt wäre reine Reibung | Zu `/login` umleiten und erneuten Login verlangen | Wer den Link auf einem fremden Gerät öffnet, ist dort automatisch eingeloggt, bis er sich abmeldet | 2026-08-31 |
-| `/reset-password` prüft die Recovery-Sitzung clientseitig (`getSession()` im Browser-Client) statt über einen Server-Route-Handler; `src/app/auth/confirm/route.ts` (ursprünglich gebaut) wieder entfernt | Gegen die lokale Instanz mit zwei verschiedenen Aufrufern nachvollzogen — **das Ergebnis hängt davon ab, wer `resetPasswordForEmail` aufruft**: Ein rohes `supabase-js`-Skript ohne `@supabase/ssr` erzeugte einen Link, der mit den Tokens im **URL-Fragment** weiterleitet (`#access_token=...`, bzw. bei Fehler `#error=...`); derselbe Aufruf über unsere echte `requestPasswordResetAction` (unser Server-Client aus `@supabase/ssr`, der standardmäßig PKCE nutzt) erzeugte stattdessen einen Link mit `?code=...`. Ein Fragment erreicht den Server nie, ein Route Handler mit `exchangeCodeForSession(code)` hätte also im ersten Fall nichts zu sehen bekommen. Der Browser-Client löst beide Fälle transparent: `detectSessionInUrl` (Standard an) erkennt sowohl das Fragment als auch `?code=` und stellt die Sitzung her, ganz ohne dass unser Code wissen muss, welche Form gerade vorliegt — genau deshalb ist die clientseitige Prüfung robuster als ein Route Handler, der sich auf eine bestimmte Form festlegen müsste | Server-Route-Handler mit `exchangeCodeForSession` (ursprünglicher Ansatz — funktioniert nur für die `?code=`-Form, per Playwright-Test bestätigt; wäre für die Fragment-Form blind gewesen) | **Diese Lösung hängt von der aktuellen lokalen `flow_type`-Konfiguration ab und muss nach dem ersten Cloud-Deploy erneut verifiziert werden** (zusammen mit dem AC-8-Rate-Limit-Test) — weicht die Cloud-Standardeinstellung ab, könnte derselbe Bug in anderer Form zurückkommen. Die clientseitige Lösung federt genau dieses Risiko ab, da sie beide Formen abdeckt, statt sich auf eine festzulegen | 2026-08-31 |
+| ⚠️ **ÜBERHOLT am 2026-09-03 durch BUG-6 — siehe die Zeile darunter.** `/reset-password` prüft die Recovery-Sitzung clientseitig (`getSession()` im Browser-Client) statt über einen Server-Route-Handler; `src/app/auth/confirm/route.ts` (ursprünglich gebaut) wieder entfernt | Gegen die lokale Instanz mit zwei verschiedenen Aufrufern nachvollzogen — **das Ergebnis hängt davon ab, wer `resetPasswordForEmail` aufruft**: Ein rohes `supabase-js`-Skript ohne `@supabase/ssr` erzeugte einen Link, der mit den Tokens im **URL-Fragment** weiterleitet (`#access_token=...`, bzw. bei Fehler `#error=...`); derselbe Aufruf über unsere echte `requestPasswordResetAction` (unser Server-Client aus `@supabase/ssr`, der standardmäßig PKCE nutzt) erzeugte stattdessen einen Link mit `?code=...`. Ein Fragment erreicht den Server nie, ein Route Handler mit `exchangeCodeForSession(code)` hätte also im ersten Fall nichts zu sehen bekommen. Der Browser-Client löst beide Fälle transparent: `detectSessionInUrl` (Standard an) erkennt sowohl das Fragment als auch `?code=` und stellt die Sitzung her, ganz ohne dass unser Code wissen muss, welche Form gerade vorliegt — genau deshalb ist die clientseitige Prüfung robuster als ein Route Handler, der sich auf eine bestimmte Form festlegen müsste | Server-Route-Handler mit `exchangeCodeForSession` (ursprünglicher Ansatz — funktioniert nur für die `?code=`-Form, per Playwright-Test bestätigt; wäre für die Fragment-Form blind gewesen) | **Diese Lösung hängt von der aktuellen lokalen `flow_type`-Konfiguration ab und muss nach dem ersten Cloud-Deploy erneut verifiziert werden** (zusammen mit dem AC-8-Rate-Limit-Test) — weicht die Cloud-Standardeinstellung ab, könnte derselbe Bug in anderer Form zurückkommen. Die clientseitige Lösung federt genau dieses Risiko ab, da sie beide Formen abdeckt, statt sich auf eine festzulegen | 2026-08-31 |
+| **Passwort-Reset auf `token_hash` + `verifyOtp` in einer Server-Route umstellen** (ersetzt die überholte Zeile darüber) | Die Abwägung vom 2026-08-31 stellte zwei Optionen gegenüber — Tokens im URL-Fragment vs. `?code=` — und wählte die clientseitige Lösung, weil sie **beide Formen** abdeckt. Übersehen wurde, dass beide betrachteten Wege dieselbe Schwäche teilen: Sie brauchen Zustand **auf dem anfordernden Gerät**. Bei PKCE liegt der `code_verifier` als Cookie dort; wer den Link woanders öffnet, hat ihn nicht. Die clientseitige Lösung deckte also beide *Formen* ab, aber nur *ein Gerät* — und der ursprüngliche `exchangeCodeForSession`-Handler wäre an derselben Cookie-Bindung ebenso gescheitert, nur mit anderer Fehlermeldung. Der von Supabase für serverseitige Anwendungen empfohlene dritte Weg wurde nie geprüft: In der E-Mail-Vorlage `{{ .TokenHash }}` statt des Standard-Links, dazu eine Route, die `verifyOtp({ type: 'recovery', token_hash })` aufruft. Der braucht **kein** `code_verifier`-Cookie, ist damit an das Konto statt an den Browser gebunden und erfüllt EC-7 | Bei der clientseitigen Lösung bleiben und die Geräte-Bindung als Einschränkung dokumentieren — verworfen, weil AC-11 fremde Geräte nie ausgeschlossen hat (siehe Product Decision 2026-09-03) | Die E-Mail-Vorlage wird Teil der Konfiguration und muss im gehosteten Projekt erneut gesetzt werden (neuer `[user]`-Task T18). Dafür entfällt die Abhängigkeit von der `flow_type`-Einstellung, die die überholte Entscheidung ausdrücklich als offenes Risiko notiert hatte. Zusätzlich zu prüfen: Ob das Session-Cookie damit `HttpOnly` werden kann (BUG-13) — der Grund dagegen war, dass der Client die Sitzung selbst lesen musste, und der entfällt | 2026-09-03 |
 | `additional_redirect_urls` in `supabase/config.toml` auf `["http://127.0.0.1:3000/**", "http://localhost:3000/**"]` erweitert (Wildcards) | Der ursprüngliche Wert (`https://127.0.0.1:3000`, falsches Schema, aus dem Scaffold übernommen und nie an dieses Feature angepasst) deckte unsere tatsächliche `redirectTo`-URL nicht ab. Zusätzlich verglich GoTrues eigener Fast-Path (`site_url`-Vergleich) den Hostnamen **wörtlich** — `localhost` und `127.0.0.1` gelten als verschieden, obwohl beide auf denselben Loopback zeigen. Ohne Treffer im Fast-Path **und** in der Allow-List verwarf Supabase unsere `redirectTo`-Adresse still und fiel auf `site_url` (`/`) zurück — dort bestand keine Sitzung, der Proxy schickte auf `/login`. Genau das vom Nutzer beobachtete Symptom, gegen die lokale Instanz nachgestellt und mit dem Fix behoben (E-Mail-Link zeigt jetzt korrekt auf `/reset-password`) | `site_url` selbst auf `localhost` ändern | Deckt nur die lokale Entwicklung ab. **Muss beim ersten `/deploy` im Supabase-Dashboard des gehosteten Projekts (Authentication → URL Configuration) auf die echte Produktions-Domain gesetzt werden** — sonst tritt exakt dieser Bug dort erneut auf, nur mit der Produktions-URL statt `localhost` | 2026-08-31 |
 
 ## Open Questions

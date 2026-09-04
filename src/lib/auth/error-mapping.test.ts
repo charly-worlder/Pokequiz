@@ -7,6 +7,7 @@ import {
   THROTTLED_MESSAGE,
   WRONG_CREDENTIALS_MESSAGE,
   RESET_CONFIRMATION_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
 } from './error-mapping'
 
 // These shapes (status/code combinations) were verified against a running
@@ -74,5 +75,33 @@ describe('fieldErrorsFromZod', () => {
       { path: ['password'], message: 'third' },
     ])
     expect(result).toEqual({ email: 'first', password: 'third' })
+  })
+})
+
+/**
+ * BUG-9: Ein Ausfall von Supabase Auth wurde dem Nutzer als „Passwort falsch"
+ * gemeldet, weil alles außer einem 429 auf WRONG_CREDENTIALS durchfiel. Er hat
+ * dann ein Passwort zurückgesetzt, das nie das Problem war.
+ *
+ * Der erste Test hier ist der eigentliche Wächter; die beiden darüber sichern
+ * ab, dass die Trennung AC-7 nicht bricht — falsches Passwort und unbekannte
+ * Adresse müssen weiterhin ununterscheidbar bleiben.
+ */
+describe('mapLoginError — Ausfall vs. falsche Zugangsdaten (BUG-9)', () => {
+  it('meldet einen Fehler ohne Status als Verbindungsproblem, nicht als falsches Passwort', () => {
+    expect(mapLoginError({}).error).toBe(NETWORK_ERROR_MESSAGE)
+  })
+
+  it('meldet einen Serverfehler als Verbindungsproblem', () => {
+    expect(mapLoginError({ status: 500 }).error).toBe(NETWORK_ERROR_MESSAGE)
+    expect(mapLoginError({ status: 503 }).error).toBe(NETWORK_ERROR_MESSAGE)
+  })
+
+  it('hält AC-7: falsches Passwort und unbekannte Adresse bleiben ununterscheidbar', () => {
+    const wrongPassword = mapLoginError({ status: 400, code: 'invalid_credentials' })
+    const unknownEmail = mapLoginError({ status: 400, code: 'invalid_credentials' })
+
+    expect(wrongPassword.error).toBe(WRONG_CREDENTIALS_MESSAGE)
+    expect(unknownEmail.error).toBe(wrongPassword.error)
   })
 })

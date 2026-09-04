@@ -53,6 +53,11 @@
 
   · files: src/components/quiz/quiz-screen.tsx, src/app/page.tsx  · → AC-2, AC-4, AC-6, AC-9, AC-10, AC-13, AC-17, AC-18, AC-19, EC-1, EC-7, EC-9, EC-10
 
+<!-- T11 nachgetragen am 2026-09-03 durch /refine PROJ-2. Anlass: BUG-23 aus dem
+     QA-Lauf zu PROJ-1 — der Bestenlisten-Zugang in der Kopfzeile führt auf eine 404. -->
+
+- [x] T11  Kopfzeile: Der Zugang zur Bestenliste erscheint nur, wenn `/leaderboard` existiert — bis dahin gar nicht statt als toter Link. Nach demselben Muster wie `LEGAL_PAGES` in `site-footer.tsx`, damit PROJ-3 eine erkennbare Stelle zum Freischalten hat  · files: src/components/shell/site-header.tsx  · → AC-21
+
 ## Backlog — bewusst offen
 
 Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht. Diese Punkte haben **kein Acceptance Criterion**; sie werden erst dann Aufgaben, wenn jemand sie ausdrücklich in die Spec holt (`/refine PROJ-2`).

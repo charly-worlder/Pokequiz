@@ -155,7 +155,22 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+# Muss die Adresse sein, unter der die App tatsächlich ausgeliefert wird — hier
+# `localhost:3000`, wie `npm run dev` und die E2E-Suite sie verwenden.
+#
+# Stand bis 2026-09-03 auf `127.0.0.1:3000`, also auf einem anderen Host als die
+# laufende App. Der Mail-Link zeigte damit auf 127.0.0.1, während der Next-Dev-Server
+# nur seinem eigenen Origin vertraut: Er blockiert `/_next/*`-Ressourcen für jeden
+# anderen Host ("Blocked cross-origin request to Next.js dev resource"). Ohne diese
+# Chunks hydratisiert React nicht, das Formular fällt auf einen nativen Submit
+# zurück und die Server Action wird nie aufgerufen — der Reset war lokal
+# unbenutzbar, ohne dass an der Anwendung etwas defekt war.
+#
+# In Produktion sind Site URL und App-Domain ohnehin dieselbe Adresse; diese Zeile
+# stellt lokal denselben Zustand her. Die Unabhängigkeit vom Host wird trotzdem
+# erzwungen, aber an der richtigen Stelle: `/auth/confirm` leitet relativ weiter
+# (siehe `src/app/auth/confirm/route.ts`), abgesichert durch Unit-Tests.
+site_url = "http://localhost:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
@@ -249,6 +264,14 @@ otp_expiry = 3600
 # [auth.email.template.invite]
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
+
+# PROJ-1 / EC-7: eigene Reset-Vorlage, damit der Link auf /auth/confirm mit
+# {{ .TokenHash }} zeigt statt auf den PKCE-Standardpfad. Ohne das funktioniert
+# der Reset nur in dem Browser, in dem er angefordert wurde (BUG-6).
+# Im gehosteten Projekt identisch zu setzen — tasks.md → T18.
+[auth.email.template.recovery]
+subject = "Passwort zurücksetzen"
+content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
