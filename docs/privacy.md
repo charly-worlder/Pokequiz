@@ -55,6 +55,7 @@
 ## Offene Punkte
 
 - [ ] AVV mit Supabase abschließen (Checkbox im Dashboard)
+- [ ] **SMTP-Anbieter wird ein weiterer Auftragsverarbeiter.** Der eingebaute Supabase-Versand reicht für den Produktivbetrieb nicht (nur Team-Adressen, 2 Mails/Stunde) — siehe `docs/PRD.md` → Rahmenbedingungen. Der gewählte Anbieter (Resend, Brevo o. a.) verarbeitet E-Mail-Adressen der Nutzer und braucht daher einen AVV, einen Eintrag in der Verarbeiter-Tabelle oben und eine Prüfung, ob er außerhalb der angemessenen Länder sitzt. Vor dem Livegang zu klären, zusammen mit der Absender-Domain
 - [ ] Hosting-Anbieter (Vercel/Hostinger) bei `/deploy` festlegen und hier als Verarbeiter nachtragen
 - [ ] Verantwortlicher (Name/Anschrift) bei PROJ-4 ergänzen
 - [ ] Auskunfts-, Berichtigungs- und Löschprozess bauen (PROJ-4)

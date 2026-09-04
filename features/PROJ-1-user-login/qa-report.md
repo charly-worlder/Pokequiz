@@ -764,3 +764,32 @@ Keine neu geschrieben. Die drei Tests zu AC-15 (`register-view.test.tsx`) stamme
 - **Production Ready: NEIN** — unverändert zwei High-Bugs (BUG-7, BUG-8), beide nur am gehosteten Projekt behebbar.
 
 > **Was dieser Lauf für den PR bedeutet:** Alles, was auf diesem Branch gebaut wurde, ist unabhängig bestätigt. Was PROJ-1 von `Approved` trennt, liegt nicht im Code, sondern im fehlenden gehosteten Supabase-Projekt. BUG-24 ist ein echter, neuer Befund — aber er beschreibt Verhalten, das **vor** diesem Branch schon so war (kein Timeout gab es nie), nicht eine Regression durch ihn.
+
+---
+
+## Nachtrag — 2026-09-04: T18 ist ohne eigenen SMTP-Dienst nicht setzbar
+
+**Kein QA-Lauf.** Festgehalten beim Versuch, das gehostete Supabase-Projekt anzubinden, damit BUG-7 und BUG-8 endlich prüfbar werden.
+
+`npx supabase config push` gegen das neu angelegte Projekt scheitert:
+
+```
+unexpected status 400: {"message":"Email template modification is not available for
+free tier projects using the default email provider. Please upgrade your plan or
+configure a custom SMTP provider."}
+```
+
+**Der eigentliche Befund ist größer als die Vorlage.** Supabases Dokumentation zum eingebauten Mailversand nennt drei Einschränkungen: Zustellung **ausschließlich an Adressen im Team des Projekts** (alle anderen werden mit „Email address not authorized" abgelehnt), **2 Nachrichten pro Stunde**, und ausdrücklich **kein Produktivbetrieb**.
+
+Für dieses Produkt heißt das: **Der Passwort-Reset funktioniert für echte Spieler nicht** — nicht „mit dem falschen Link", sondern es kommt keine Mail an. Zusammen mit der Produktentscheidung gegen eine E-Mail-Bestätigung (`spec.md`, Decision Log) ist der Reset der einzige Weg zurück ins Konto.
+
+**Konsequenzen:**
+- **T18 bleibt offen** und damit **BUG-8 (High)**. Nicht wegen eines Codefehlers — die Vorlage existiert, ist lokal aktiv und in drei Browser-Engines verifiziert (Lauf vom 2026-09-04) —, sondern weil das gehostete Projekt sie nicht annimmt.
+- **AC-11, AC-12 und EC-7 sind gegen das gehostete Projekt nicht verifizierbar**, solange kein Mailversand an beliebige Adressen möglich ist.
+- **PROJ-1 bleibt `In Review`** (Entscheidung des Nutzers am 2026-09-04). Der Status wird nicht auf `Approved` gehoben, obwohl der Code fertig ist: Eine zugesagte Funktion ist in Produktion nachweislich nicht lauffähig, und ein Status, der das verschweigt, wäre wertlos.
+
+**Was es braucht:** einen SMTP-Anbieter mit kostenlosem Kontingent (Resend, Brevo) **und eine eigene Absender-Domain** — ohne verifizierte Domain stellt praktisch jeder Anbieter nur an die Adresse des Kontoinhabers zu. Stand 2026-09-04 ist keine Domain vorhanden; nachgetragen in `docs/PRD.md` → Rahmenbedingungen und in `features/INDEX.md` → Deploy-Blocker.
+
+**Weiterhin ohne SMTP prüfbar und noch offen:** AC-8 / EC-4 (Rate-Limit, braucht keine E-Mail) und T4 (Passwort-Mindestlänge, ein Dashboard-Feld). Beide sind gegen das gehostete Projekt jederzeit nachholbar und würden BUG-7 schließen sowie die offene Frage aus BUG-21 beantworten, welche IP-Adresse Supabase überhaupt sieht.
+
+**Warnung zu `supabase config push`:** Das Kommando überträgt den kompletten `[auth]`-Block aus `config.toml` — darunter `site_url = "http://localhost:3000"` und die lokalen `additional_redirect_urls`. Würde es durchlaufen, trüge das Produktivprojekt anschließend `localhost` als Site-URL und jeder Mail-Link zeigte ins Leere. Solange `config.toml` lokale Entwicklungswerte enthält, ist das Kommando für dieses Projekt ungeeignet; die Einstellungen gehören einzeln ins Dashboard.
