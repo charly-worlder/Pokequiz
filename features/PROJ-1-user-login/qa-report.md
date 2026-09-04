@@ -680,3 +680,87 @@ Keine neu geschrieben. Die drei Tests zu AC-15 (`register-view.test.tsx`) stamme
 > **Die beiden verbleibenden High-Bugs sind kein Code.** BUG-7 (Drosselung) und BUG-8 (T4, T18) hängen beide ausschließlich am **gehosteten Supabase-Projekt**, das es noch nicht gibt. Lokal ist an ihnen nichts zu reparieren: Der lokale Container setzt das Rate-Limit nicht durch, und die beiden Dashboard-Einstellungen existieren nirgends, wo man sie setzen könnte. **PROJ-1 kann `Approved` nicht erreichen, bevor dieses Projekt angelegt ist** — und dafür genügt das Anlegen, ein App-Deploy ist nicht nötig.
 
 > **BUG-21 ist der unangenehmste neue Befund**, weil er eine Zusage betrifft und nicht nur eine Umsetzung: AC-8 verspricht eine Drosselung „von derselben IP-Adresse", aber die Architektur — Login über Server Actions — lässt Supabase überhaupt nur die IP des Anwendungsservers sehen. Selbst ein korrekt konfiguriertes Limit würde dann entweder alle Nutzer gemeinsam aussperren oder nie greifen. Das ist vor dem Launch zu klären und gehört vermutlich in ein `/refine` von AC-8, nicht in einen Fix.
+
+---
+
+## QA-Lauf — 2026-09-04, Delta nach BUG-20/9/11 und den Link-Fixes (BUG-10/23)
+
+**Anlass und Scope:** `/build` hat vier Fixes geliefert — die Open-Redirect-Positivliste (BUG-20), die Ausfall-Meldung beim Login (BUG-9), die Passwort-Obergrenze (BUG-11) und die beiden toten Links (BUG-10 in PROJ-1, BUG-23 in PROJ-2s Kopfzeile). **Dies ist bewusst ein Delta-Lauf**, kein vierter vollständiger Sweep: Nach drei kompletten Durchgängen am Vortag mit konsistenten Ergebnissen wurden nur die betroffenen Kriterien neu verifiziert, plus Regression und die Testsuiten. Alles, was hier nicht als geprüft erscheint, trägt den Stand des Laufs vom 2026-09-03 (dritter Lauf) — nicht ein neues Häkchen.
+
+**Aufbau:** Zwei `qa-engineer`-Verifizierer in getrennten Kontexten. Bahn A: AC-14, AC-7/EC-6, Passwortlänge, Reset über den echten Mail-Link, Regression, Suiten. Bahn B: `/auth/confirm` mit systematischem Angriff auf `next`, **mit gültigem Token**.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-24**.
+
+### Die vier Fixes — Ergebnis
+
+| Fix | Ergebnis | Beleg |
+|-----|----------|-------|
+| **BUG-20** Open Redirect | ✅ **geschlossen** | ~30 Varianten mit gültigem Recovery-Token — absolut, `//`, Backslash roh/kodiert, doppelt kodiert, Tab/Newline, `@`-Trick, Traversal, Null-Byte, 5000 Zeichen, `next` mehrfach — **jede** → `Location: /reset-password`. Auch `next=/` und `next=/login` kollabieren auf die Reset-Seite: Die Liste hat genau einen Eintrag |
+| **BUG-9** Ausfall als „Passwort falsch" | ⚠️ **teilweise** | Die Variante „Fehlerobjekt kommt zurück" ist per Unit-Test belegt (`error-mapping.test.ts:91-97`). Die Variante „Backend antwortet gar nicht" zeigt ein **anderes** Versagen → **BUG-24** |
+| **BUG-11** Passwort-Obergrenze | ✅ **geschlossen** | 73 Zeichen → Feldmeldung am Passwortfeld, kein Konto; **72 Zeichen → angenommen** (inklusiv, kein Off-by-one); 40 × `ä` (80 Byte) → abgelehnt. Aber: Meldung dabei irreführend → **BUG-25** |
+| **BUG-10** Datenschutz-Link → 404 | ✅ **geschlossen** | Hinweis sichtbar, **0** Anker im Absatz, **0** Treffer für `a[href*="privacy"]`; `/privacy` → 404, Build-Routenliste kennt sie nicht. AC-14 im neuen Wortlaut erfüllt |
+| **BUG-23** Kopfzeilen-Link → 404 (PROJ-2) | ✅ **geschlossen** | Kopfzeile angemeldet: Wortmarke, Chip, „Abmelden" — **0** `a[href*="leaderboard"]`, 0 Vorkommen „Bestenliste"; `/leaderboard` → 404. AC-21 im neuen Wortlaut erfüllt |
+
+### Neu verifizierte Kriterien
+
+| ID | Ergebnis | Beleg |
+|----|----------|-------|
+| AC-7 | [x] PASS | Falsches Passwort und unbekannte Adresse zeichengleich (`a === b` → `true`); 400 und 401 laufen auf dieselbe Konstante |
+| AC-10 | [x] PASS | Bestätigungsmeldung, Mail in Mailpit |
+| AC-11 | [x] PASS | Neues Passwort im fremden Kontext gesetzt; Login damit in einem **dritten** frischen Kontext erfolgreich |
+| AC-12 | [x] PASS | Benutzter Link und Müll-Token → Fehlerzustand mit „Neuen Link anfordern"; „abgelaufen" nach 1 h weiterhin nicht prüfbar |
+| AC-14 | [x] PASS | Neuer Wortlaut: Hinweis ja, Link nein, solange `/privacy` fehlt |
+| EC-6 | [ ] **FAIL** | Siehe BUG-24 |
+| EC-7 | [x] PASS | Link **unverändert** aus Mailpit, frischer Kontext ohne Cookies → Formular, Sitzung serverseitig über `verifyOtp` |
+| PROJ-2 AC-21 | [x] PASS | Neuer Wortlaut: kein Bestenlisten-Zugang, solange `/leaderboard` fehlt |
+
+### Bugs
+
+#### BUG-24: Login hängt bei nicht antwortendem Auth-Backend unbegrenzt — ohne Meldung, ohne „Erneut versuchen"
+- **Severity: Medium** · betrifft **EC-6**
+- **Beleg:** Auth-Container per `docker pause` angehalten (17:56:57Z), Login abgeschickt → Button **12 Sekunden** in „Einloggen …", `errors=[]`, sekündlich protokolliert. Erst das `unpause` (17:57:09Z) löste den Request; danach lief der Login regulär durch. Container danach `running, paused=false, healthy`.
+- **Ursache:** Im gesamten Auth-Pfad gibt es **keinen Timeout** — `grep -rn "AbortSignal\|timeout" src/lib/auth/ src/lib/supabase/` liefert null Treffer. Der PokeAPI-Client desselben Projekts hat genau das (`pokeapi/client.ts:106-111`). `error-mapping.ts` und `run-action.ts` greifen erst, wenn eine Antwort oder eine Exception zurückkommt — bei einem hängenden Backend kommt beides nie.
+- **Einordnung gegenüber BUG-9:** BUG-9 war „falsche Meldung, wenn ein Fehler zurückkommt" und ist behoben. BUG-24 ist „gar keine Meldung, wenn nichts zurückkommt". EC-6 verlangt „eine Fehlermeldung mit einer Erneut-versuchen-Möglichkeit" — für die häufigste Ausfallform bekommt der Nutzer unbegrenzt gar nichts.
+- **Nicht geprüft:** die Variante „Verbindung aktiv abgelehnt" (`docker stop`), weil das die parallele Bahn härter getroffen hätte. Dafür stehen die Unit-Tests.
+
+#### BUG-25: „Höchstens 72 Zeichen" bei einer Eingabe von 40 Zeichen
+- **Severity: Low** · betrifft **AC-1, AC-11**
+- 40 × `ä` = 40 Zeichen, 80 Byte → korrekt abgelehnt, aber die Meldung nennt eine Zeichenzahl, die der Nutzer nicht überschritten hat. Der Klammerzusatz erklärt das Prinzip, sagt aber weder die Byte-Grenze noch, um wie viel zu kürzen ist.
+- **Dazu:** Die 72-Byte-Grenze steht **nirgends im Vertrag** — AC-1/AC-11 kennen nur „mind. 8 Zeichen". Sinnvoll gebaut, aber unspezifiziert. Kandidat für `/refine`.
+
+#### Unverändert offen
+- **BUG-7 (High)** — Drosselung, nur gehostet prüfbar.
+- **BUG-8 (High)** — T4 und T18 offen. Bahn B stuft T18 als Medium ein („Template-Konfiguration, keine Credential-Prüfung"), Bahn A als High (Regel). Der Report führt beide unter BUG-8 weiter; die Regel des Skills ist eindeutig, und ohne T18 bricht EC-7 live.
+- **BUG-12** — Security-Header fehlen. **Abweichende Einstufung:** Bahn B nennt es diesmal **High** nach Checklisten-Lesart; die drei Vorläufe sagten Medium. Beides steht hier — nicht stillschweigend geglättet. Als Deploy-Blocker ist es ohnehin geführt.
+- **BUG-17 (Medium)** — bestätigt: gewöhnliche Passwort-Sitzung (`amr: password`) rendert das Reset-Formular. **Neu belegt:** `config.toml:245` `secure_password_change = false` — Step-up-Auth beim Passwortwechsel ist aus. Gehört zu einer Refine-Entscheidung.
+- **BUG-14, BUG-18, BUG-19, BUG-21, BUG-22** — unverändert.
+
+### Regression und automatisierte Tests
+
+- **`npm test`: 12 Dateien, 121 Tests, alle grün.**
+- **E2E: 24/24** über Chromium, Firefox, Mobile Safari — keine Flakes.
+- **PROJ-2 Kernpfad:** Runde starten, Bild + vier Optionen, Serie zählt hoch, neue Frage — intakt. AC-22 mitgeprüft.
+- **`npm run lint`** und **`npm run build`**: grün.
+
+### Not Verified In This Run
+
+- [!] **Alle nicht oben genannten AC/EC** — bewusst nicht neu geprüft (Delta-Lauf); Stand vom dritten Lauf am 2026-09-03 gilt
+- [!] **EC-6, Variante „aktiv abgelehnt"** — nicht provoziert, nur Unit-Tests
+- [!] **AC-12 „abgelaufen"** — 1 h Gültigkeit, nicht herbeiführbar
+- [!] **AC-7 Timing unter Last** — Messung enthielt ein fixes 4-s-Fenster, kein echter Verteilungsvergleich
+- [!] **AC-8 / EC-4, T4 / T18, BUG-21, Security-Header live** — nur gegen das gehostete Projekt entscheidbar
+- [!] **Responsive Darstellung und Kontrast** von AC-14/AC-15 — DOM-Sichtbarkeit geprüft, nicht Layout
+- [!] **Brute Force in diesem Lauf** — nicht Schwerpunkt der Security-Bahn; Stand vom Vortag gilt
+
+### Auch bemerkt (unverifiziert, nicht bewertet)
+- Nach der Reset-Anfrage trägt der anfordernde Kontext drei PKCE-Cookies (`…-code-verifier`), obwohl der Ablauf keinen `code_verifier` mehr benutzt — toter Ballast; die Namen tragen `127`, während `site_url` auf `localhost` steht.
+- `/reset-password` rendert bei gültigem Link die Kopfzeile im **angemeldeten** Zustand (Chip + „Abmelden"). PROJ-2s AC-22 nennt für `/reset-password` ausdrücklich den abgemeldeten Zustand — möglicher Widerspruch, gehört PROJ-2.
+
+### Verdikt
+
+- **Vier Fixes:** BUG-20, BUG-11, BUG-10, BUG-23 **geschlossen** · BUG-9 teilweise (Rest → BUG-24)
+- **Bugs neu:** 1 Medium (BUG-24), 1 Low (BUG-25)
+- **Automatisierte Tests:** 121/121 · E2E 24/24 · Lint und Build grün
+- **Production Ready: NEIN** — unverändert zwei High-Bugs (BUG-7, BUG-8), beide nur am gehosteten Projekt behebbar.
+
+> **Was dieser Lauf für den PR bedeutet:** Alles, was auf diesem Branch gebaut wurde, ist unabhängig bestätigt. Was PROJ-1 von `Approved` trennt, liegt nicht im Code, sondern im fehlenden gehosteten Supabase-Projekt. BUG-24 ist ein echter, neuer Befund — aber er beschreibt Verhalten, das **vor** diesem Branch schon so war (kein Timeout gab es nie), nicht eine Regression durch ihn.
