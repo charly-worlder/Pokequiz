@@ -52,6 +52,7 @@
      dass der Trainername veröffentlicht wird, ohne dass die Registrierung es sagt.
      Nicht [P]: berührt dieselbe Datei wie T9 und läuft deshalb nie parallel dazu. -->
 
+- [ ] T19  RegisterView: Der Datenschutz-Hinweis trägt einen Link nur, wenn `/privacy` existiert — bis dahin unverlinkter Text. Nach dem Muster von `site-footer.tsx` (`LEGAL_PAGES`), damit PROJ-4 beide Stellen an einer erkennbaren Konvention findet  · files: src/components/auth/register-view.tsx  · → AC-14
 - [x] T14  RegisterView: Hinweistext am Trainername-Feld — „Dein Trainername ist für alle Spieler auf der Bestenliste sichtbar und kann später nicht mehr geändert werden." Dauerhaft sichtbar (kein Tooltip, kein Aufklappen), dem Feld per `aria-describedby` zugeordnet, damit Screenreader ihn beim Fokussieren vorlesen. **Keine** Bestätigungs-Checkbox  · files: src/components/auth/register-view.tsx  · → AC-15
 
 ## Parallelization
