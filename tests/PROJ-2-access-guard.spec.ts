@@ -37,9 +37,15 @@ test('Ohne Anmeldung führt jede geschützte Route nach /login (AC-13, AC-22, AC
 test('Angemeldet ins Spiel, nach dem Abmelden wieder gesperrt (AC-13, AC-21)', async ({ page }) => {
   const { trainer } = await register(page, 'e2eGate')
 
-  // AC-21 — die Kopfzeile führt den Trainernamen und den Weg zur Bestenliste.
+  // AC-21 — die Kopfzeile führt den Trainernamen; der Zugang zur Bestenliste
+  // erscheint erst, wenn PROJ-3 die Seite gebaut hat. Vorher war er da und
+  // führte jeden angemeldeten Nutzer auf eine 404 (BUG-23) — dieselbe Regel,
+  // die AC-23 eine Zeile weiter unten für die Fußzeile durchsetzt.
+  //
+  // Dieser Test dreht sich um, sobald PROJ-3 liefert: dann muss der Link da
+  // sein. Genau deshalb steht er hier und nicht nur als Kommentar im Code.
   const header = page.getByRole('banner')
-  await expect(header.getByRole('link', { name: 'Bestenliste' })).toBeVisible()
+  await expect(header.getByRole('link', { name: 'Bestenliste' })).toHaveCount(0)
   await expect(header).toContainText(trainer)
 
   // Eine gültige Sitzung wird von /login weggeschickt, statt das Formular zu zeigen.

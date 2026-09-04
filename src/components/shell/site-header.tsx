@@ -11,6 +11,19 @@ import { Wordmark } from './wordmark'
  *
  * spec.md AC-21 (signed in), AC-22 (signed out), AC-24 (mobile: no burger).
  */
+
+/**
+ * spec.md AC-21 — der Zugang zur Bestenliste erscheint erst, wenn es die Seite
+ * gibt.
+ *
+ * Bis dahin verlinkte die Kopfzeile `/leaderboard`, und jeder angemeldete
+ * Nutzer landete dort auf einer 404 (BUG-23). Die Fußzeile nebenan befolgt die
+ * Regel längst über eine leere `LEGAL_PAGES`-Liste; für die Kopfzeile war sie
+ * nie angewandt worden, obwohl es dieselbe Situation ist.
+ *
+ * **PROJ-3 baut `/leaderboard` und setzt dieses Flag auf `true`.**
+ */
+const LEADERBOARD_PAGE_EXISTS = false
 export async function SiteHeader() {
   const supabase = await createClient()
   const {
@@ -40,9 +53,11 @@ export async function SiteHeader() {
 
         {user ? (
           <div className="flex items-center gap-2 sm:gap-3">
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/leaderboard">Bestenliste</Link>
-            </Button>
+            {LEADERBOARD_PAGE_EXISTS && (
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/leaderboard">Bestenliste</Link>
+              </Button>
+            )}
 
             {/* AC-24: below 640px the chip shrinks to the initial — never a
                 burger menu, because two items fit in the header either way. */}

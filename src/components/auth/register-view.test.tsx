@@ -58,3 +58,28 @@ describe('RegisterView — Hinweis am Trainername-Feld (AC-15)', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * spec.md AC-14 — der Datenschutz-Hinweis steht immer, der Link erst, wenn die
+ * Seite existiert.
+ *
+ * Vorher zeigte er auf `/privacy` und damit auf eine 404 (BUG-10). Der alte
+ * Wortlaut von AC-14 verlangte einen sichtbaren Link, ohne je zu verlangen,
+ * dass er irgendwohin führt — der Code erfüllte ihn buchstabengetreu und
+ * verfehlte die Absicht. Dieser Test dreht sich um, sobald PROJ-4 `/privacy`
+ * baut: dann muss der Link da sein.
+ */
+describe('RegisterView — Datenschutz-Hinweis (AC-14)', () => {
+  it('zeigt den Hinweis auf die Datenschutzerklärung', () => {
+    render(<RegisterView onSwitchToLogin={() => {}} />)
+
+    expect(screen.getByText(/Datenschutzerklärung/)).toBeInTheDocument()
+  })
+
+  it('verlinkt ihn nicht, solange die Seite nicht existiert', () => {
+    render(<RegisterView onSwitchToLogin={() => {}} />)
+
+    expect(screen.queryByRole('link', { name: 'Datenschutzerklärung' })).not.toBeInTheDocument()
+    expect(document.querySelector('a[href="/privacy"]')).toBeNull()
+  })
+})
