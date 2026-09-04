@@ -38,6 +38,8 @@
 | Feature | Blocker | Behebbar |
 |---------|---------|----------|
 | PROJ-1 | **AC-8 / EC-4** — Supabases eingebautes Rate-Limit ist im lokalen Stack nicht auslösbar; der Schutz vor automatisiertem Durchprobieren ist damit unbewiesen, nicht widerlegt | erst gegen das gehostete Projekt |
+| PROJ-1 | **AC-8 ist womöglich gar nicht erfüllbar** (BUG-21) — Login läuft über Server Actions, Supabase sieht deshalb nur die IP des Anwendungsservers, nie die des Nutzers. Eine Drosselung „pro IP" würde entweder alle gemeinsam aussperren oder nie greifen. Vor dem Launch klären; vermutlich `/refine` auf AC-8 statt eines Fixes | erst gegen das gehostete Projekt |
+| PROJ-1 | **T18** — Reset-Mail-Vorlage im Dashboard des gehosteten Projekts setzen. Ohne sie verschickt die Produktion wieder den PKCE-Standardlink und der geräteübergreifende Reset (EC-7) ist erneut kaputt | erst nach Anlegen des gehosteten Projekts |
 | PROJ-1 | **T4** — Passwort-Mindestlänge (8) im Dashboard des gehosteten Projekts setzen. Der lokale Spiegel in `config.toml` ist gesetzt und verifiziert | erst nach dem ersten `/deploy` |
 | PROJ-1 | **AC-11 / AC-12** — der Passwort-Reset-Link hängt an Site-URL und Redirect-URLs des gehosteten Projekts | erst gegen das gehostete Projekt |
 | PROJ-1 | ~~**Warnhinweis am Trainername-Feld**~~ — **erledigt** am 2026-09-03: `AC-15` gebaut (`T14`) und im QA-Lauf verifiziert | ✅ |
