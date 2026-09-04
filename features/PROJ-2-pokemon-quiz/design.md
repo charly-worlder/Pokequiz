@@ -7,7 +7,8 @@ Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
 +-- PageFrame                     Kopfzeile + Inhalt + Fußzeile, umschließt jede Route
     +-- SiteHeader                Server-Komponente, liest die Sitzung selbst (AC-21, AC-22)
     |   +-- Wordmark              Ball-Motiv in CSS + Schriftzug „Pokémon QUIZ"
-    |   +-- angemeldet:   Button „Bestenliste" -> /leaderboard, UserChip
+    |   +-- angemeldet:   UserChip; Button „Bestenliste" -> /leaderboard nur,
+    |   |                 wenn die Seite existiert (AC-21, siehe LEADERBOARD_PAGE_EXISTS)
     |   |                 +-- UserChip: Initiale + Trainername, unter 640px nur Initiale (AC-24)
     |   |                     +-- „Abmelden" ruft PROJ-1s logoutAction auf
     |   +-- ausgeloggt:   Zeile „Deutsche Namen · Serie · Weltrangliste"
@@ -34,7 +35,8 @@ Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
             +-- „Neue persönliche Bestleistung" mit `pop`, wenn geschlagen (AC-8)
             +-- Gewinner-Meldung statt Fehlermeldung, wenn der Pool leer ist (EC-2)
             +-- Hinweis „noch nicht gespeichert" + erneuter Versuch, falls das Speichern scheitert (EC-3)
-            +-- Primär „Nochmal spielen", sekundär „Zur Bestenliste"
+            +-- Primär „Nochmal spielen"; sekundär „Zur Bestenliste" nur,
+                wenn die Seite existiert (AC-7, siehe LEADERBOARD_PAGE_EXISTS)
 ```
 
 **Der Rundenzustand ist eine Zustandsmaschine** in `QuizScreen`. Die Zustände und die erlaubten Übergänge:

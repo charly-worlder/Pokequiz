@@ -56,6 +56,7 @@
 <!-- T11 nachgetragen am 2026-09-03 durch /refine PROJ-2. Anlass: BUG-23 aus dem
      QA-Lauf zu PROJ-1 — der Bestenlisten-Zugang in der Kopfzeile führt auf eine 404. -->
 
+- [x] T12  Ergebnis-Screen: „Zur Bestenliste" erscheint nur, wenn `/leaderboard` existiert. Den Schalter dabei aus `site-header.tsx` in ein gemeinsames Modul ziehen, das beide Stellen importieren — PROJ-3 legt dann **einen** Schalter um statt zwei, und keiner kann vergessen werden  · files: src/lib/site-pages.ts, src/components/shell/site-header.tsx, src/components/quiz/result-view.tsx  · → AC-7, AC-21
 - [x] T11  Kopfzeile: Der Zugang zur Bestenliste erscheint nur, wenn `/leaderboard` existiert — bis dahin gar nicht statt als toter Link. Nach demselben Muster wie `LEGAL_PAGES` in `site-footer.tsx`, damit PROJ-3 eine erkennbare Stelle zum Freischalten hat  · files: src/components/shell/site-header.tsx  · → AC-21
 
 ## Backlog — bewusst offen

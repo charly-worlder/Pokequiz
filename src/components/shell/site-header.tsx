@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { logoutAction } from '@/lib/auth/actions'
+import { LEADERBOARD_PAGE_EXISTS } from '@/lib/site-pages'
 import { Button } from '@/components/ui/button'
 import { Wordmark } from './wordmark'
 
@@ -12,18 +13,10 @@ import { Wordmark } from './wordmark'
  * spec.md AC-21 (signed in), AC-22 (signed out), AC-24 (mobile: no burger).
  */
 
-/**
- * spec.md AC-21 — der Zugang zur Bestenliste erscheint erst, wenn es die Seite
- * gibt.
- *
- * Bis dahin verlinkte die Kopfzeile `/leaderboard`, und jeder angemeldete
- * Nutzer landete dort auf einer 404 (BUG-23). Die Fußzeile nebenan befolgt die
- * Regel längst über eine leere `LEGAL_PAGES`-Liste; für die Kopfzeile war sie
- * nie angewandt worden, obwohl es dieselbe Situation ist.
- *
- * **PROJ-3 baut `/leaderboard` und setzt dieses Flag auf `true`.**
- */
-const LEADERBOARD_PAGE_EXISTS = false
+// spec.md AC-21 — der Zugang zur Bestenliste erscheint erst, wenn es die Seite
+// gibt (BUG-23). Der Schalter liegt in `@/lib/site-pages`, weil der
+// Ergebnis-Screen dieselbe Bedingung braucht (AC-7) und zwei getrennte Schalter
+// genau die Sorte Duplikat sind, bei der einer vergessen wird.
 export async function SiteHeader() {
   const supabase = await createClient()
   const {

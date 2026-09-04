@@ -59,7 +59,14 @@ const fillPassword = (page: Page, value: string) => fillStable(page, 'Neues Pass
 /** Holt den Reset-Link aus der zuletzt an diese Adresse zugestellten Mail. */
 async function resetLinkFor(request: APIRequestContext, email: string) {
   // Mailpit stellt asynchron zu; kurz abwarten statt blind zu greifen.
-  for (let attempt = 0; attempt < 20; attempt++) {
+  //
+  // Das Fenster ist bewusst großzügig (30 s). Bei voller Parallelität — 16
+  // Worker über drei Browser-Projekte gegen einen Dev-Server — dauert die
+  // Zustellung spürbar länger als im Einzellauf, und mit 10 s fiel dieser Test
+  // etwa in jedem zweiten Volllauf aus, während er allein zuverlässig grün war.
+  // Ein Test, der von der Auslastung des Rechners abhängt, meldet Rauschen
+  // statt Befunden.
+  for (let attempt = 0; attempt < 60; attempt++) {
     const list = await request.get(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(email)}`)
     const body = (await list.json()) as { messages: { ID: string }[] }
 

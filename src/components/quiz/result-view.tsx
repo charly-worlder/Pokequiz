@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
+import { LEADERBOARD_PAGE_EXISTS } from '@/lib/site-pages'
 import { formatDuration } from './status-bar'
 
 export type SaveState = 'saving' | 'saved' | 'failed'
@@ -77,9 +78,13 @@ export function ResultView({
         <Button size="lg" onClick={onPlayAgain} className="min-h-12 px-8 text-[17px]">
           Nochmal spielen
         </Button>
-        <Button asChild variant="outline" size="lg" className="min-h-12">
-          <Link href="/leaderboard">Zur Bestenliste</Link>
-        </Button>
+        {/* AC-7: die sekundäre Aktion erscheint erst, wenn PROJ-3 die Seite
+            gebaut hat — bis dahin wäre sie ein toter Link. */}
+        {LEADERBOARD_PAGE_EXISTS && (
+          <Button asChild variant="outline" size="lg" className="min-h-12">
+            <Link href="/leaderboard">Zur Bestenliste</Link>
+          </Button>
+        )}
       </div>
     </div>
   )

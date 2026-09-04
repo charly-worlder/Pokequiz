@@ -82,14 +82,18 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   await expect(clockValue(page)).toHaveText(clockWhenStopped)
   await expect(page.getByRole('button', { name: 'Weiter zum Ergebnis' })).toBeVisible()
 
-  // AC-7 — der Spieler klickt selbst weiter und sieht Serie, Zeit und beide Aktionen.
+  // AC-7 — der Spieler klickt selbst weiter und sieht Serie, Zeit und die
+  // Primär-Aktion. „Zur Bestenliste" erscheint erst, wenn PROJ-3 die Seite
+  // gebaut hat; vorher stand hier ein Link auf eine 404. Dieser Test dreht sich
+  // um, sobald LEADERBOARD_PAGE_EXISTS auf true steht — dann muss der Link da
+  // sein, und wer den Schalter umlegt, sieht sofort, wo nachzuziehen ist.
   const runSaved = runSavedResponse(page)
   await page.getByRole('button', { name: 'Weiter zum Ergebnis' }).click()
   await runSaved
   await expect(page.getByText('Runde beendet')).toBeVisible()
   await expect(page.getByText('richtige Antworten in')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Nochmal spielen' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Zur Bestenliste' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Zur Bestenliste' })).toHaveCount(0)
 
   // AC-11 — das Ergebnis wird automatisch gespeichert. Sichtbar wird das über die
   // Gegenprobe: der Hinweis aus EC-3 darf nicht erscheinen, und die Bestleistung
