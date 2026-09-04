@@ -25,29 +25,44 @@ function safeNext(next: string | null): string {
   return next
 }
 
+// Redirects with a RELATIVE Location, deliberately.
+//
+// The first version built an absolute URL from `request.nextUrl`, and that
+// resolved to `localhost:3000` no matter which host the request actually
+// arrived on. The emailed link carries the host from Supabase's Site URL
+// (`127.0.0.1:3000` locally), so the session cookie was set on one host and the
+// browser was then sent to another, which never receives it — every reset ended
+// on "link invalid or expired" (BUG-16). It survived the build's own check only
+// because that check called this route on localhost instead of following the
+// link as the mail delivers it.
+//
+// A relative Location is resolved by the browser against the URL it requested,
+// so the flow stays on whatever host the user opened — no assumption about the
+// deployment's hostname, and none of the Host-header trust a reconstructed
+// origin would need. `safeNext` guarantees the value is a single-slash path, so
+// it can never become protocol-relative.
+function redirectTo(path: string) {
+  return new NextResponse(null, { status: 307, headers: { Location: path } })
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type') as EmailOtpType | null
   const next = safeNext(searchParams.get('next'))
 
-  const redirectTo = request.nextUrl.clone()
-  redirectTo.search = ''
-
   if (token_hash && type) {
     const supabase = await createClient()
     const { error } = await supabase.auth.verifyOtp({ type, token_hash })
 
     if (!error) {
-      // verifyOtp has written the session cookies onto this response's jar.
-      redirectTo.pathname = next
-      return NextResponse.redirect(redirectTo)
+      // verifyOtp wrote the session cookies through next/headers, so they ride
+      // along on whatever response this handler returns.
+      return redirectTo(next)
     }
   }
 
   // Missing, malformed, expired or already-used token — the reset page renders
   // the AC-12 state from this flag.
-  redirectTo.pathname = '/reset-password'
-  redirectTo.searchParams.set('error', '1')
-  return NextResponse.redirect(redirectTo)
+  return redirectTo('/reset-password?error=1')
 }

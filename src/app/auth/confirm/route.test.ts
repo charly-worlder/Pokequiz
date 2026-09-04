@@ -38,7 +38,7 @@ describe('/auth/confirm', () => {
     const res = await call('?token_hash=abc123&type=recovery&next=/reset-password')
 
     expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc123' })
-    expect(res.headers.get('location')).toBe(`${BASE}/reset-password`)
+    expect(res.headers.get('location')).toBe('/reset-password')
   })
 
   it('sends an invalid or already-used token to the AC-12 error state', async () => {
@@ -46,14 +46,14 @@ describe('/auth/confirm', () => {
 
     const res = await call('?token_hash=stale&type=recovery&next=/reset-password')
 
-    expect(res.headers.get('location')).toBe(`${BASE}/reset-password?error=1`)
+    expect(res.headers.get('location')).toBe('/reset-password?error=1')
   })
 
   it('does not call verifyOtp when the token is missing', async () => {
     const res = await call('')
 
     expect(verifyOtp).not.toHaveBeenCalled()
-    expect(res.headers.get('location')).toBe(`${BASE}/reset-password?error=1`)
+    expect(res.headers.get('location')).toBe('/reset-password?error=1')
   })
 
   it('refuses an absolute next and stays on our own origin', async () => {
@@ -61,7 +61,7 @@ describe('/auth/confirm', () => {
 
     const res = await call('?token_hash=abc123&type=recovery&next=https://evil.example')
 
-    expect(res.headers.get('location')).toBe(`${BASE}/reset-password`)
+    expect(res.headers.get('location')).toBe('/reset-password')
   })
 
   it('refuses a protocol-relative next', async () => {
@@ -69,7 +69,7 @@ describe('/auth/confirm', () => {
 
     const res = await call('?token_hash=abc123&type=recovery&next=//evil.example')
 
-    expect(res.headers.get('location')).toBe(`${BASE}/reset-password`)
+    expect(res.headers.get('location')).toBe('/reset-password')
   })
 
   it('allows a different in-app next', async () => {
@@ -77,6 +77,29 @@ describe('/auth/confirm', () => {
 
     const res = await call('?token_hash=abc123&type=recovery&next=/')
 
-    expect(res.headers.get('location')).toBe(`${BASE}/`)
+    expect(res.headers.get('location')).toBe('/')
+  })
+
+  // BUG-16. The first version redirected to an absolute URL built from
+  // request.nextUrl, which resolved to localhost whatever host the request came
+  // in on. The emailed link uses Supabase's Site URL, so the session cookie
+  // landed on one host and the browser was sent to another — every reset failed
+  // on a valid link. A relative Location cannot drift from the requested host,
+  // and this asserts the shape rather than one particular hostname: an absolute
+  // Location is the defect, regardless of which host it names.
+  it.each([
+    ['a request that arrives on 127.0.0.1', 'http://127.0.0.1:3000'],
+    ['a request that arrives on a LAN address', 'http://192.168.0.165:3000'],
+    ['a request that arrives on a production domain', 'https://quiz.example'],
+  ])('keeps the redirect relative for %s', async (_label, origin) => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const res = await GET(
+      new NextRequest(`${origin}/auth/confirm?token_hash=abc123&type=recovery&next=/reset-password`)
+    )
+
+    const location = res.headers.get('location')
+    expect(location).toBe('/reset-password')
+    expect(location).not.toMatch(/^https?:\/\//)
   })
 })
