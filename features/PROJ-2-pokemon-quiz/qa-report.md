@@ -485,3 +485,150 @@ Wenn die vier Optionen ohne Scrollen sichtbar sein *sollen*, ist das eine Produk
 | **PROJ-2** | Approved → **In Review** (BUG-3) |
 | **PROJ-1** | Approved → **In Review** (BUG-4, betrifft alle vier Auth-Formulare) |
 | Weiterhin ungeprüft | Firefox, Safari, 768 px und 1440 px abschließend |
+
+---
+
+## QA-Lauf — 2026-09-04, vollständiger Sweep nach AC-7
+
+**Anlass:** `/refine` und `/build` haben AC-7 geändert (der Bestenlisten-Link im Ergebnis-Screen erscheint erst, wenn die Seite existiert). Dieser Lauf ist aber **kein Delta-Lauf** — PROJ-2 stand seit dem 2026-09-02 auf `Approved` und hatte seither die Kopfzeilen-Änderung aus `/refine PROJ-2` (AC-21) unverifiziert mitbekommen. Geprüft wurden deshalb **alle 31 AC-IDs und alle 11 EC-IDs** neu.
+
+**Aufbau:** Drei `qa-engineer`-Verifizierer in getrennten Kontexten, die den Build nicht gesehen haben — Bahn A (Acceptance), Bahn B (Security, Schwerpunkt Bild-Proxy/SSRF), Bahn C (Regression und Testsuiten). Zusammenführung und Bewertung: Hauptkontext.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-7** (BUG-1 bis BUG-6 sind in diesem Feature vergeben). Die Nummern gelten pro Feature — PROJ-1s BUG-7 ist ein anderer.
+
+### Das Ergebnis vorweg
+
+**Production Ready: NEIN — 2 High, 3 Medium, 2 Low.** PROJ-2 war seit dem 2026-09-02 als `Approved` geführt. Dieser Lauf zeigt, dass das nicht trug: Zwei Fehler brechen den Vertrag an Stellen, die genau für den Ausnahmefall geschrieben wurden — Bildausfall und fehlgeschlagenes Speichern. Beide sind im Alltag selten und im Ernstfall genau das, was die betroffenen EC verhindern sollten.
+
+Der frühere Lauf hat sie nicht gefunden, weil er die Ausnahmefälle nicht **provoziert** hat. Dieser Lauf hat Bildantworten auf 404 gesetzt, den Speicheraufruf netzseitig abgebrochen und Sitzungs-Cookies mitten in der Runde gelöscht.
+
+### Acceptance Criteria
+
+Bestanden mit Beleg: **AC-1 bis AC-8, AC-10 bis AC-24, AC-26 bis AC-31** (26 von 31).
+
+Hervorzuheben, weil aufwendig belegt:
+
+| ID | Beleg |
+|----|-------|
+| AC-2 | Uhrenstart am sichtbaren Bild mit künstlicher 2-s-Bremse geprüft: nach ~4 s seit Klick stand die Uhr auf `0:00` |
+| AC-10 | MutationObserver über den kompletten Fragenwechsel — **kein** Ladezustand, keine Phase ohne Optionen |
+| AC-12 | Gegen die **echte Server Action** mit mitgeschnittener Action-ID: Serie 400, Dauer 0, negative Dauer, Text statt Zahl → alle abgelehnt; Grenzfall 386/193 000 ms → gespeichert. Zweite Ebene live in der DB bestätigt (`23514`, `runs_duration_plausible`) |
+| AC-14 | Fremdes `profile_id` über die Action **injiziert** → Zeile landet trotzdem beim Angreifer; Datenbank lehnt den Direktversuch mit `403 / 42501` ab |
+| AC-19 | Über CDP `getEventListeners(window)` gezählt: 0 `beforeunload` bei Serie 0, 1 bei Serie 1 |
+| AC-26 | Live in einer **zurückgerollten Transaktion**: Profil gelöscht → 0 Runden, 0 verwaiste Zeilen |
+| AC-27 | `\d public.runs` gegen die laufende DB: genau sechs Spalten, keine IP, kein Verlauf |
+| AC-31 | Zwei frisch registrierte Konten spielten je drei Fragen — **kein einziger** neuer Eintrag im Fetch-Cache, obwohl alle 386 Species dort liegen. Bild-Cache direkt: dieselbe Adresse dreimal → `MISS, HIT, HIT` |
+
+**Nicht bestanden:**
+
+| ID | Ergebnis |
+|----|----------|
+| **AC-9** | [ ] **FAIL** — „Nochmal spielen" startet keine neue Runde → **BUG-10** |
+| **AC-25** | [ ] **FAIL** — keine Skelettfläche beim Rundenstart → **BUG-11** |
+
+### Edge Cases
+
+Bestanden: **EC-1, EC-4, EC-5, EC-8, EC-9** (5 von 11).
+
+| ID | Ergebnis |
+|----|----------|
+| EC-4 | [x] PASS — **drei gleichzeitige** Einreichungen derselben Runden-ID → alle melden Erfolg, **eine** Zeile in der DB; Unique-Constraint live bestätigt, Direktversuch über PostgREST → `409 / 23505` |
+| **EC-3** | [ ] **FAIL** → **BUG-7 (High)** |
+| **EC-6** | [ ] **FAIL** → **BUG-8 (High)** |
+| **EC-7** | [ ] **FAIL** → **BUG-9 (Medium)** |
+| EC-2 | [!] NOT VERIFIED — 386 richtige Antworten nicht spielbar; Garantie im Code belegt (`question-action.ts:74`, Unit-Test grün). **Nebenbefund:** `seenIdsRef` zählt auch **verworfene** Fragen mit, die Gewinner-Meldung könnte also mit weniger als 386 richtigen Antworten auslösen |
+| EC-10 | [!] **faktisch unerreichbar** — der Verwurfs-Zähler wird nie hochgezählt, weil schon der erste Verwurf hängen bleibt (BUG-8). Der grüne Unit-Test ruft die Funktion direkt auf und mockt eine abweichende Reparaturadresse |
+| EC-11 | [!] **TEILWEISE, Garantie im Code widerlegt** — der Reparaturweg wird betreten, hilft aber nur, wenn die reparierte Adresse **abweicht**. Im Normalfall ist sie identisch, und der Spieler bemerkt den Umweg sehr wohl: als Dauerhänger |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis |
+|---------|----------|
+| Authentication Bypass | [x] PASS — Server Actions nur an `/` gebunden, POST ohne Sitzung → 307; doppelt abgesichert über `getUser()` in beiden Actions |
+| Autorisierung (AC-14) | [x] PASS — auf Action- **und** Datenbankebene, inklusive Feld-Injektion |
+| Input Injection / AC-12 / EC-4 | [x] PASS — zwei Ebenen, live belegt |
+| **SSRF über den Bild-Proxy** | [x] **PASS** — `example.com`, Supabase auf `127.0.0.1`, **`169.254.169.254`** (Cloud-Metadaten), die eigene App, `/etc/passwd`, fremde GitHub-Organisation, Groß-/Kleinschreibungs-Trick, Nicht-Bild-Ressource im erlaubten Muster → **alle HTTP 400**. Angriffsfläche auf öffentliche PokeAPI-Bilddateien begrenzt |
+| Exponierte Secrets | [x] PASS — kein Service-Role-JWT, kein `sb_secret_`, kein JWT-Secret im Bundle |
+| Sensible Daten in Antworten | [x] PASS — `runs`-Zeile trägt nur die sechs zugesagten Felder |
+| Zugangsdaten in URLs | [x] PASS — alle Formulare POST |
+| Drosselung der Server Actions | [!] NOT VERIFIED — nicht implementiert. **Kein Bug**: kein Zugangsdaten-Pfad in diesem Feature (Auth gehört PROJ-1). Praktische Folge unter BUG-13 |
+| Security-Header | [!] FAIL — fehlen; bereits als Deploy-Blocker in `features/INDEX.md` geführt, kein neuer Befund |
+| Eingabevalidierung `getNextQuestion` | [!] FAIL → **BUG-12 (Low)** |
+
+### Regression (Bahn C) — ohne Befund
+
+- **`npm test`: 12 Dateien, 121 Tests, 121 bestanden.**
+- **E2E: 24 Tests, 24 bestanden, 0 flaky** über Chromium, Firefox und Mobile Safari bei 16 Workern.
+- **`npm run lint`: Exit 0. `npm run build`: Exit 0**, TypeScript sauber, 5 Routen plus Proxy.
+- **PROJ-1 unversehrt** in beide Richtungen: Registrierung, Login, Abmelden und Passwort-Reset laufen; `logoutAction` unverändert und nur aus der Shell aufgerufen.
+- **Sieben geteilte Shell-Bausteine** gegen das server-gerenderte HTML geprüft: Kopfzeile in beiden Auth-Zuständen, Fußzeile ohne toten Link, Wortmarke, Seitenrahmen auch auf der 404-Antwort, Routenschutz für alle Shell-Routen, kein zweiter Rahmen.
+- **Datenschicht gegen die laufende Datenbank**, nicht nur gegen die `.sql`-Dateien: RLS aktiv, `runs` nur für den Eigentümer lesbar, **keine** UPDATE- und keine DELETE-Policy, 9 Constraints und 5 Indizes identisch mit den Migrationen, keine `leaderboard`-Tabelle. Deckt sich mit `docs/data-model.md`.
+
+### Bugs
+
+#### BUG-7: Schlägt das Speichern fehl, erfährt der Spieler es nicht
+- **Severity: High** · betrifft **EC-3**
+- **Beleg:** Speicher-Aufruf netzseitig abgebrochen → Ergebnis-Screen sieht aus wie ein normal gespeichertes Ergebnis. Weder der Hinweis „konnte noch nicht gespeichert werden" noch die Möglichkeit, es erneut zu versuchen. Danach steht keine Bestleistung auf dem Startbildschirm — gespeichert wurde also nichts. Konsolen-Ausgabe: `TypeError: Failed to fetch`.
+- **Ursache, selbst nachgeprüft:** `quiz-screen.tsx:141` ruft `await saveRun({...})` **ohne `try/catch`**. Wirft der Aufruf auf Transportebene, läuft keine der folgenden Zeilen mehr — `setSaveState('failed')` wird nie erreicht, `saveState` bleibt auf `'saving'` stehen. Die Fehler-UI existiert (`result-view.tsx:63-75`) und wird nie erreicht. Der Kommentar eine Zeile darunter sagt sogar „spec.md EC-3 — result stays on screen, with a retry": Die Absicht ist da, die Absicherung nicht.
+- **Das Bemerkenswerte:** Das ist **derselbe Fehlertyp, den PROJ-1 am 2026-09-01 als BUG-1 (High) gefunden und behoben hat.** Dort entstand dafür eigens `src/lib/auth/run-action.ts` mit `unstable_rethrow`, und alle vier Auth-Formulare wurden umgestellt. Der Quiz-Pfad hat diesen Schutz **nie bekommen** — `grep -rn "runAuthAction" src/components/quiz/ src/lib/quiz/` liefert keinen Treffer. PROJ-2 stand zu diesem Zeitpunkt bereits auf `Approved`, und niemand hat über die Feature-Grenze geschaut.
+
+#### BUG-8: Ein nicht ladbares Bild lässt die Runde dauerhaft hängen
+- **Severity: High** · betrifft **EC-6**, und zieht **EC-10** und **EC-11** mit sich
+- **Beleg:** Alle Bildantworten auf 404 gesetzt, dann Runde gestartet. Nach 18 Sekunden: genau **eine** Bildanfrage, zwei Server-Aufrufe, **keine** Fehlerkarte, kein neuer Zug, der Bildschirm unverändert auf „Runde wird vorbereitet …". Kein Ausweg außer Neuladen — und damit ist die Runde verloren.
+- **Ursache:** `repairImageUrl` liefert dieselbe Adresse zurück, die schon gescheitert ist (die offizielle Artwork-Adresse **ist** die konstruierte Adresse). `ImageProbe` rendert mit `key={src}`; da sich `src` nicht ändert, bleibt das Element identisch, der Browser lädt nicht neu, `onError` feuert kein zweites Mal. `onProbeFail` wird nie erneut betreten — kein Verwurf, kein Nachziehen, kein Fehlerzustand.
+- **Wirkung:** Betrifft real **jeden Ausfall des Sprite-CDN**. EC-6 wurde geschrieben, damit genau das die Runde nicht beendet; stattdessen beendet es sie auf die schlechteste Art — ohne Meldung, ohne Ausweg, mit Verlust der Serie.
+- **Folgeschäden:** **EC-10** (Grenze nach drei verworfenen Fragen) ist dadurch faktisch unerreichbar — der Zähler wird nie hochgezählt. **EC-11** (Reparaturweg) greift nur, wenn die reparierte Adresse abweicht; im Normalfall tut sie das nicht. Beide Unit-Tests sind grün, weil sie die Funktionen direkt aufrufen und eine abweichende Adresse mocken. Sie prüfen damit einen Fall, den der laufende Code nicht erzeugt.
+
+#### BUG-9: Abgelaufene Sitzung — keine Weiterleitung, irreführender Ergebnis-Screen
+- **Severity: Medium** · betrifft **EC-7**
+- **Beleg:** Cookies mitten in der Runde gelöscht, dann „Weiter zum Ergebnis": `POST / → 307 /login`, danach `POST /login → 200 (HTML)`, Konsolenfehler „An unexpected response was received from the server", URL bleibt `/`, Bildschirm zeigt „Runde beendet". Erst ein manueller Reload landet auf `/login`.
+- **Ursache:** Der Proxy fängt den Server-Action-POST ab, die Aktion erreicht ihren `unauthenticated`-Zweig also nie — und der Wurf wird nicht gefangen. **Gleiche Wurzel wie BUG-7.**
+- Der Unit-Test „EC-7: eine abgelaufene Sitzung beim Speichern führt ebenfalls auf /login" ist grün, weil er die Action mockt und damit den Proxy überspringt.
+
+#### BUG-10: „Nochmal spielen" startet keine neue Runde
+- **Severity: Medium** · betrifft **AC-9** · **Vertrag und Design widersprechen sich**
+- AC-9 verlangt: „dann **startet eine neue Runde** mit Serie 0, zurückgesetzter Uhr und einem neu gezogenen, unabhängigen Fragen-Pool." Tatsächlich führt der Klick auf den Startbildschirm zurück (`quiz-screen.tsx:351` → `setPhase('ready')`); der Spieler muss zusätzlich „Runde starten" drücken.
+- **`design.md` beschreibt genau diesen Übergang** (`beendet --"Nochmal spielen"--> bereit`). Der Code folgt dem Design, das Design widerspricht dem Vertrag.
+- **Das ist deshalb keine reine Fix-Entscheidung.** Entweder der Code zieht nach (ein Klick startet direkt), oder AC-9 wird per `/refine` an das Design angeglichen. Für die erste Variante spricht das PRD-Erfolgskriterium „mindestens die Hälfte startet nach einem Lauf direkt eine zweite Runde" — jeder zusätzliche Klick arbeitet dagegen.
+
+#### BUG-11: Keine Skelettfläche beim Rundenstart
+- **Severity: Low** · betrifft **AC-25**
+- Acht Messpunkte über 2,4 s mit künstlicher Bildbremse: keine pulsierende Fläche, nur die Textzeile „Runde wird vorbereitet …". Das Layout springt beim Eintreffen der Frage von einer Textzeile auf die volle Quiz-Karte.
+- Ein Spinner erscheint nicht — insofern ist nur die halbe Zusage gebrochen. Die vorhandene Skelettfläche (`pokemon-image.tsx:33`) greift praktisch nie, weil das Bild beim Mounten der Frage schon im Browser-Cache liegt.
+
+#### BUG-12: `getNextQuestion` validiert seine Eingabe nicht
+- **Severity: Low**
+- Ein Nicht-Array als `seenIds` löst eine unbehandelte `TypeError` aus → HTTP 500. `saveRun` hat für seinen Fall ein Zod-Schema, `getNextQuestion` keines.
+- Kein Datenabfluss, keine Zustandsänderung; in Produktion strippt Next.js Meldung und Stacktrace. Robustheitslücke, kein Loch.
+
+#### BUG-13: Unbegrenztes automatisches Nachziehen belastet die PokeAPI
+- **Severity: Medium** · betrifft **AC-31** und die Fair-Use-Zusage aus `docs/PRD.md`
+- Die Vorlade-Schleife bricht nur ab, wenn der Spieler wartet (`quiz-screen.tsx:249`: `&& !hasCurrentRef.current`). Fällt die Bildquelle aus, **während der Spieler noch antwortet**, zieht der Client endlos neue Fragen — je vier Namensabfragen an die PokeAPI, ohne Backoff.
+- **Das widerspricht der Begründung im eigenen Design**, das den Verzicht auf eine Drosselung ausdrücklich damit rechtfertigt, „der Nutzer klickt selbst, es entsteht also keine automatische Last gegen die Fair-Use-Policy".
+- Derzeit vom Hänger aus BUG-8 maskiert — wird sichtbar, sobald dieser behoben ist. **Beide zusammen fixen**, sonst tauscht man einen Hänger gegen eine Anfrageschleife.
+- Verwandt: Bahn B hält fest, dass ein angemeldeter Nutzer `getNextQuestion` auch von Hand mit immer neuen `seenIds` in einer Schleife aufrufen kann. Das ist Backlog-Punkt `B1` und wird vor dem öffentlichen Start relevant.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser in Bahn A** — nur Chromium, um die PokeAPI nicht mehrfach zu belasten. Bahn C hat die E2E-Suite in allen drei Engines gefahren (24/24)
+- [!] **Optisches und responsives Urteil** — belegt sind DOM, Klassen und Sichtbarkeit; kein Screenshot-Abgleich, kein Urteil über Abstände, „sanften Puls" oder Kontraste
+- [!] **EC-2** (Pool erschöpft) — 386 richtige Antworten nicht spielbar; Garantie im Code belegt
+- [!] **AC-15 mit echtem Timeout, EC-8 mit echtem 429/5xx der PokeAPI** — bewusst nicht provoziert, Fair Use. Über Unit-Tests und Code belegt
+- [!] **EC-5 mit echtem fehlendem deutschen Namen** — existiert im Pool nicht
+- [!] **AC-26 im echten Löschablauf** — PROJ-4 baut ihn erst; geprüft wurde die Datenbank-Garantie
+- [!] **AC-2 und AC-31 unter Produktionsbedingungen** — gemessen im Dev-Server mit warmem Cache
+- [!] **AC-31, offene Beobachtung:** In einem Zeitfenster wurden 39 bereits zwischengespeicherte Species-Einträge neu von der PokeAPI geholt, obwohl alle 386 auf Platte lagen. In zwei kontrollierten Läufen danach trat das nicht auf (0 Neuanfragen bei 24 Abfragen). Ursache nicht sicher zuordenbar — möglicherweise ein Neustart des Dev-Servers oder ein zweiter Prozess auf demselben Cache-Verzeichnis. **Der Beleg für AC-31 trägt damit nur für einen warmgelaufenen Prozess**
+- [!] **Security-Header gegen die Live-URL** — lokal fehlend bestätigt
+
+### Verdikt
+
+- **Acceptance Criteria:** 26 von 31 bestanden · **AC-9 FAIL** · **AC-25 FAIL** · AC-24 nur strukturell
+- **Edge Cases:** 5 von 11 bestanden · **EC-3, EC-6, EC-7 FAIL** · EC-2 und EC-10 nicht erreichbar · EC-11 teilweise widerlegt
+- **Bugs:** 7 neu — **2 High** (BUG-7, BUG-8), **3 Medium** (BUG-9, BUG-10, BUG-13), **2 Low** (BUG-11, BUG-12)
+- **Security:** 8 Prüfungen mit Beleg bestanden, 1 mit Befund (BUG-12), 2 NOT VERIFIED (Drosselung bewusst, Header bekannt). **Kein SSRF über den Bild-Proxy**
+- **Regression:** ohne Befund — 121/121, E2E 24/24, Lint und Build grün
+- **Production Ready: NEIN**
+
+> **Was dieser Lauf über den vorherigen sagt.** PROJ-2 stand seit dem 2026-09-02 auf `Approved`. Die fünf gefallenen Kriterien beschreiben ausnahmslos **Ausnahmefälle** — Bild fehlt, Speichern schlägt fehl, Sitzung weg. Der frühere Lauf hat sie nicht provoziert, sondern die glücklichen Pfade geprüft und die Garantien im Code gelesen. Genau dort liegt der Unterschied: EC-6, EC-3 und EC-7 sind Zusagen **für den Ausnahmefall**, und ein Test, der den Ausnahmefall nicht herstellt, prüft sie nicht — er liest sie nur.
+
+> **Die unangenehmste Einzelheit ist BUG-7.** PROJ-1 hat exakt denselben Fehlertyp am 2026-09-01 gefunden, als High eingestuft und mit einer eigens gebauten Hülle (`run-action.ts`) über alle vier Auth-Formulare behoben. Der Quiz-Pfad benutzt diese Hülle nicht — und PROJ-2 war zu dem Zeitpunkt schon `Approved`, wurde also nie erneut daraufhin angesehen. Ein Fix in einem Feature erreicht das Nachbarfeature nicht von selbst.
