@@ -1,6 +1,6 @@
 # QA Test Results
 
-> **Dieser Bericht hat mehrere Durchgänge.** Der jeweils oberste trägt die gültige Bewertung; die älteren bleiben unverändert stehen, weil ein Bericht, der nachträglich grün geschrieben wird, nichts mehr wert ist.
+> **Dieser Bericht hat mehrere Durchgänge.** Der jeweils **unterste** ist der jüngste und trägt die gültige Bewertung; die älteren bleiben unverändert stehen, weil ein Bericht, der nachträglich grün geschrieben wird, nichts mehr wert ist.
 
 ---
 
@@ -632,3 +632,181 @@ Bestanden: **EC-1, EC-4, EC-5, EC-8, EC-9** (5 von 11).
 > **Was dieser Lauf über den vorherigen sagt.** PROJ-2 stand seit dem 2026-09-02 auf `Approved`. Die fünf gefallenen Kriterien beschreiben ausnahmslos **Ausnahmefälle** — Bild fehlt, Speichern schlägt fehl, Sitzung weg. Der frühere Lauf hat sie nicht provoziert, sondern die glücklichen Pfade geprüft und die Garantien im Code gelesen. Genau dort liegt der Unterschied: EC-6, EC-3 und EC-7 sind Zusagen **für den Ausnahmefall**, und ein Test, der den Ausnahmefall nicht herstellt, prüft sie nicht — er liest sie nur.
 
 > **Die unangenehmste Einzelheit ist BUG-7.** PROJ-1 hat exakt denselben Fehlertyp am 2026-09-01 gefunden, als High eingestuft und mit einer eigens gebauten Hülle (`run-action.ts`) über alle vier Auth-Formulare behoben. Der Quiz-Pfad benutzt diese Hülle nicht — und PROJ-2 war zu dem Zeitpunkt schon `Approved`, wurde also nie erneut daraufhin angesehen. Ein Fix in einem Feature erreicht das Nachbarfeature nicht von selbst.
+
+---
+
+## QA-Lauf — 2026-09-04 (zweiter des Tages), nach den Fixes für BUG-7, BUG-8, BUG-10 und BUG-13
+
+**Anlass:** Der Sweep weiter oben hat 7 Fehler gefunden. Vier davon wurden mit `562bd0e` behoben (BUG-10 → AC-9, BUG-7 → EC-3, BUG-8 → EC-6, BUG-13 → AC-31); BUG-9, BUG-11 und BUG-12 blieben bewusst offen. Dieser Lauf prüft die Fixes nach **und rollt alle 31 AC-IDs und alle 11 EC-IDs neu auf**, statt frühere Häkchen zu übernehmen.
+
+**Aufbau:** Drei `qa-engineer`-Verifizierer in getrennten Kontexten, die den Bau nicht gesehen haben — Bahn A (Acceptance), Bahn B (Security), Bahn C (Regression). Zusammenführung, Nachprüfung strittiger Punkte und Bewertung: Hauptkontext.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-14** (BUG-1 bis BUG-13 sind in diesem Feature vergeben).
+
+### Das Ergebnis vorweg
+
+**Production Ready: NEIN — 1 High, 4 Medium, 3 Low.**
+
+Die vier beauftragten Fixes wirken; drei davon sind belegt, einer nur auf Testebene, weil das Regressionsnetz dafür kaputt ist. Der Lauf fördert dafür zwei Dinge zutage, die vorher niemand gesehen hat:
+
+1. **Der Fix für AC-9 hat die E2E-Suite rot gemacht** — sie kodierte das alte Verhalten und wurde nicht mitgezogen. Das ist der High-Befund, und er geht auf diesen Fix-Lauf zurück.
+2. **Die Rückfallebene der Bildadresse (EC-11) ist im Betrieb wirkungslos** — und zwar nicht seit dem Fix, sondern seit dem ersten Tag. Der Fix für BUG-8 hat sie nur sichtbar gemacht.
+
+### Die vier Fixes — nachgeprüft
+
+- [x] **BUG-10 behoben (AC-9)** — `onPlayAgain={startRound}` (`quiz-screen.tsx:396`); `startRound` setzt Serie 0, Uhr 0, neue Runden-ID, neuen Pool und geht direkt in `loading` (`:291-314`). Kein Übergang zurück nach `ready`. Abnahmetest `quiz-screen.error-states.test.tsx:334`, **rot geprüft** gegen den wiederhergestellten Fehler. `design.md` mitgezogen. **Im Browser nicht verifiziert** — ausgerechnet der E2E-Test, der das könnte, ist durch diesen Fix rot (BUG-14)
+- [x] **BUG-7 behoben (EC-3)** — **serverseitig provoziert**, nicht nur gelesen: Profilzeile des Testkontos gelöscht → echter Datenbankfehler beim Insert → Action liefert `{"status":"failed"}`, 0 Zeilen; der Wiederholungsversuch scheitert erneut und schreibt nichts. Client-Kette: `runClientAction` fängt den Transportfehler (`src/lib/actions/run-action.ts:24-31`) → `saveState 'failed'` (`quiz-screen.tsx:149-167`) → Hinweis + „Erneut speichern" (`result-view.tsx:63-75`). Abnahmetest `error-states.test.tsx:247`, rot geprüft
+- [x] **BUG-8 behoben (EC-6)** — `/_next/image` antwortet auf eine kaputte Sprite-Adresse mit **404** (live geprüft, zwei Varianten) → `onError` → `onProbeFail` verwirft, sobald die Reparaturadresse nicht abweicht (`quiz-screen.tsx:263-286`). Abnahmetest `error-states.test.tsx:277` feuert `error` **genau einmal** und verlangt, dass die Runde von selbst weiterzieht. **Damit ist EC-10 überhaupt erst erreichbar.** Die Browser-Ereigniskette selbst: nicht verifizierbar
+- [x] **BUG-13 behoben (AC-31)** — zwei unabhängige Messungen: Bahn A spielte rund 55 Fragen (etwa 220 Namensabfragen, zufällig über 1–386) → **kein einziger** neuer Species-Eintrag im Fetch-Cache; Bahn B fuhr 40 `getNextQuestion`-Aufrufe in Folge → **393 Cache-Einträge vorher, 393 nachher, null ausgehende Anfragen**. Die Verwurfsgrenze greift jetzt auch beim Vorladen (`quiz-screen.tsx:279-285`) und zeitversetzt aus `advance` (`:331-335`)
+
+### Acceptance Criteria
+
+Bestanden mit Beleg: **AC-1, AC-3, AC-5, AC-7, AC-8, AC-11, AC-12, AC-13, AC-14, AC-20, AC-21, AC-22, AC-23, AC-26 bis AC-31** (20 von 31).
+
+Hervorzuheben:
+
+| ID | Beleg |
+|----|-------|
+| AC-8 | Fünf echte Speicherungen: 3/3000 → `true`, 2/9000 → `false`, 3/3001 → `false`, 3/2999 → `true`, 4/60000 → `true`; Startbildschirm zeigt danach „Serie 4 · 1:00" |
+| AC-12 | Beide Ebenen: Action lehnt Serie 400, Serie −1, Dauer −1, 50/24999 ms, Dauer 1.5, Serie `"5"` und kein-UUID ab; Grenzfall 50/25000 und 386/193000 gespeichert. DB bestätigt `runs_streak_range`, `runs_duration_non_negative`, `runs_duration_plausible` |
+| AC-14 | `profile_id` **und** `profileId` in die Nutzlast injiziert → Zeile landet beim Sitzungsprofil, 0 Zeilen auf der fremden ID; direkter PostgREST-Insert → `403 / 42501` |
+| AC-26 | **Live**: Profilzeile gelöscht → Runden weg; Auth-Konto gelöscht → Profil und 5 Runden weg; **0 verwaiste Zeilen von 18** |
+| AC-29 | Auf `/` (angemeldet) und `/login` (anonym) kommt **kein** `Set-Cookie` zurück; einziges Cookie ist `sb-127-auth-token` |
+| AC-30 | Preload zeigt auf `/_next/static/media/…woff2` (200); im ausgelieferten CSS **0 Treffer** für `googleapis` oder `gstatic` |
+| AC-31 | Siehe BUG-13 oben — zwei unabhängige Messungen; Bildspeicher `MISS, HIT, HIT` |
+
+**Nicht bestanden:**
+
+| ID | Ergebnis |
+|----|----------|
+| **AC-15** | [ ] **TEILWEISE** — die 5-Sekunden-Grenze deckt nur die serverseitige Fragenmontage. **Für das Bild gibt es keinerlei Zeitgrenze** → **BUG-15 (Medium)** |
+| **AC-25** | [ ] **FAIL** — keine Skelettfläche beim Rundenstart. Unverändert **BUG-11 (Low)** |
+| **AC-2** | [~] **TEILWEISE** — serverseitig 202–385 ms über 5 Rundenstarts (Grenze 3000 ms), Uhrenstart am sichtbaren Bild im Code belegt. Klick bis sichtbares Bild: kein Browser |
+
+### Edge Cases
+
+Bestanden: **EC-3, EC-4** (2 von 11) — beide mit provozierter Ausnahme, nicht gelesen.
+
+| ID | Ergebnis |
+|----|----------|
+| EC-4 | [x] PASS — dieselbe `clientRoundId` zweimal nacheinander **und** dreimal gleichzeitig → alle melden `saved`, **1 Zeile**; zweiter Durchgang mit frischer ID, drei parallel → 1 Zeile |
+| **EC-7** | [ ] **FAIL** — zweimal provoziert (ohne Cookie; Konto per Admin-API gelöscht, Cookie behalten): `POST / → 307 /login`, dann `POST /login → 200 application/json {}`. Der `unauthenticated`-Zweig ist in der laufenden App **unerreichbar**. Unverändert **BUG-9 (Medium)** |
+| **EC-11** | [ ] **FAIL, im Betrieb wirkungslos** → **BUG-16 (Medium)** |
+| **EC-2** | [~] **TEILWEISE** — serverseitig belegt (386 IDs → `pool-empty`; mit 385 kommt exakt die fehlende Nummer). Zwei Wege zur Gewinner-Meldung ohne 386 richtige Antworten → **BUG-17 (Low)** |
+| EC-6, EC-10 | [!] Browser-Ereigniskette nicht auslösbar; Verwurfspfad im Code und über die Abnahmetests belegt, 404 der eigenen Bild-Route live bestätigt |
+| EC-1, EC-9 | [!] reine Client-Interaktionen — Garantien im Code (`quiz-screen.tsx:342`, `:292`, `:175`), Tests grün |
+| EC-5 | [!] im Pool 1–386 fehlt kein deutscher Name — der Fall ist nicht herstellbar |
+| EC-8 | [!] echter 429 oder 5xx bewusst nicht provoziert (Fair Use). **Nebenbefund:** der stille Wiederholungsversuch aus AC-15 greift nur bei Wurf oder Timeout, **nicht bei einer Fehlerantwort** (`client.ts:113-119`) |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis |
+|---------|----------|
+| Authentication Bypass | [x] PASS — Routen-Sweep, alle vier Server Actions ohne Cookie → 307; Umgehung über die Bild-Endungs-Ausnahme des Proxys (`POST /x.png`) → 404; gefälschtes Cookie und selbstgebautes `alg=none`-JWT → 307. Ursache: `proxy.ts:53` nutzt `getUser()`, nicht die lokale Signaturprüfung |
+| Autorisierung | [x] PASS — auf Action- und Datenbankebene, inklusive Feld-Injektion; Unveränderlichkeit hält auch gegen direktes `PATCH` und `DELETE` |
+| **SSRF über den Bild-Weg** | [x] **PASS** — 16 Angriffe: `169.254.169.254`, `metadata.google.internal`, `127.0.0.1:54321`, die eigene App, `file://`, protokollrelativ, doppelt kodiert, `raw.githubusercontent.com.evil.com`, `…@evil.com`, Pfad-Traversal, Nicht-Bild auf erlaubtem Host → **alle 400** |
+| Exponierte Secrets | [x] PASS — Wertsuche nach Service-Role-JWT, `sb_secret_` und JWT-Secret in `.next/static` → kein Treffer; die Mustertreffer sind Literale der Supabase-Bibliothek selbst |
+| Sensible Daten in Antworten | [x] PASS — `runs`-Zeile trägt exakt die sechs zugesagten Felder; HTML von `/` (20.429 Bytes) enthält 0 Treffer für E-Mail, UUID oder Tokens |
+| Zugangsdaten in URLs | [x] PASS — alle vier Auth-Formulare `method="post"`; im Quiz existiert überhaupt kein `<form>` |
+| **Eingabevalidierung** | [ ] **FAIL** → **BUG-12, hochgestuft auf Medium und erweitert** |
+| **Security-Header** | [ ] **FAIL** — auf **keiner** Route ist einer der vier gesetzt. Bekannt als Deploy-Blocker (dort unter PROJ-1 geführt); Bahn B stuft höher ein als „Low", weil es jede Route trifft |
+| Drosselung der Server Actions | [!] NOT VERIFIED — nicht implementiert. 40 Aufrufe in 6933 ms, keine Drosselung. **Kein Bug**: kein Zugangsdaten-Pfad in diesem Feature |
+| CSRF | [~] Origin-Prüfung greift (`Origin: https://evil.example` → 500), lässt sich aber mit `X-Forwarded-Host` aushebeln → **BUG-18 (Low, Deploy-Notiz)** |
+| Brute Force und Enumeration | [!] NOT VERIFIED — **dieses Feature hat keinen Zugangsdaten-Pfad**; gehört vollständig zu PROJ-1 |
+
+**Ausdrücklich festgehalten:** PROJ-2 enthält kein Login, keine Registrierung, keinen Passwort-Reset. `tasks.md:8` bestätigt: keine `[user]`-Aufgaben. Die Regel „nicht implementiert = High" gilt hier daher nicht.
+
+**Entwarnung zur Fair-Use-Sorge:** Der Schleifen-Angriff auf `getNextQuestion` belastet die PokeAPI **nicht**. Der Angreifer steuert über `seenIds` nur, was ausgeschlossen wird; gezogen wird serverseitig aus 1–386, und alle 386 Species liegen mit 30-Tage-Cache vor. Eine uncachebare URL lässt sich nicht einschleusen. Die Obergrenze ist die Poolgröße, nicht die Aufrufzahl. Das relativiert Backlog-Punkt **B1** spürbar. Nebenbefund: 300.000 `seenIds` (1,90 MB) → `500 Body exceeded 1 MB limit`, App danach gesund — kein Speicher-DoS.
+
+### Regression (Bahn C)
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` | **13 Dateien, 129 Tests, 129 grün** |
+| `npm run lint` | **Exit 0** |
+| `npm run build` | **Exit 0**, TypeScript fehlerfrei, keine Kollision mit dem laufenden Dev-Server |
+| **`npm run test:e2e`** | **ROT — 6 von 24** → **BUG-14 (High)** |
+
+Ohne Befund: PROJ-1 in beide Richtungen (Registrierung live gegen die Datenbank inklusive Profil-Trigger, Login, Abmelden, Passwort-Reset über echten Mailpit-Link — alle drei Engines); sieben geteilte Shell-Bausteine gegen das gerenderte HTML (Kopfzeile in beiden Auth-Zuständen, Fußzeile ohne toten Link, Wortmarke, Seitenrahmen auch auf der 404-Antwort, Routenschutz, kein zweiter Rahmen); die Datenschicht gegen die **laufende** Datenbank (RLS aktiv, `runs` nur für den Eigentümer, exakt drei Policies — keine UPDATE, keine DELETE —, alle Constraints und Indizes deckungsgleich mit den Migrationen, keine `leaderboard`-Tabelle).
+
+**Die verschobene Hilfsfunktion eigens geprüft**, unabhängig von der Behauptung des Commits: `src/lib/auth/run-action.ts:13-15` delegiert an `src/lib/actions/run-action.ts:24-31`, Semantik zeilengleich zum Vorgänger (`unstable_rethrow` **zuerst**, dann Rückfallwert). 9/9 Tests in beiden Dateien; der `redirect()`-Durchlass ist zur Laufzeit der Login-Erfolgspfad, der Fehlerpfad die gemappte Falschpasswort-Meldung — beide grün in drei Engines. Alle fünf Aufrufstellen abgeklopft: kein toter Import, kein zweiter Pfad ohne Fänger.
+
+### Bugs
+
+#### BUG-14: Die E2E-Suite kodiert das alte AC-9-Verhalten und ist rot
+- **Severity: High** · betrifft **AC-1, AC-8, AC-9, AC-11, EC-1** · **verursacht durch den Fix-Lauf `562bd0e`**
+- **Beleg:** `npm run test:e2e` → **6 von 24 rot**, Exit 1, reproduzierbar in Chromium, Firefox und Mobile Safari (drei Läufe: 8/24, 2/8, 6/24). Zwei Specs:
+  - `tests/PROJ-2-personal-best.spec.ts:49` — nach „Nochmal spielen" wird „Runde starten" erwartet → `element(s) not found`
+  - `tests/PROJ-2-quiz-round.spec.ts:104` — nach „Nochmal spielen" wird „Deine Bestleistung" erwartet → `element(s) not found`
+- **Ursache:** `quiz-screen.tsx:396` startet die Runde jetzt unmittelbar. Die Specs kodieren das alte Verhalten — `personal-best.spec.ts:46` trägt sogar den Kommentar „AC-9 — „Nochmal spielen" führt auf den Startbildschirm zurück" — und wurden im selben Commit **nicht mitgezogen**.
+- **Das Anwendungsverhalten ist richtig.** `spec.md` AC-9 verlangt „dann **startet eine neue Runde**". Rot ist das Regressionsnetz, nicht die Funktion.
+- **Warum trotzdem High:** `npm run test:e2e` und `npm run test:all` sind rot, und **zwei Abdeckungen sind faktisch tot**, weil die Tests vorher abbrechen — die Gegenprobe „schlechtere zweite Runde überschreibt den Rekord nicht" (AC-8) und die Persistenz-Gegenprobe zu AC-11. Beide benutzten den Startbildschirm nur als *Vehikel*, um etwas anderes zu prüfen.
+- **Das Bemerkenswerte:** Der Abnahmetest zu BUG-10 (Unit) schrieb das **neue** Verhalten fest, die E2E-Suite das **alte**. Beide existierten. Gelaufen ist nur die Hälfte — ausgerechnet die selbst geschriebene. Dieses Projekt hat vier Prüfungen, nicht drei.
+
+#### BUG-15: Ein hängendes Bild lässt die Runde dauerhaft stehen, ohne Fehlerkarte
+- **Severity: Medium** · betrifft **AC-15** und **AC-16**
+- **Ursache:** `ImageProbe` (`pokemon-image.tsx:64-89`) meldet nur `onLoad` und `onError`. In `quiz-screen.tsx` existiert **kein Timer**, der das Vorladen begrenzt (`grep setTimeout|setInterval|timeout` → nur Uhr-Tick `:96` und `CORRECT_FEEDBACK_MS`). Die 5-Sekunden-Grenze aus AC-15 (`client.ts:33`) deckt ausschließlich die serverseitige Namensmontage.
+- **Wirkung:** `design.md` sagt „Eine Frage gilt erst als vorgeladen, wenn ihr Bild geladen ist." Bleibt die Bildanfrage stehen — stockende Verbindung, hängender Upstream, **kein** 404 —, feuert weder `onOk` noch `onFail`: `phase` bleibt `loading`, der Bildschirm bleibt auf „Runde wird vorbereitet …", die Fehlerkarte wird nie erreicht, die Serie ist beim Neuladen verloren.
+- **Dieselbe Symptomatik wie BUG-8, anderer Auslöser.** Der Fix für BUG-8 deckt nur „Bild antwortet mit Fehler" ab. AC-15 verspricht eine Zeitgrenze für „eine Frage ist nicht vollständig ladbar" — das Bild gehört dazu.
+
+#### BUG-16: Die Rückfallebene der Bildadresse ist im Betrieb wirkungslos
+- **Severity: Medium** · betrifft **EC-11** und eine ausdrückliche Zusage aus `design.md`
+- **Beleg:** Bahn A maß `repairImageUrl` für die IDs 1, 25, 150, 236 und 386 — **5 von 5 liefern exakt die konstruierte Adresse.** Vom Hauptkontext unabhängig nachgeprüft: `SPRITE_BASE` (`client.ts:17-18`) ist zeichengleich mit dem, was `/pokemon/{id}` unter `sprites.other.official-artwork.front_default` zurückgibt (live gegen die PokeAPI für 25 und 386).
+- **Wirkung:** Da nur eine *abweichende* Adresse als Reparatur gilt (`quiz-screen.tsx:263`), kann die von EC-11 zugesagte „offizielle Bildadresse … verwenden" für den aktuellen Pool **nie stattfinden**. Jeder Bildausfall fällt sofort in EC-6.
+- **Die eigentlichen Kosten:** Die Zusatzanfrage wird trotzdem gestellt (`question-action.ts:117-129`, **über 100 KB je Antwort**) und ihr Ergebnis verworfen — bis zu drei vor der Fehlerkarte. Das arbeitet gegen dieselbe Fair-Use-Zusage, für die BUG-13 behoben wurde.
+- **`design.md` rechtfertigt das konstruierte Adressmuster ausdrücklich damit**, dass „der schlimmste Fall … nicht ‚alle Bilder kaputt', sondern ‚eine Zusatzanfrage pro Pokémon'" sei. **Diese Garantie hat der Code nicht.** Das ist keine Folge des BUG-8-Fixes — es galt seit dem ersten Tag. Der Fix hat es nur sichtbar gemacht: Vorher endete derselbe Weg im Hänger, jetzt im Verwurf.
+- **Braucht eine Entscheidung, keinen reinen Codefix:** entweder die Reparaturanfrage entfällt (dann ist die Leiter einstufig und `design.md` muss das sagen), oder EC-11 wird per `/refine` an das angeglichen, was die Datenquelle tatsächlich hergibt.
+
+#### BUG-12 (neu bewertet): Eingabevalidierung fehlt an zwei Server Actions
+- **Severity: Medium** (vorher Low) · Erweiterung des Befunds vom selben Tag
+- **Neu:** Nicht nur `getNextQuestion`, sondern auch **`getPersonalBest`**. `seenIds` geht ungeprüft in `.filter()` (`question-action.ts:73`), `excludeRoundId` ungeprüft in die Abfrage (`run-actions.ts:40`).
+- **Beleg:** `[]`, `[null]`, `["abc"]`, `[{"toString":1}]` → jeweils **HTTP 500** (`TypeError`); 200.000 Einträge → 500 nach 65 ms. Die Antwort trägt im Dev-Modus **absolute Dateipfade**.
+- **Verstoß gegen** `.claude/rules/security.md` → Input Validation. Pikant: `saveRun` macht es mustergültig mit `runSubmissionSchema`, und `src/lib/validation/quiz.ts:12` enthält bereits ein **ungenutztes** `pokemonIdSchema` — die Bausteine liegen da.
+- **Kein Datenabfluss**, keine Zustandsänderung. Ob Next.js die Pfade im Produktionsmodus entfernt: `[!]` nicht verifiziert.
+
+#### BUG-17: Gewinner-Meldung ohne 386 richtige Antworten
+- **Severity: Low** · betrifft **EC-2**
+- Zwei unabhängige Wege: (a) verworfene Fragen bleiben in `seenIdsRef` (gefüllt `quiz-screen.tsx:211`, in `onProbeFail` `:269` nie zurückgenommen) — die Gewinner-Prüfung `:355` zählt sie mit; (b) der Server prüft die Ausschlussliste nicht gegen den Pool: 386 Nummern **außerhalb** 1–386 → `{"status":"pool-empty"}` (verifiziert). Gleiche Wurzel wie BUG-12.
+- Folge: „Alle Pokémon geschafft" plus gespeicherte Runde, ohne den Pool geleert zu haben.
+
+#### BUG-18: `X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus
+- **Severity: Low** · **Deploy-Notiz, kein Codefix**
+- `Origin: https://evil.example` → **500 `Invalid Server Actions request.`**; mit zusätzlichem `X-Forwarded-Host: evil.example` → **200 `{"status":"saved"}`**.
+- **Aus dem Browser praktisch nicht ausnutzbar:** `X-Forwarded-Host` ist nicht CORS-safelisted (Preflight scheitert), und das Sitzungscookie ist `sameSite: 'lax'` (`cookie-options.ts:19-23`).
+- **Relevant wird es beim Deploy:** Steht ein Reverse Proxy oder CDN davor, das clientseitige `X-Forwarded-Host`-Header nicht verwirft, wird daraus ein echter CSRF-Vektor.
+
+#### BUG-9 und BUG-11 — bestätigt, unverändert offen
+- **BUG-9 (Medium, EC-7)** — zweimal provoziert, siehe EC-7 oben. **Zusatzbefund:** Verliert die Sitzung *während des Fragenladens*, zeigt der Client „Die Pokémon-Datenquelle antwortet nicht" — die Ursache wird dem Anbieter zugeschrieben statt der Abmeldung. Kein Rückschritt: derselbe Pfad galt vor `562bd0e`.
+- **BUG-11 (Low, AC-25)** — `quiz-screen.tsx:423-432`, nur die Textzeile „Runde wird vorbereitet …". Die zweite Hälfte der Zusage hält: kein Spinner im Feature (`grep animate-spin|Loader|Spinner` → 0).
+
+### Not Verified In This Run
+
+- [!] **Alle reinen Client-Interaktionen** — AC-4, AC-6, AC-9, AC-10, AC-17, AC-18, AC-19, AC-24, EC-1, EC-9: **kein Browser**. Jeweils Garantie im Code mit `file:line` belegt und durch Komponententests gestützt. **AC-9 wäre über die E2E-Suite prüfbar gewesen — die ist durch BUG-14 rot**
+- [!] **Optisches Urteil** — `pop` (AC-8), `nudge` (AC-6), „sanfter Puls" (AC-25), Abstände, Kontraste: kein Screenshot-Abgleich
+- [!] **Cross-Browser und Viewport** — Bahn A lief ohne Browser; die E2E-Suite deckt drei Engines ab, ist aber rot (BUG-14). AC-24 (Umschalten bei 640 px) prüft sie ohnehin nicht
+- [!] **AC-16 und EC-8 mit echtem PokeAPI-Ausfall, 429 oder 5xx** — bewusst nicht provoziert (Fair Use)
+- [!] **EC-5** — im Pool 1–386 fehlt kein deutscher Name; der Fall ist nicht herstellbar
+- [!] **EC-2 als echte 386-Antworten-Runde** — nicht spielbar; die serverseitige Hälfte ist verifiziert
+- [!] **EC-6 und EC-10 als Browser-Ereigniskette** — das `error`-Ereignis eines `<img>` ist ohne Browser nicht auslösbar
+- [!] **AC-20 browserseitig** — dass der Browser tatsächlich keine CDN-Anfrage stellt, ist ohne Browser nicht messbar; serverseitig und im HTML belegt
+- [!] **AC-2 und AC-31 unter Produktionsbedingungen** — gemessen gegen den Dev-Server mit warmem Cache (393 Einträge)
+- [!] **Drosselung der Server Actions** — nicht implementiert, bewusst (Backlog `B1`)
+- [!] **Security-Header gegen die Live-URL** — lokal nachweislich alle abwesend
+- [!] **Stack-Trace-Redaktion im Produktionsmodus (BUG-12)** — nur im Dev-Server beobachtet
+- [!] **Clickjacking praktisch demonstriert** — kein Browser
+- [!] **Ursache der E2E-Instabilität unter 16 Workern** — `no-third-party.spec.ts:29` löste einmalig auf 0 Antwortoptionen auf, seriell und im dritten Lauf grün; nicht deterministisch reproduzierbar
+- [!] **Regression bei „Deployed"-Features** — `features/INDEX.md` führt **kein** Feature auf `Deployed`; ersatzweise gegen PROJ-1 und PROJ-2 geprüft
+
+### Verdikt
+
+- **Acceptance Criteria:** 20 von 31 mit Beleg bestanden · **AC-25 FAIL** · AC-15 und AC-2 teilweise · 9 ohne Browser nicht verifizierbar
+- **Edge Cases:** 2 von 11 mit provozierter Ausnahme bestanden · **EC-7 und EC-11 FAIL** · EC-2 teilweise · 6 nicht verifizierbar
+- **Die vier beauftragten Fixes:** alle vier wirken. BUG-7, BUG-8 und BUG-13 mit Beleg; BUG-10 auf Testebene, weil das Regressionsnetz dafür rot ist
+- **Bugs:** 5 neu — **1 High** (BUG-14), **3 Medium** (BUG-15, BUG-16, BUG-12 hochgestuft), **2 Low** (BUG-17, BUG-18) · dazu bestätigt offen: BUG-9 (Medium), BUG-11 (Low)
+- **Security:** **6 Prüfungen mit Beleg bestanden**, 2 mit Befund (Eingabevalidierung, Security-Header), 1 teilweise (CSRF), **3 NOT VERIFIED** (Drosselung bewusst, Header live, Brute Force gehört PROJ-1). **Kein SSRF über den Bild-Weg**, keine exponierten Secrets
+- **Regression:** Test, Lint und Build grün · **E2E rot (BUG-14)** · PROJ-1, Shell und Datenschicht ohne Befund
+- **Production Ready: NEIN**
+
+> **Was dieser Lauf über den Fix-Lauf sagt.** Die vier beauftragten Fehler sind behoben, und drei davon wurden diesmal wirklich provoziert statt gelesen — ein gelöschtes Profil für EC-3, 404-Bildantworten für EC-6, zwei Cache-Messungen für AC-31. Der Fix-Lauf hat aber **die E2E-Suite nicht gefahren** und damit die einzige Stelle übersehen, an der das alte AC-9-Verhalten festgeschrieben war. Der eigene Unit-Test schrieb das neue fest, die fremde E2E-Suite das alte, und nur der eigene wurde ausgeführt. Ein Fix ist nicht fertig, wenn die selbst geschriebenen Tests grün sind.
+
+> **Der lehrreichste Befund ist BUG-16.** Der Fix für BUG-8 war richtig — eine unveränderte Adresse ist keine Reparatur. Genau dadurch wurde sichtbar, dass die Reparaturebene für diesen Pool **nie** etwas anderes liefern kann und die Zusatzanfrage von über 100 KB immer umsonst ist. `design.md` begründet das gesamte Adressmuster mit einer Rückfallebene, die es faktisch nicht gibt. Das stand seit dem 2026-09-01 so da; niemand hat die beiden Konstanten je nebeneinandergelegt. Einen Fehler zu beheben heißt manchmal nur, den darunterliegenden freizulegen.
