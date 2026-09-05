@@ -36,6 +36,21 @@ import { test as base, expect } from '@playwright/test'
 let sequence = 0
 
 /**
+ * Eine Kennung, die für **diesen Lauf** gilt und im nächsten eine andere ist.
+ *
+ * Warum das nötig ist, und zwar nachgemessen: Ohne sie hieß die erste Adresse in
+ * jedem Lauf `2001:db8:0::1`. Die Zählerzeilen leben aber 60 Sekunden in der
+ * Datenbank weiter — zwei Läufe kurz hintereinander erbten also den Zähler des
+ * vorigen. Aufgefallen ist es beim Abnahmetest zu BUG-39, der seinen Zähler
+ * absichtlich bis an die Grenze füllt: Beim zweiten Lauf innerhalb einer Minute
+ * meldete schon der **erste** Versuch „Zu viele Versuche" — ein Fehlschlag, der
+ * nichts über die App aussagt und beim Suchen in die Irre führt.
+ */
+const runId = Math.floor(Math.random() * 0xffff)
+  .toString(16)
+  .padStart(4, '0')
+
+/**
  * Zum zweiten Parameter: Playwright nennt ihn in seiner Dokumentation `use`.
  * Er ist positionell, der Name also frei — und hier heißt er `provide`, weil
  * `react-hooks/rules-of-hooks` sonst den gleichnamigen React-Hook zu erkennen
@@ -44,7 +59,9 @@ let sequence = 0
 export const test = base.extend<{ clientIp: string }>({
   clientIp: async ({}, provide, testInfo) => {
     sequence += 1
-    await provide(`2001:db8:${testInfo.workerIndex.toString(16)}::${sequence.toString(16)}`)
+    await provide(
+      `2001:db8:${runId}:${testInfo.workerIndex.toString(16)}::${sequence.toString(16)}`
+    )
   },
 
   /**

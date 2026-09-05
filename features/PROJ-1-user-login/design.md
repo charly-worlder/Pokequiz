@@ -205,3 +205,22 @@ Nebenbefund, der über die Drosselung hinaus gilt: **Der Browser spricht nie dir
 **Was die IP-Hälfte wert ist, ehrlich gesagt:** `x-forwarded-for` kann ein Client selbst setzen, solange kein Reverse Proxy davorsteht, der den Header überschreibt. Der IP-Zähler bremst also das gewöhnliche schnelle Raten, nicht den, der den Header fälscht — gegen den steht der Konto-Zähler, den man nicht umgehen kann, indem man sich eine andere Herkunft ausdenkt. Beim `/deploy` gehört der Header vom Host gesetzt und clientseitige Werte verworfen; dieselbe Hausaufgabe wie bei BUG-18 (`X-Forwarded-Host`).
 
 **Gegen die laufende Datenbank belegt:** `anon` bekommt auf beide Funktionen `42501 permission denied`; der Server zählt 5 erlaubte und lehnt den 6. ab; `clear_auth_attempts` setzt zurück; und **10 parallele Versuche bei Limit 5 ergeben genau 5 erlaubte und 5 abgelehnte** — der atomare Upsert hält unter Gleichzeitigkeit, ein Zählen in zwei Schritten hätte hier die Lücke.
+
+### Nachtrag 2026-09-05 — BUG-39: Der erfolgreiche Login löscht nur noch den Konto-Zähler
+
+Der QA-Lauf vom selben Tag hat an dieser Drosselung einen **High** gefunden, und er saß nicht in der Zählung, sondern im Aufräumen danach.
+
+**Was falsch war.** `clearAttempts()` löschte nach jedem geglückten Login **beide** Schlüssel — auch `login:ip:<IP>`. Damit war der IP-Zähler von jedem abschaltbar, der **ein einziges eigenes Konto** besitzt: raten, sich selbst anmelden, weiter raten. Keine Header-Fälschung nötig, kein Sonderwissen. Gemessen: **24 Passwortversuche gegen 24 verschiedene Konten von einer IP in 3,6 Sekunden, null abgewiesen.**
+
+**Warum das den Schutz im Kern traf.** Gegen **Passwort-Spraying** — ein gängiges Passwort gegen viele Konten — greift der Konto-Zähler grundsätzlich nicht, weil jedes Opferkonto genau einen Versuch abbekommt. Genau für diesen Angriff ist der IP-Zähler da; das steht so auch im Kopfkommentar von `throttle.ts`. Eine Bremse, die der Angreifer selbst lösen kann, ist keine.
+
+**Was jetzt gilt:** Der erfolgreiche Login löscht ausschließlich `login:account:<adresse>`. Der IP-Zähler bleibt stehen und heilt nach 60 Sekunden von selbst aus.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Ein erfolgreicher Login löscht nur den Konto-Zähler, nie den IP-Zähler** | Der IP-Zähler ist die einzige Bremse gegen Passwort-Spraying, und er darf nicht von dem gelöst werden können, den er bremsen soll. Ein eigenes Konto zu haben ist keine Berechtigung, den gemeinsamen Zähler zurückzusetzen | Den IP-Zähler nur bei „wenigen" Fehlversuchen mitlöschen (verschiebt die Grenze, schließt die Lücke nicht); den Reset ganz streichen (nimmt dem Nutzer die Kulanz nach Tippfehlern ohne Sicherheitsgewinn) | **Hinter einer geteilten Adresse — Haushalt, Büro-NAT — zählen die Fehlversuche des einen weiter, während der nächste sich anmeldet.** Das ist dieselbe Grenze, die der IP-Zähler ohnehin setzt: Sie heilt nach 60 Sekunden aus und sperrt niemanden aus seinem Konto, weil ein richtiges Passwort in der nächsten Minute wieder durchgeht. Die Kulanz nach Tippfehlern bleibt vollständig erhalten, denn der Konto-Zähler ist der, der einen einzelnen Nutzer aussperren würde | 2026-09-05 |
+
+**Der Abnahmetest prüft das Szenario, nicht die Zeile.** `tests/PROJ-1-throttle.spec.ts` fährt von **einer** Verbindung: vier Rateversuche gegen fremde Konten → ein erfolgreicher Login mit dem eigenen Konto → ein weiterer Rateversuch, der abgewiesen werden **muss**. Ein Test wie „nach dem Login ist der Konto-Zähler leer" wäre auch gegen den kaputten Code grün gewesen, denn der Konto-Zähler wurde ja ebenfalls geleert; der Fehler saß daneben. Gegengeprüft: Mit dem alten Verhalten fällt der Test genau an dieser Stelle.
+
+**Beim Aufräumen mitgefunden — und es betraf die Prüfung selbst:** Die gefälschten Testadressen aus `tests/fixtures.ts` waren pro Lauf identisch (`2001:db8:0::1` …). Weil die Zählerzeilen 60 Sekunden weiterleben, erbte jeder zweite Lauf innerhalb einer Minute den Zähler des vorigen — der Abnahmetest, der seinen Zähler absichtlich bis an die Grenze füllt, schlug dann schon beim ersten Versuch fehl. Die Adressen tragen jetzt eine Kennung je Lauf.
+

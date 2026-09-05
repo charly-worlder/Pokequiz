@@ -116,12 +116,31 @@ describe('registerAttempt', () => {
 })
 
 describe('clearAttempts', () => {
-  it('löscht beide Schlüssel des Kontos', async () => {
+  it('löscht den Konto-Zähler und lässt den IP-Zähler stehen (BUG-39)', async () => {
     await clearAttempts('login', 'Spieler@Example.COM')
 
     expect(rpc).toHaveBeenCalledWith('clear_auth_attempts', {
-      p_keys: ['login:account:spieler@example.com', 'login:ip:1.2.3.4'],
+      p_keys: ['login:account:spieler@example.com'],
     })
+  })
+
+  // Die vorige Fassung dieses Tests verlangte ausdrücklich **beide** Schlüssel
+  // und war damit grün, während der Fehler danebenstand: Sie beschrieb, was der
+  // Code tat, statt was er leisten soll — dasselbe Muster wie BUG-31 und BUG-35.
+  // Deshalb steht die Zusage hier zusätzlich als eigene, negative Erwartung.
+  it('rührt den IP-Schlüssel unter keinen Umständen an (BUG-39)', async () => {
+    headerGet.mockImplementation((name: string) =>
+      name === 'x-forwarded-for' ? '203.0.113.9' : null
+    )
+
+    await clearAttempts('login', 'spieler@example.com')
+
+    const keys = rpc.mock.calls
+      .filter((c) => c[0] === 'clear_auth_attempts')
+      .flatMap((c) => c[1].p_keys as string[])
+
+    expect(keys).not.toContain('login:ip:203.0.113.9')
+    expect(keys.some((key) => key.includes(':ip:'))).toBe(false)
   })
 
   it('macht aus einem Fehler beim Aufräumen keinen fehlgeschlagenen Login', async () => {
