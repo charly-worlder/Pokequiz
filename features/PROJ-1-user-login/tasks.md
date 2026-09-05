@@ -14,7 +14,7 @@
 - [x] T1 [P]  Migration: `profiles`-Tabelle, case-insensitive Unique-Index auf Trainername, RLS (SELECT für alle eingeloggten Nutzer, keine Schreibrechte über die Anwendung), Trigger legt das Profil beim Registrieren an (liest den Trainernamen aus den Nutzer-Metadata, läuft in derselben Transaktion wie die Kontoerstellung)  · files: supabase/migrations/0001_profiles.sql  · → AC-1, AC-2, EC-1
 - [x] T2 [P]  Supabase-SSR-Clients (Server- und Browser-Client) für Server Actions und den Proxy  · files: src/lib/supabase/server.ts, src/lib/supabase/client.ts  · → AC-1, AC-4, AC-5, AC-6
 - [x] T3 [P]  Zod-Validierungsschemas für E-Mail, Passwort (≥ 8 Zeichen) und Trainername (3–20 Zeichen, a–z/A–Z/0–9/_)  · files: src/lib/validation/auth.ts  · → AC-1, AC-2, AC-11, AC-13, EC-5
-- [ ] T4 [user]  Supabase (gehostetes Projekt — braucht **nur** ein gehostetes Projekt, **keinen** App-Deploy): Passwort-Mindestlänge auf 8 setzen  · where: Dashboard → Authentication → Sign In / Providers → Email → Minimum password length: 8  · → AC-1, AC-11
+- [x] T4 [user]  Supabase (gehostetes Projekt — braucht **nur** ein gehostetes Projekt, **keinen** App-Deploy): Passwort-Mindestlänge auf 8 setzen  · where: Dashboard → Authentication → Sign In / Providers → Email → Minimum password length: 8  · → AC-1, AC-11  · **vom Nutzer gesetzt am 2026-09-05**; noch nicht durch `/qa` gegen das gehostete Projekt gegengemessen
 
 <!-- T15–T18 nachgetragen am 2026-09-03 durch /refine PROJ-1. Anlass: BUG-6 aus dem
      QA-Lauf — der Reset-Link funktionierte nur im anfordernden Browser. -->

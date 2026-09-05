@@ -31,15 +31,33 @@ export const RESET_CONFIRMATION_MESSAGE =
   'Falls diese Adresse registriert ist, wurde ein Link zum Zurücksetzen verschickt.'
 export const INVALID_RESET_LINK_MESSAGE =
   'Dieser Link ist ungültig oder abgelaufen. Bitte einen neuen anfordern.'
+// BUG-66: Supabase rejects a password identical to the current one with a 422 /
+// code "same_password". That is a field problem, not an outage.
+export const SAME_PASSWORD_MESSAGE =
+  'Das neue Passwort muss sich vom bisherigen unterscheiden.'
 
-// spec.md AC-2, AC-3, AC-9(dropped)/EC-1 — verified empirically against the
-// local Supabase Auth API (see design.md commit notes):
-//   - duplicate email  -> AuthApiError, status 422, code "user_already_exists"
-//   - duplicate trainer name -> the signup trigger's Postgres exception is
-//     always reported as a generic 500 (AuthRetryableFetchError, no code);
-//     nothing else in this flow produces a 500, so status alone is reliable.
+// spec.md AC-2, AC-3, EC-1 — verified empirically against the local Supabase
+// Auth API, re-measured on 2026-09-05 through the same supabase-js the app uses:
+//   - duplicate email        -> AuthApiError, 422, code "user_already_exists"
+//   - duplicate trainer name -> AuthRetryableFetchError, 500, code undefined,
+//                               message "Database error saving new user"
 //   - Supabase's built-in IP rate limit -> status 429
-export function mapRegisterError(error: AuthErrorLike): ActionState {
+//
+// BUG-68: that 500 is NOT self-identifying. The signup trigger raises
+// `trainer_name_taken` (0001_profiles.sql), but GoTrue replaces it with the
+// generic message above — a real database outage during registration arrives
+// looking exactly the same. This function used to read every 500 as a taken
+// trainer name, so an outage told the user their chosen name was gone.
+//
+// The status alone cannot decide it, so the caller has to answer the question
+// first: `trainerNameTaken` is the result of asking the database whether a
+// profile with that name actually exists (see trainer-name.ts). The parameter is
+// required on purpose — a default would let a future caller silently reintroduce
+// the guess.
+export function mapRegisterError(
+  error: AuthErrorLike,
+  context: { trainerNameTaken: boolean }
+): ActionState {
   if (error.code === 'user_already_exists') {
     return { fieldErrors: { email: 'Diese E-Mail-Adresse ist bereits registriert.' } }
   }
@@ -48,7 +66,9 @@ export function mapRegisterError(error: AuthErrorLike): ActionState {
     return { error: THROTTLED_MESSAGE }
   }
 
-  if (error.status === 500) {
+  // spec.md EC-1 still holds: in a real race the winning transaction has
+  // committed by the time we look, so the loser sees the field error.
+  if (error.status === 500 && context.trainerNameTaken) {
     return { fieldErrors: { trainerName: 'Dieser Trainername ist bereits vergeben.' } }
   }
 
@@ -84,4 +104,21 @@ export function mapPasswordResetRequestError(error: AuthErrorLike | null): Actio
   }
 
   return { message: RESET_CONFIRMATION_MESSAGE }
+}
+
+// spec.md AC-11 — setting the new password at the end of a reset.
+//
+// BUG-66: reusing the current password came back as "Die Verbindung ist
+// fehlgeschlagen", because every failure here fell through to the network
+// message. Supabase is specific about this one (422 / code "same_password",
+// measured 2026-09-05), so the user gets a field error telling them what to
+// change. Everything else stays a genuine failure — the same separation BUG-9
+// established for the login: never dress an outage up as a user mistake, and
+// never dress a user mistake up as an outage.
+export function mapUpdatePasswordError(error: AuthErrorLike): ActionState {
+  if (error.code === 'same_password') {
+    return { fieldErrors: { password: SAME_PASSWORD_MESSAGE } }
+  }
+
+  return { error: NETWORK_ERROR_MESSAGE }
 }

@@ -3,12 +3,19 @@ import {
   mapRegisterError,
   mapLoginError,
   mapPasswordResetRequestError,
+  mapUpdatePasswordError,
   fieldErrorsFromZod,
   THROTTLED_MESSAGE,
   WRONG_CREDENTIALS_MESSAGE,
   RESET_CONFIRMATION_MESSAGE,
   NETWORK_ERROR_MESSAGE,
+  SAME_PASSWORD_MESSAGE,
 } from './error-mapping'
+
+// Kurzschreibweisen für die beiden Antworten auf „war der Name vergeben?" —
+// dieselbe Frage, die registerAction auf dem Fehlerpfad an die Datenbank stellt.
+const NAME_VERGEBEN = { trainerNameTaken: true }
+const NAME_FREI = { trainerNameTaken: false }
 
 // These shapes (status/code combinations) were verified against a running
 // local Supabase Auth instance during /build — see the comments in
@@ -17,24 +24,25 @@ import {
 describe('mapRegisterError', () => {
   // spec.md AC-3: duplicate email is told openly, on the email field.
   it('maps a duplicate email to a field error on email', () => {
-    const result = mapRegisterError({ status: 422, code: 'user_already_exists' })
+    const result = mapRegisterError({ status: 422, code: 'user_already_exists' }, NAME_FREI)
     expect(result.fieldErrors?.email).toBeDefined()
     expect(result.error).toBeUndefined()
   })
 
-  // spec.md AC-2, EC-1: the signup trigger's rejection surfaces as a bare 500.
-  it('maps a generic 500 to a field error on trainerName', () => {
-    const result = mapRegisterError({ status: 500 })
+  // spec.md AC-2, EC-1: the signup trigger's rejection surfaces as a bare 500 —
+  // and is only a taken name if the database says the name is actually there.
+  it('maps a 500 to a field error on trainerName when the name really is taken', () => {
+    const result = mapRegisterError({ status: 500 }, NAME_VERGEBEN)
     expect(result.fieldErrors?.trainerName).toBeDefined()
   })
 
-  // spec.md AC-9(dropped)/AC-8: Supabase's own IP rate limit.
+  // spec.md AC-8: Supabase's own IP rate limit.
   it('maps a 429 to the throttled message', () => {
-    expect(mapRegisterError({ status: 429 }).error).toBe(THROTTLED_MESSAGE)
+    expect(mapRegisterError({ status: 429 }, NAME_FREI).error).toBe(THROTTLED_MESSAGE)
   })
 
   it('falls back to a generic error for anything else', () => {
-    const result = mapRegisterError({ status: 503 })
+    const result = mapRegisterError({ status: 503 }, NAME_FREI)
     expect(result.error).toBeDefined()
     expect(result.fieldErrors).toBeUndefined()
   })
@@ -87,6 +95,54 @@ describe('fieldErrorsFromZod', () => {
  * ab, dass die Trennung AC-7 nicht bricht — falsches Passwort und unbekannte
  * Adresse müssen weiterhin ununterscheidbar bleiben.
  */
+describe('mapRegisterError — Ausfall vs. vergebener Trainername (BUG-68)', () => {
+  /**
+   * Der Trigger wirft `trainer_name_taken`, aber GoTrue ersetzt den Text durch
+   * „Database error saving new user" — gemessen am 2026-09-05. Ein echter
+   * Datenbankausfall während der Registrierung sieht am Fehlerobjekt **identisch**
+   * aus. Vorher wurde jeder 500 als vergebener Name gedeutet; der Nutzer bekam bei
+   * einer Störung gesagt, sein Wunschname sei weg, und probierte weiter.
+   *
+   * Dieser Test ist der eigentliche Wächter: Er prüft den Fall, in dem die
+   * Datenbank sagt „den Namen gibt es hier gar nicht".
+   */
+  it('meldet einen 500 als Störung, wenn der Trainername gar nicht vergeben ist', () => {
+    const result = mapRegisterError({ status: 500 }, NAME_FREI)
+    expect(result.error).toBe(NETWORK_ERROR_MESSAGE)
+    expect(result.fieldErrors).toBeUndefined()
+  })
+
+  it('hält AC-2/EC-1: derselbe 500 bleibt ein Feldfehler, wenn der Name wirklich vergeben ist', () => {
+    const result = mapRegisterError({ status: 500 }, NAME_VERGEBEN)
+    expect(result.fieldErrors?.trainerName).toBe('Dieser Trainername ist bereits vergeben.')
+    expect(result.error).toBeUndefined()
+  })
+
+  it('lässt die Nachfrage den 429 nicht überstimmen — Drosselung bleibt Drosselung', () => {
+    expect(mapRegisterError({ status: 429 }, NAME_VERGEBEN).error).toBe(THROTTLED_MESSAGE)
+  })
+})
+
+describe('mapUpdatePasswordError — Feldproblem vs. Störung (BUG-66)', () => {
+  /**
+   * Ein neues Passwort, das dem alten entspricht, wurde als „Die Verbindung ist
+   * fehlgeschlagen" gemeldet, weil jeder Fehler auf die Netzwerkmeldung durchfiel.
+   * Der Nutzer erfuhr nicht, was er ändern soll. Supabase ist hier eindeutig:
+   * 422 / code "same_password" (gemessen 2026-09-05).
+   */
+  it('meldet ein unverändertes Passwort am Passwort-Feld, nicht als Verbindungsfehler', () => {
+    const result = mapUpdatePasswordError({ status: 422, code: 'same_password' })
+    expect(result.fieldErrors?.password).toBe(SAME_PASSWORD_MESSAGE)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('meldet eine echte Störung weiterhin als Störung, nicht als Feldproblem', () => {
+    expect(mapUpdatePasswordError({ status: 500 }).error).toBe(NETWORK_ERROR_MESSAGE)
+    expect(mapUpdatePasswordError({}).error).toBe(NETWORK_ERROR_MESSAGE)
+    expect(mapUpdatePasswordError({ status: 500 }).fieldErrors).toBeUndefined()
+  })
+})
+
 describe('mapLoginError — Ausfall vs. falsche Zugangsdaten (BUG-9)', () => {
   it('meldet einen Fehler ohne Status als Verbindungsproblem, nicht als falsches Passwort', () => {
     expect(mapLoginError({}).error).toBe(NETWORK_ERROR_MESSAGE)

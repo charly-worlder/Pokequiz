@@ -15,11 +15,13 @@ import {
   mapLoginError,
   mapPasswordResetRequestError,
   mapRegisterError,
+  mapUpdatePasswordError,
   NETWORK_ERROR_MESSAGE,
   THROTTLED_MESSAGE,
   INVALID_RESET_LINK_MESSAGE,
   type ActionState,
 } from '@/lib/auth/error-mapping'
+import { isTrainerNameTaken } from '@/lib/auth/trainer-name'
 
 export type { ActionState }
 
@@ -60,7 +62,13 @@ export async function registerAction(
   })
 
   if (error) {
-    return mapRegisterError(error)
+    // BUG-68: Ein 500 heißt hier entweder „Trainername vergeben" (Trigger) oder
+    // „Datenbank gerade kaputt" — GoTrue liefert für beides denselben Text. Also
+    // wird nachgefragt, statt geraten. Nur auf dem Fehlerpfad, nur bei 500.
+    const trainerNameTaken =
+      error.status === 500 ? await isTrainerNameTaken(trainerName) : false
+
+    return mapRegisterError(error, { trainerNameTaken })
   }
 
   redirect('/')
@@ -187,7 +195,7 @@ export async function updatePasswordAction(
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password })
 
   if (error) {
-    return { error: NETWORK_ERROR_MESSAGE }
+    return mapUpdatePasswordError(error)
   }
 
   redirect('/')

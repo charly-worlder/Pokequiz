@@ -1040,3 +1040,39 @@ Ein zusätzlicher Test hätte hier nur bestätigt, was diese schon prüfen. Die 
 **Was READY im Weg steht:** allein T4, und der ist nach Aktenlage **heute setzbar** (siehe `[user]`-Abschnitt) — nicht, wie `INDEX.md` behauptet, erst nach dem ersten Deploy.
 
 `features/INDEX.md` bleibt bei **In Review**.
+
+---
+
+## Nachtrag — 2026-09-05: Ausgang der sechs Befunde
+
+_Geschrieben vom Fix-Durchgang, **nicht** von einem QA-Lauf. Die Fixes sind unten belegt, aber sie sind **nicht unabhängig verifiziert** — das holt der nächste `/qa`-Lauf nach._
+
+| Befund | Entscheidung des Nutzers | Stand |
+|---|---|---|
+| **BUG-66** neues Passwort = altes | beheben | ✅ behoben, belegt |
+| **BUG-68** jeder 500 = „Trainername vergeben" | beheben | ✅ behoben, belegt |
+| **BUG-69** `NEXT_PUBLIC_SITE_URL` undokumentiert | beheben | ✅ behoben |
+| **BUG-65** Timing verrät Kontoexistenz | als akzeptiertes Risiko dokumentieren | ✅ als **EC-10** im Vertrag |
+| **BUG-67** irreführende Sperrmeldung | vorerst unangetastet | offen (Low) |
+| **BUG-70** breite GRANTs auf `auth_throttle` | vorerst unangetastet | offen (Low) |
+| **T4** Passwort-Mindestlänge gehostet | vom Nutzer gesetzt | ✅ gesetzt, **noch nicht gegengemessen** |
+
+### Was BUG-68 wirklich war
+
+Die ursprüngliche Diagnose („jeder 500 wird als vergebener Trainername gedeutet") stimmte, die naheliegende Behebung nicht. Gemessen am 2026-09-05 mit demselben `supabase-js`, das die App benutzt: Der Trigger wirft zwar ausdrücklich `trainer_name_taken`, **GoTrue reicht den Text aber nicht durch** — beim Client kommt `AuthRetryableFetchError`, Status 500, `code: undefined`, `"Database error saving new user"` an. Am Fehlerobjekt allein ist ein doppelter Name von einem echten Datenbankausfall **nicht** unterscheidbar.
+
+Deshalb fragt `registerAction` jetzt nach, statt zu raten: Bei einem 500 wird die Datenbank gefragt, ob der Trainername tatsächlich existiert (`src/lib/auth/trainer-name.ts`), und die Antwort geht an `mapRegisterError`. Nur auf dem Fehlerpfad — der geglückte Weg kostet keine zusätzliche Abfrage. **EC-1 bleibt unangetastet:** In einem echten Wettlauf hat die gewinnende Transaktion committet, bevor nachgefragt wird.
+
+### Belege
+
+- **Unit-Tests:** `error-mapping.test.ts` von 12 auf 17 Tests. **Rot-Nachweis geführt:** Mit entfernten Prüfungen fallen genau zwei Tests — „meldet einen 500 als Störung, wenn der Trainername gar nicht vergeben ist" und „meldet ein unverändertes Passwort am Passwort-Feld" —, alle übrigen bleiben grün. Die drei Tests der Gegenrichtung waren auch gegen den kaputten Stand grün; erst zusammen spannen sie die Zusage auf
+- **Gegen die laufende App im echten Browser** (Chromium, Wegwerf-Skript): doppelter Trainername → Feldfehler „Dieser Trainername ist bereits vergeben." und **keine** Störungsmeldung (AC-2 hält); unverändertes Passwort → Feldfehler „Das neue Passwort muss sich vom bisherigen unterscheiden." und **keine** Störungsmeldung
+- **Vier Prüfungen, alle gelaufen:** Test **171/171** (vorher 166), Lint 73 Dateien **0/0**, Build **Exit 0 — diesmal im echten Projektordner**, was die im QA-Lauf offen gebliebene Lücke schließt, E2E **33/33**
+- **Kein Geheimnis im Bundle:** Weil der Admin-Client jetzt an einer weiteren Stelle benutzt wird, gegengeprüft — mit Positivkontrolle (`Trainername` **gefunden**, also erreicht die Suche das Bundle): Service-Role-Schlüssel **kein Treffer**, Literal `service_role` in `.next/static` **kein Treffer**, `isTrainerNameTaken` **nicht** in einem Client-Chunk
+
+### Was offen bleibt
+
+- **BUG-67** und **BUG-70** bleiben auf Wunsch unangetastet und stehen weiter oben in der Befundliste
+- **BUG-65** ist als **EC-10** in den Vertrag aufgenommen und in `design.md` begründet — ab jetzt erwartetes Verhalten, kein offener Befund
+- **T4** ist gesetzt, aber **nicht gegengemessen**. Die Prüfung wäre eine Registrierung mit 7 Zeichen gegen das gehostete Projekt, die abgelehnt werden muss
+- Die Deploy-Blocker **BUG-61**, **BUG-12** und **BUG-18** sind von diesem Durchgang unberührt

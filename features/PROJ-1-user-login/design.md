@@ -289,6 +289,35 @@ Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.*
 
 **Beide hängen an derselben Stellschraube** — wie die erlaubten Versuche zwischen IP- und Konto-Zähler verteilt sind. Wer eines davon angeht, muss beide zusammen neu rechnen, und zwar für die **unbequemste realistische Nutzung**: einen Schulanschluss am Montagmorgen, nicht einen Haushalt ohne Tippfehler. Dass genau dieser Unterschied zweimal übersehen wurde (BUG-54, dann BUG-55), ist der Grund, warum er hier ausgeschrieben steht.
 
+### Nachtrag 2026-09-05 — die Fehlerzuordnung sagt jetzt, was wirklich schiefging (BUG-66, BUG-68)
+
+Der QA-Lauf gegen den überarbeiteten Vertrag fand zweimal dasselbe Muster, das schon BUG-9 und BUG-11 erzeugt hatte: **Ein Zustand, den der Nutzer selbst beheben kann, wurde ihm als Störung gemeldet — oder umgekehrt.**
+
+**Vorher gemessen, nicht vermutet** (2026-09-05, gegen die lokale Instanz mit demselben `supabase-js`, das die App benutzt):
+
+| Fall | Was bei der App ankommt |
+| --- | --- |
+| Doppelte E-Mail | `AuthApiError`, 422, `code: user_already_exists` |
+| Neues Passwort = altes | `AuthApiError`, 422, **`code: same_password`** |
+| Doppelter Trainername | `AuthRetryableFetchError`, 500, **`code: undefined`**, `"Database error saving new user"` |
+
+Die dritte Zeile ist der eigentliche Befund. Der Trigger aus `0001_profiles.sql` wirft ausdrücklich `trainer_name_taken` — **GoTrue reicht den Text nicht durch.** Ein echter Datenbankausfall während der Registrierung sieht am Fehlerobjekt identisch aus. Die bisherige Annahme im Kopfkommentar von `error-mapping.ts` („nichts anderes in diesem Fluss erzeugt einen 500, also ist der Status allein verlässlich") war damit widerlegt.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Bei einem 500 wird nachgefragt, statt geraten** — `registerAction` fragt die Datenbank, ob der Trainername wirklich existiert, und übergibt die Antwort an `mapRegisterError` (`src/lib/auth/trainer-name.ts`) | Der Status allein kann es nicht entscheiden, und die Folge des Ratens traf den Nutzer an der falschen Stelle: Bei einer Störung las er, sein Wunschname sei vergeben, und probierte einen zweiten und dritten. **EC-1 bleibt unangetastet** — in einem echten Wettlauf hat die gewinnende Transaktion committet, bevor nachgefragt wird, der Verlierer sieht also weiterhin den Feldfehler | Den Trigger einen unterscheidbaren Fehler werfen lassen — GoTrue überschreibt ihn, geht also nicht · Vorab prüfen statt hinterher — kostet jede Registrierung eine Abfrage und öffnet dasselbe Zeitfenster · Die Meldung unschärfer formulieren („möglicherweise vergeben") — verlagert die Unsicherheit auf den Nutzer | **Ein zusätzlicher Datenbank-Aufruf, aber nur auf dem Fehlerpfad** — der geglückte Weg kostet nichts. Die Abfrage läuft über den Admin-Client, weil `profiles` für `anon` nicht lesbar ist und die Registrierung noch keine Sitzung hat; sie erfährt ausschließlich, **ob** ein Name vergeben ist — genau die Auskunft, die AC-2 dem Nutzer ohnehin gibt. Scheitert die Nachfrage selbst, lautet die Antwort „nicht vergeben" und der Nutzer bekommt die Störungsmeldung — in dem Fall die zutreffende | 2026-09-05 |
+| **`mapUpdatePasswordError` trennt `same_password` von einer echten Störung** | Dieselbe Trennung, die BUG-9 für den Login eingeführt hat: eine Störung nie als Nutzerfehler ausgeben und einen Nutzerfehler nie als Störung. Der Code ist eindeutig, die Meldung landet als Feldfehler am Passwort-Feld, wo das Formular sie ohnehin verteilt | Alles weiter auf die Netzwerkmeldung fallen lassen | Eine weitere Zuordnungsfunktion. Bewusst **nur** `same_password` behandelt: `weak_password` fängt Zod schon vorher ab, und jede weitere Sonderbehandlung wäre Vorrat ohne belegten Fall | 2026-09-05 |
+
+**Beide Fixes tragen einen Wächter, dessen Rot-Zustand nachgewiesen ist.** Mit den entfernten Prüfungen fallen genau zwei Tests in `error-mapping.test.ts` — „meldet einen 500 als Störung, wenn der Trainername gar nicht vergeben ist" und „meldet ein unverändertes Passwort am Passwort-Feld" —, alle übrigen bleiben grün. Die drei Tests der Gegenrichtung (AC-2/EC-1 halten, 429 schlägt die Nachfrage, echte Störung bleibt Störung) waren auch gegen den kaputten Stand grün: **erst zusammen** spannen sie die Zusage auf.
+
+### Bewusst akzeptiertes Risiko außerhalb der Drosselung (2026-09-05) — BUG-65
+
+Dieser Befund steht aus demselben Grund hier wie BUG-55 und BUG-57 weiter oben: gemessen, verstanden, absichtlich nicht behoben — und im Vertrag als **EC-10** festgehalten, damit ihn niemand für ein Versehen hält.
+
+| Risiko | Die genaue Zahl | Warum akzeptiert |
+| --- | --- | --- |
+| **BUG-65 — die Antwortzeit verrät die Kontoexistenz** (Medium) | Je 12 Anfragen mit frischer Adresse: falsches Passwort **Median 176 ms / Mittel 164 ms**, unbekannte Adresse **Median 102 ms / Mittel 98 ms** — konstant rund **74 ms** Unterschied, weil nur der bestehende Fall durch die Passwort-Prüfung läuft | Die Differenz entsteht in Supabases Auth-Dienst; die App ruft `signInWithPassword` auf und sieht die Zeit nicht, die dort vergeht. Die einzige App-seitige Gegenmaßnahme wäre, **jede** Anmeldung auf eine feste Mindestdauer zu strecken — der Preis wäre ein langsamerer Weg ins Spiel für alle, gegen einen Vorteil, den der Konto-Zähler (AC-16) ohnehin begrenzt. Der Wortlaut von AC-7 bleibt erfüllt: Die **Meldung** verrät nichts |
+
 ### Entscheidungen zum finalen QA-Lauf (2026-09-05)
 
 | Decision | Rationale | Alternative considered | Trade-off | Date |
