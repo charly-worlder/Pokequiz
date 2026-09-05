@@ -43,17 +43,21 @@ test('Erste Runde setzt den Rekord, die schlechtere zweite nicht (AC-1, AC-8, AC
   await expect(page.getByText('Runde beendet')).toBeVisible()
   await expect(page.getByText('Neue persönliche Bestleistung')).toBeVisible()
 
-  // AC-9 — „Nochmal spielen" führt auf den Startbildschirm zurück.
+  // AC-9 — „Nochmal spielen" startet die neue Runde **unmittelbar**. Der Umweg
+  // über den Startbildschirm war BUG-10 (qa-report.md 2026-09-04): ein
+  // zusätzlicher Klick, der gegen das PRD-Erfolgskriterium „direkt eine zweite
+  // Runde" arbeitet.
+  //
+  // `waitForQuestion` ist hier die eigentliche Zusicherung, und zwar bewusst als
+  // *positive* Prüfung. Ein „‚Runde starten' ist nicht mehr da" wäre die
+  // naheliegende Formulierung und wäre falsch: Playwright hält bei der ersten
+  // erfolgreichen Messung an, und unmittelbar nach dem Klick ist der Knopf auch
+  // beim alten Verhalten für einen Wimpernschlag noch nicht gerendert. Der Test
+  // wäre dann ausgerechnet gegen den Fehler grün, den er fangen soll. Dass von
+  // selbst eine offene Frage erscheint, kann das alte Verhalten dagegen nicht.
   await page.getByRole('button', { name: 'Nochmal spielen' }).click()
-  const start = page.getByRole('button', { name: 'Runde starten' })
-  await expect(start).toBeVisible()
-
-  // AC-1 — dort steht jetzt die gespeicherte Bestleistung mit Serie 2.
-  await expect(page.getByText('Deine Bestleistung')).toBeVisible()
-  await expect(page.getByText(/Serie\s*2/)).toBeVisible()
 
   // --- Runde 2: sofort falsch, also Serie 0 ---------------------------------
-  await start.click()
   await waitForQuestion(page)
 
   // AC-9 — die neue Runde beginnt bei Serie 0 mit zurückgesetzter Uhr.
@@ -74,7 +78,14 @@ test('Erste Runde setzt den Rekord, die schlechtere zweite nicht (AC-1, AC-8, AC
   // Zustand und nicht über einen zu früh abgelesenen.
   await expect(page.getByText('Neue persönliche Bestleistung')).toHaveCount(0)
 
-  // Und der alte Rekord steht unverändert, ist also nicht überschrieben worden.
-  await page.getByRole('button', { name: 'Nochmal spielen' }).click()
+  // AC-1 — die gespeicherte Bestleistung steht auf dem Startbildschirm. Seit AC-9
+  // die neue Runde direkt startet, führt der Weg dorthin über `/` — genau so, wie
+  // AC-1 es formuliert („Angenommen ein angemeldeter Nutzer öffnet `/`").
+  //
+  // Diese eine Prüfung trägt drei Aussagen auf einmal: Runde 1 wurde überhaupt
+  // gespeichert (AC-11), sie erscheint auf dem Startbildschirm (AC-1), und die
+  // schlechtere Runde 2 hat den Rekord **nicht** überschrieben (AC-8).
+  await page.goto('/')
+  await expect(page.getByText('Deine Bestleistung')).toBeVisible()
   await expect(page.getByText(/Serie\s*2/)).toBeVisible()
 })

@@ -79,6 +79,12 @@
 - **BUG-11** (Low, AC-25) — keine Skelettfläche beim Rundenstart
 - **BUG-12** (Low) — `getNextQuestion` validiert seine Eingabe nicht (kein Zod-Schema wie `saveRun`)
 
+## Level 7 — Fixes aus dem QA-Lauf vom 2026-09-04 (zweiter des Tages)
+
+- [x] T17  E2E-Suite auf das neue AC-9-Verhalten nachziehen (BUG-14). `PROJ-2-personal-best.spec.ts` prüft jetzt **positiv**, dass nach „Nochmal spielen" von selbst eine offene Frage erscheint; die Bestleistung wird über `/` geprüft, so wie AC-1 sie festmacht. `PROJ-2-quiz-round.spec.ts` tauscht nur das Vehikel (`goto('/')` statt Knopf), die Aussage zu AC-11 bleibt unverändert  · files: tests/PROJ-2-personal-best.spec.ts, tests/PROJ-2-quiz-round.spec.ts  · → AC-1, AC-8, AC-9, AC-11
+
+**Nebenbefund, kein Task:** `npm run test:e2e` läuft ohne Angabe mit **16 Workern** (32 CPUs) und ist dabei unzuverlässig — 5 von 24 rot, immer mit demselben Symptom: Die Runde hängt auf „Runde wird vorbereitet …", weil das Bild unter Last nicht rechtzeitig lädt und `ImageProbe` keine Zeitgrenze kennt. **Gegen den Stand *vor* `562bd0e` gemessen: dort ebenfalls 5 von 24 rot** — der Flake ist also vorbestehend und nicht Folge der Fixes. Bei 2 und 4 Workern: 24/24, mehrfach bestätigt. Die Ursache ist **BUG-15**; die Worker-Zahl zu deckeln würde das Symptom verstecken, nicht beheben.
+
 ## Backlog — bewusst offen
 
 Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht. Diese Punkte haben **kein Acceptance Criterion**; sie werden erst dann Aufgaben, wenn jemand sie ausdrücklich in die Spec holt (`/refine PROJ-2`).
