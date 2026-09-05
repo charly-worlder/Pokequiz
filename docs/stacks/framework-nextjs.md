@@ -26,11 +26,17 @@ When setting variables in a host's panel, check each name against that rule befo
 
 ## Where the app's routes and layout live
 
-_Reached from `/build` and `/audit` when they map the real code surface._
+_Reached from `/build` and `/audit` when they map the real code surface, and from `/architecture` and
+`/audit` when they measure the codebase map's age._
 
 With the App Router, pages live under `src/app/`, API routes are `route.ts` files under
 `src/app/api/`, and the app-wide frame is `src/app/layout.tsx`. Projects that predate `src/` keep
 the same tree at the repository root.
+
+**The files that make a codebase map stale** — what "added since the map's commit" is filtered to
+in this framework: `src/app/**/page.tsx` and `src/app/**/route.ts` (a new screen or endpoint),
+`src/middleware.ts` or `src/proxy.ts` (the auth boundary), and `src/app/**/layout.tsx` (the shell).
+A new component under `src/components/` is not a route and does not count.
 
 ## Submitting a form that carries credentials
 

@@ -13,17 +13,18 @@ import type { Question } from '@/lib/quiz/question-action'
  * which is exactly why it needs a test rather than another manual look.
  */
 
-const { getNextQuestion, repairImageUrl, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
+const { getNextQuestion, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
   getNextQuestion: vi.fn(),
-  repairImageUrl: vi.fn(),
   saveRun: vi.fn(),
   getPersonalBest: vi.fn(),
   push: vi.fn(),
 }))
 
-vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion, repairImageUrl }))
+vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion }))
 vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }))
+// `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
+// benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
 
 // next/image needs a real <img> here so that load and error events can be
 // dispatched; its own props are not what this test is about.

@@ -35,8 +35,9 @@ This is the skill that diverges most, so check before you read any further:
 - **`platform` is not `web`** → read this one first, because it decides whether the hosting question is
   even meaningful. Step 2 and the HTTP checks in Step 4 assume an app that lives behind a URL, and that is
   not what going live means here: a **mobile** app is built and submitted to a store, where someone else
-  reviews it before users see it; an **mcp** server or a **cli** is published to a package registry; a browser **extension** is packaged and submitted to its store (Chrome Web Store, AMO), where it is reviewed as well. The kit
-  ships no procedure for either — **ask how a release reaches users in this project and follow that**, and
+  reviews it before users see it; a **desktop** app is signed and usually notarized, then shipped either through a
+  store or through its own update mechanism; an **mcp** server or a **cli** is published to a package registry; a browser **extension** is packaged and submitted to its store (Chrome Web Store, AMO), where it is reviewed as well. The kit
+  ships no procedure for any of them — **ask how a release reaches users in this project and follow that**, and
   treat the review or approval wait as part of the process (see the human-gated bullet below).
   **Record their answer in `stack.deploy`** the same way Step 2 does for a web host (`eas`, `fastlane`,
   `npm`, whatever they name it), so the next deploy already knows and nobody is asked twice.

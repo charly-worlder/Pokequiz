@@ -83,9 +83,13 @@ Registrieren (Server Action, öffentlich)
   (AC-13, EC-5)
 
 Einloggen (Server Action, öffentlich)
-- Ruft Supabase Auth direkt auf; die IP-basierte Drosselung (AC-8, EC-4) läuft vollständig in
-  Supabase, kein eigener Zähler in der Anwendung. Lokal ließ sich dieses Limit nicht auslösen
-  (siehe Technical Decisions) — vor Launch gegen das gehostete Projekt erneut prüfen
+- **Überholt seit BUG-29 (2026-09-05):** Der Absatz beschrieb bis dahin „kein eigener Zähler in der
+  Anwendung". Gebaut ist inzwischen das Gegenteil — ein eigener Fehlversuchszähler in der Datenbank,
+  5 Versuche je Minute und IP **plus** 20 je 15 Minuten und Konto, gezählt **vor** dem Auth-Aufruf.
+  Supabases eigenes Limit liegt als Untergrenze darunter. Die vollständige Beschreibung samt
+  Abwägungen steht in den Nachträgen am Ende dieses Dokuments (BUG-29, BUG-39, BUG-54, BUG-56).
+  **`spec.md` → AC-8 trägt die alte Beschreibung noch** — sie ist read-only und gehört über
+  `/refine PROJ-1` nachgezogen (in `features/INDEX.md` als BUG-21 geführt)
 - Erfolg: Sitzung wird gesetzt, Weiterleitung zu /
 - Abgelehnt, wenn: IP-Limit erreicht (AC-8, EC-4) · Zugangsdaten falsch oder E-Mail unbekannt — in
   beiden Fällen dieselbe Meldung (AC-7)
@@ -132,7 +136,7 @@ Routenschutz (Proxy `src/proxy.ts`, appweit)
 | Setting | Where | Value | Why | → AC |
 | --- | --- | --- | --- | --- |
 | Passwort-Mindestlänge | Supabase Dashboard → Authentication → Sign In / Providers → Email | Minimum password length: 8 | Erzwingt die zugesagte Mindestlänge serverseitig, nicht nur im Formular | AC-1, AC-11 |
-| Login-/Signup-Rate-Limit (`sign_in_sign_ups`) | Supabase Dashboard → Authentication → Rate Limits | Standardwert belassen (30 Versuche / 5 Minuten pro IP); nach dem ersten Deploy dort live gegen echte wiederholte Login-Versuche prüfen | Einziger Schutz gegen automatisiertes Durchprobieren — bewusst kein App-eigener Zähler (siehe Technical Decisions); lokal ließ sich das Limit nicht auslösen | AC-8, EC-4 |
+| Login-/Signup-Rate-Limit (`sign_in_sign_ups`) | Supabase Dashboard → Authentication → Rate Limits | Standardwert belassen (30 Versuche / 5 Minuten pro IP); nach dem ersten Deploy dort live prüfen | **Untergrenze, nicht der Schutz.** Seit BUG-29 gibt es einen App-eigenen Zähler (5/Minute pro IP, 20/15 Minuten pro Konto), der enger greift und auch das abdeckt, was Supabase nicht sieht. Diese Einstellung bleibt als zweite Ebene stehen | AC-8, EC-4 |
 | Leaked-Password-Schutz | Supabase Dashboard → Authentication → Attack Protection | Bewusst aus | Reaktiv statt präventiv (siehe Technical Decisions); zusätzlich ein Paid-Plan-Feature | — |
 | Lokaler Spiegel der Passwort-Mindestlänge | `supabase/config.toml` → `[auth]` | `minimum_password_length = 8` (bereits gesetzt) | Damit `/qa` und die lokale Entwicklung gegen dieselbe Regel laufen wie später produktiv | AC-1, AC-11 |
 | E-Mail-Vorlage „Reset Password" | Supabase Dashboard → Authentication → Email Templates → Reset Password | Link auf `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password` setzen (identisch zur lokalen Vorlage in `supabase/templates/recovery.html`) | Ohne diese Vorlage verschickt das gehostete Projekt weiter den Standard-Link mit `?code=`, und BUG-6 ist in Produktion zurück — der Reset funktioniert dann nur auf dem anfordernden Gerät | AC-11, EC-7 |
@@ -180,3 +184,116 @@ Rund **25 ms mehr pro Navigation**, etwa +20 %. In Produktion liegt der Auth-Ser
 `allowedDevOrigins` in `next.config.ts` ist ergänzt, damit das JavaScript beim Testen über die LAN-Adresse überhaupt lädt. Das beseitigt nur **einen** Auslöser; die Absicherung ist das `method`-Attribut.
 
 **Bekannte Einschränkung:** Ohne JavaScript sendet das Formular zwar sicher per POST, die Anmeldung funktioniert dann aber nicht — die Seite hat keinen Server-Action-Endpunkt für einen nativen POST. Das ist bewusst so: Ziel war, das Leck zu schließen, nicht die App ohne JavaScript lauffähig zu machen. Ein fehlgeschlagener Login ist ungleich besser als ein durchgereichtes Passwort.
+
+---
+
+## Drosselung der Zugangsdaten-Pfade (2026-09-05)
+
+Eingebaut nach **BUG-29** aus dem QA-Lauf zu PROJ-2: 35 Fehlversuche gegen ein bestehendes Konto ergaben 35-mal dieselbe Antwort, ohne Sperre — und zwar über `POST /`, nicht über `/login`. Next.js bindet eine Server Action nicht an ihre Route, und der Proxy-Matcher nimmt Bild-Endungen aus; eine Schranke am Pfad war damit über `/privacy` oder ein beliebiges `*.png` umgehbar (BUG-30, BUG-31). **Die Drosselung sitzt deshalb in den Actions selbst.**
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Zähler in Postgres statt Upstash Redis** | Das Stack-Pack nennt Upstash (`docs/stacks/framework-nextjs.md`). Dagegen sprach der Projektstand, nicht die Technik: Dieses Projekt hängt bereits an einem externen Dienst, der seit Tagen blockiert (SMTP, `docs/PRD.md`). Ein zweiter externer Blocker auf einem High-Befund wäre der falsche Tausch. Postgres ist da, funktioniert lokal und gehostet gleich und braucht kein neues Konto | Upstash Redis nach Stack-Pack; ein Zähler im Prozessspeicher | **Jeder Rateversuch schreibt in die Produktivdatenbank** — der Angreifer flutet genau das, was ihn bremsen soll. Bei dieser Größenordnung mit Index und schmaler Tabelle unkritisch, und Supabases eigenes Per-IP-Limit sitzt als Untergrenze davor. Upstash bleibt der dokumentierte Ausbauweg | 2026-09-05 |
+| **Der Zähler läuft mit dem Service-Role-Schlüssel, nicht mit dem Browser-Schlüssel** | Wäre die Zählfunktion für `anon` ausführbar, wäre die Drosselung eine **Aussperr-Waffe**: fünf Aufrufe mit fremder Adresse, und der Betroffene kommt nicht mehr an sein Konto. Die Funktionen sind ausschließlich für `service_role` freigegeben; `anon` bekommt `42501 permission denied` (gemessen) | Die Funktion für alle freigeben und auf Wohlverhalten hoffen | **Ein Schlüssel, der RLS vollständig aufhebt, lebt jetzt in der App.** Er entsteht nur in `src/lib/supabase/admin.ts`, die Datei trägt `server-only`, und der Name hat bewusst kein `NEXT_PUBLIC_`-Präfix — sonst landete er im ausgelieferten JavaScript | 2026-09-05 |
+| **Fehlt der Schlüssel, verweigern die Anmelde-Pfade den Dienst** | Eine Drosselung, die im Fehlerfall stillschweigend aufmacht, ist genau dann nicht da, wenn etwas nicht stimmt. Ein fehlender Service-Role-Schlüssel in Produktion ist ein Deploy-Fehler und soll laut sein | Fail-open mit Logeintrag | Ohne `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` kann sich niemand anmelden — auch lokal nicht. Verifiziert: `loginAction` antwortet mit „SUPABASE_SERVICE_ROLE_KEY fehlt …" statt still durchzulassen | 2026-09-05 |
+| **Der Konto-Zähler ist weiter gefasst (20 / 15 min) als der IP-Zähler (5 / min)** | Ein enger Konto-Zähler stoppt verteiltes Raten wirksam — und macht zugleich **jedes Konto aussperrbar**: Wer eine Adresse kennt, hält sie mit ein paar Anfragen pro Minute draußen. Das übliche Gegenmittel ist ein CAPTCHA, das `.claude/rules/security.md` in einem Atemzug mit dem Zähler nennt und das dieses Produkt bewusst nicht hat (`docs/PRD.md`: „ohne Erklärung sofort loslegen") | Beide Zähler eng; nur IP-Zähler; CAPTCHA nachrüsten | **Der Preis ist benannt, nicht beseitigt:** 20 Fehlversuche in 15 Minuten sind zu wenig zum Erraten eines Passworts, aber ein hartnäckiger Angreifer kann ein bekanntes Konto weiterhin phasenweise blockieren. Das Fenster heilt von selbst aus. Sollte je ein CAPTCHA hinzukommen, gehört dieser Zähler enger gestellt | 2026-09-05 |
+
+**Dass der Service-Role-Schlüssel nicht im Browser landet, ist nachgemessen — nicht abgeleitet** (2026-09-05, gegen `next build` in Produktionskonfiguration):
+
+- **Im gebauten Ordner:** 17 Dateien unter `.next/static` und 49 vorgerenderte Dateien unter `.next/server` durchsucht — **kein Treffer**.
+- **Über die Leitung:** `next start` gestartet und 17 tatsächlich ausgelieferte Antworten geprüft (`/login`, `/`, `/reset-password`, `/auth/confirm`, eine 404 — dazu jede von diesen Seiten verlinkte `.js`- und `.css`-Datei) — **kein Treffer**. Der Ordner allein hätte nicht gereicht: Die RSC-Nutzlast steckt im HTML und entsteht erst beim Ausliefern.
+- **Mit Kontrolle, sonst wäre das Ergebnis wertlos.** Eine Suche, die nichts findet, kann auch am falschen Ort suchen. Der erste Kontrollstring war der ANON-Schlüssel — und der wurde **ebenfalls nicht gefunden**. Ursache: Diese App hat gar keinen Browser-Supabase-Client (nur `server.ts`, `proxy.ts`, `admin.ts`), alles läuft über Server Actions; auch der öffentliche Schlüssel steht zu Recht nicht im Bundle. Als Kontrolle dienen deshalb zwei Texte aus `use client`-Komponenten: einer aus dem ausgelieferten HTML (4 Treffer) und einer, der **nur** im nachgeladenen Chunk steht (1 Treffer). Erst damit ist belegt, dass die Suche das ausgelieferte JavaScript wirklich erreicht.
+
+Nebenbefund, der über die Drosselung hinaus gilt: **Der Browser spricht nie direkt mit Supabase.** Das deckt sich mit `PROJ-2-no-third-party.spec.ts` und ist der Grund, warum hier überhaupt kein öffentlicher Schlüssel ausgeliefert wird.
+
+**Was die IP-Hälfte wert ist, ehrlich gesagt:** `x-forwarded-for` kann ein Client selbst setzen, solange kein Reverse Proxy davorsteht, der den Header überschreibt. Der IP-Zähler bremst also das gewöhnliche schnelle Raten, nicht den, der den Header fälscht — gegen den steht der Konto-Zähler, den man nicht umgehen kann, indem man sich eine andere Herkunft ausdenkt. Beim `/deploy` gehört der Header vom Host gesetzt und clientseitige Werte verworfen; dieselbe Hausaufgabe wie bei BUG-18 (`X-Forwarded-Host`).
+
+**Gegen die laufende Datenbank belegt:** `anon` bekommt auf beide Funktionen `42501 permission denied`; der Server zählt 5 erlaubte und lehnt den 6. ab; `clear_auth_attempts` setzt zurück; und **10 parallele Versuche bei Limit 5 ergeben genau 5 erlaubte und 5 abgelehnte** — der atomare Upsert hält unter Gleichzeitigkeit, ein Zählen in zwei Schritten hätte hier die Lücke.
+
+### Nachtrag 2026-09-05 — BUG-39: Der erfolgreiche Login löscht nur noch den Konto-Zähler
+
+Der QA-Lauf vom selben Tag hat an dieser Drosselung einen **High** gefunden, und er saß nicht in der Zählung, sondern im Aufräumen danach.
+
+**Was falsch war.** `clearAttempts()` löschte nach jedem geglückten Login **beide** Schlüssel — auch `login:ip:<IP>`. Damit war der IP-Zähler von jedem abschaltbar, der **ein einziges eigenes Konto** besitzt: raten, sich selbst anmelden, weiter raten. Keine Header-Fälschung nötig, kein Sonderwissen. Gemessen: **24 Passwortversuche gegen 24 verschiedene Konten von einer IP in 3,6 Sekunden, null abgewiesen.**
+
+**Warum das den Schutz im Kern traf.** Gegen **Passwort-Spraying** — ein gängiges Passwort gegen viele Konten — greift der Konto-Zähler grundsätzlich nicht, weil jedes Opferkonto genau einen Versuch abbekommt. Genau für diesen Angriff ist der IP-Zähler da; das steht so auch im Kopfkommentar von `throttle.ts`. Eine Bremse, die der Angreifer selbst lösen kann, ist keine.
+
+**Was jetzt gilt:** Der erfolgreiche Login löscht ausschließlich `login:account:<adresse>`. Der IP-Zähler bleibt stehen und heilt nach 60 Sekunden von selbst aus.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Ein erfolgreicher Login löscht nur den Konto-Zähler, nie den IP-Zähler** | Der IP-Zähler ist die einzige Bremse gegen Passwort-Spraying, und er darf nicht von dem gelöst werden können, den er bremsen soll. Ein eigenes Konto zu haben ist keine Berechtigung, den gemeinsamen Zähler zurückzusetzen | Den IP-Zähler nur bei „wenigen" Fehlversuchen mitlöschen (verschiebt die Grenze, schließt die Lücke nicht); den Reset ganz streichen (nimmt dem Nutzer die Kulanz nach Tippfehlern ohne Sicherheitsgewinn) | **Hinter einer geteilten Adresse — Haushalt, Büro-NAT — zählen die Fehlversuche des einen weiter, während der nächste sich anmeldet.** Das ist dieselbe Grenze, die der IP-Zähler ohnehin setzt: Sie heilt nach 60 Sekunden aus und sperrt niemanden aus seinem Konto, weil ein richtiges Passwort in der nächsten Minute wieder durchgeht. Die Kulanz nach Tippfehlern bleibt vollständig erhalten, denn der Konto-Zähler ist der, der einen einzelnen Nutzer aussperren würde | 2026-09-05 |
+
+**Der Abnahmetest prüft das Szenario, nicht die Zeile.** `tests/PROJ-1-throttle.spec.ts` fährt von **einer** Verbindung: vier Rateversuche gegen fremde Konten → ein erfolgreicher Login mit dem eigenen Konto → ein weiterer Rateversuch, der abgewiesen werden **muss**. Ein Test wie „nach dem Login ist der Konto-Zähler leer" wäre auch gegen den kaputten Code grün gewesen, denn der Konto-Zähler wurde ja ebenfalls geleert; der Fehler saß daneben. Gegengeprüft: Mit dem alten Verhalten fällt der Test genau an dieser Stelle.
+
+**Beim Aufräumen mitgefunden — und es betraf die Prüfung selbst:** Die gefälschten Testadressen aus `tests/fixtures.ts` waren pro Lauf identisch (`2001:db8:0::1` …). Weil die Zählerzeilen 60 Sekunden weiterleben, erbte jeder zweite Lauf innerhalb einer Minute den Zähler des vorigen — der Abnahmetest, der seinen Zähler absichtlich bis an die Grenze füllt, schlug dann schon beim ersten Versuch fehl. Die Adressen tragen jetzt eine Kennung je Lauf.
+
+> **Überholt seit BUG-54:** die Entscheidungszeile dieses Nachtrags („Ein erfolgreicher Login löscht nur den Konto-Zähler, nie den IP-Zähler") samt ihrer Abwägung. Der dort als tragbar beschriebene Preis war größer, als der Satz vermuten ließ — die Lösung im nächsten Abschnitt behält den Sicherheitsgewinn und streicht den Preis. Der Nachtrag bleibt unverändert stehen, weil er den Weg dorthin erklärt.
+
+### Nachtrag 2026-09-05 (später) — BUG-54: Der IP-Zähler zählt nur noch Fehlversuche
+
+Der QA-Nachlauf zum BUG-39-Fix hat gemessen, was die Abwägung oben nur benannt hat: **Acht verschiedene Spieler mit richtigem Passwort hinter einer geteilten Adresse — fünf kommen hinein, drei sehen „Zu viele Versuche von dieser Verbindung".** Ebenso wird der sechste Anmelde-/Abmelde-Durchlauf desselben Spielers abgewiesen.
+
+**Warum das schwerer wiegt, als es zuerst aussah.** Gezählt wird **vor** der Passwortprüfung — ein geglückter Login verbrauchte also Budget. Betroffen sind Familien- und Schulanschlüsse und Mobilfunk-CGNAT, wo sich sehr viele Nutzer eine öffentliche Adresse teilen. Die Zielgruppe im PRD schließt Kinder ausdrücklich ein. Der Satz „hinter einer geteilten Adresse zählen die Fehlversuche des einen weiter" liest sich harmlos; „fünf Anmeldungen pro Minute für alle Nutzer eines Schulanschlusses zusammen" liest sich anders. **Eine Grenze ohne Zahl ist eine Grenze, die niemand prüft.**
+
+**Was jetzt gilt:** Ein erfolgreicher Login erstattet **genau den einen Versuch**, den er selbst hochgezählt hat (`refund_auth_attempt`, Migration `0004`). Der IP-Zähler zählt damit im Ergebnis nur noch Fehlversuche.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Der IP-Zähler zählt nur Fehlversuche — ein geglückter Login erstattet seinen eigenen Versuch** | Löst BUG-39 und BUG-54 zugleich: Der Erfolg kostet den legitimen Nutzer nichts, und er bringt dem Angreifer nichts, weil nur *sein eigener* Versuch zurückkommt und nicht der Zähler geleert wird. Wer rät, hat weiterhin genau `credentialsPerIp.limit` Fehlversuche je Fenster — egal wie oft er sich dazwischen selbst anmeldet | **Erst prüfen, dann bei Misserfolg zählen** — verworfen: Das Hochzählen und das Prüfen stecken bewusst in *einem* SQL-Statement (`0003`), damit gleichzeitige Anfragen sich nicht überholen (nachgemessen mit 10 parallelen Versuchen bei Limit 5). Getrenntes Lesen und Schreiben reißt genau diese Lücke wieder auf: 100 parallele Anfragen sähen alle den Zähler auf 0. · Das Limit anheben — verschiebt die Grenze, ohne die Ursache zu berühren, und schwächt den Schutz für alle | **Ein zusätzlicher Datenbank-Aufruf je erfolgreicher Anmeldung.** Er läuft parallel zum Leeren des Konto-Zählers und blockiert die Anmeldung nicht; schlägt er fehl, bleibt der Zähler stehen — die sichere Richtung. Zweitens: `greatest(attempts - 1, 0)` ist nötig, weil eine Erstattung nach einem Fensterwechsel sonst einen negativen Zähler und damit stilles Freibudget erzeugen würde | 2026-09-05 |
+
+**Die Erstattung gilt ausschließlich für den Login.** `settleSuccessfulLogin()` nimmt bewusst **keinen** `scope` entgegen, damit die Abgrenzung strukturell ist und nicht nur als Kommentar dasteht: Bei **Registrierung** und **Passwort-Reset** ist die begrenzte Sache die Handlung selbst — Konten anlegen, Mails verschicken —, nicht das Raten. Würden erfolgreiche Registrierungen erstattet, wäre die Massenanlage von Konten unbegrenzt (BUG-47); beim Reset wäre es ein Versand-Vektor.
+
+**Zwei Abnahmetests, weil einer die Zusage nicht aufspannt.** Der IP-Zähler ist zweimal in Folge in die jeweils andere Richtung gekippt, und beide Male war das damalige Verhalten durch *einen* Test gedeckt. Nachgemessen mit beiden falschen Fassungen:
+
+| Codestand | „Angreifer wird gebremst" (BUG-39) | „Erfolge kosten nichts" (BUG-54) |
+|---|---|---|
+| Urzustand — Login **löscht** den IP-Zähler | **rot** („Der eigene Login hat den IP-Zähler zurückgesetzt") | grün |
+| Zwischenstand — Login lässt den Zähler stehen | rot (meldet dabei bereits BUG-54) | **rot** |
+| Jetzt — Login erstattet seinen einen Versuch | grün | grün |
+
+Der Urzustand hätte also den BUG-54-Test bestanden, der Zwischenstand keinen von beiden. **Erst beide zusammen beschreiben, was gelten soll: Gezählt werden Fehlversuche, sonst nichts.**
+
+### Nachtrag 2026-09-05 — BUG-56: Aufbewahrung der Zählertabelle
+
+Der QA-Nachlauf fand `public.auth_throttle` mit **1433 Zeilen**, die älteste vom selben Tag morgens: **Nichts löschte je etwas.** Der Index `auth_throttle_window_idx` trägt seit `0003` den Kommentar „Für das Aufräumen alter Fenster" — das Aufräumen gab es nicht. Dasselbe Muster wie BUG-36, nur in der Datenbank: eine Zusage im Kommentar ohne Code dahinter.
+
+Schwerer als die Größe wiegt die Aufbewahrung: Der Konto-Schlüssel lautet `login:account:<e-mail-adresse>`. Die Tabelle war ein **unbefristeter Speicher der Adressen aller, die sich je vertippt haben** — und die Kontolöschung aus PROJ-4 hätte diese Zeilen nicht mitgenommen, weil sie an keinem Fremdschlüssel hängen.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Aufräumen läuft im Zählpfad mit, nicht in einem Zeitplan** — `register_auth_attempt` ruft am Ende `prune_auth_throttle()`, das bis zu 50 abgelaufene Zeilen entfernt | Wer zählt, räumt auch auf: Der Mechanismus kann nicht vergessen werden, weil er an dem Pfad hängt, der die Zeilen überhaupt erzeugt. Keine Erweiterung, keine Einstellung im Dashboard, kein neuer Deploy-Blocker | **`pg_cron`** — der Lehrbuchweg, verlangt aber eine Erweiterung, die im gehosteten Projekt eigens eingeschaltet werden muss: also eine weitere Aufgabe von Hand, die jemand vergisst. Genau daran ist BUG-36 gescheitert | **Die Aufbewahrung hängt am Verkehr.** Meldet sich wochenlang niemand an, bleiben alte Zeilen liegen — dann ruht allerdings auch die Anwendung. Für „ich will *jetzt* vergessen werden" wartet der Trigger unten nicht auf Verkehr. `pg_cron` bleibt der dokumentierte Ausbauweg, falls die Tabelle je unter Dauerlast steht | 2026-09-05 |
+| **Die Grenze ist 1 Stunde**, nicht das jeweilige Fenster | Sie liegt über dem längsten Fenster (Konto-Zähler, 15 Minuten). Eine ältere Zeile kann keine Entscheidung mehr beeinflussen: Der nächste Versuch auf denselben Schlüssel beginnt ohnehin bei 1 zu zählen | Exakt am jeweiligen Fenster löschen — bräuchte den Grenzwert in der Datenbank und ginge bei jeder Änderung in der Anwendung auseinander | Bis zu 45 Minuten Rest über das Sperrfenster hinaus. Für die Drosselung wirkungslos, für die Aufbewahrung der Preis der Einfachheit | 2026-09-05 |
+| **Konto-Schlüssel verschwinden sofort mit dem Konto** (Trigger `on_auth_user_deleted` auf `auth.users`) | Sonst überlebte die E-Mail-Adresse ihre eigene Kontolöschung. Als Trigger statt als Aufruf in PROJ-4, damit die Löschung nicht vergessen werden kann — dasselbe Muster wie der Signup-Trigger aus `0001` | Eine Funktion, die PROJ-4 aufruft — verlagert die Verantwortung in ein Feature, das es noch nicht gibt | Ein Trigger auf `auth.users` ist eine Abhängigkeit zu einem Schema, das Supabase besitzt; bei einem Umbau dort ist er mitzuprüfen | 2026-09-05 |
+| **Die IP-Schlüssel bleiben bei der Kontolöschung stehen** | Sie gehören einer Verbindung, keinem Konto. Sie mitzulöschen hieße: Wegwerf-Konto anlegen, löschen, Zähler frei — **BUG-39 in neuer Verkleidung** | Alles löschen, was zum Nutzer gehört „wirkt sauberer" | Eine IP-Zeile überlebt die Kontolöschung um höchstens eine Stunde. Sie enthält keine Kontobezüge, nur Adresse, Zeitpunkt und Anzahl | 2026-09-05 |
+
+**Gegen die laufende Datenbank belegt** (2026-09-05), nach demselben Muster wie die Messungen zu `0003`:
+
+- **Aufräumen wirkt und trifft nur Abgelaufenes:** Rückstand von **1258 Zeilen in 3 Runden** abgeräumt, danach 0 Zeilen älter als eine Stunde. Anschließend gezielt geprüft — von drei eingefügten Zeilen (3 h alt, 90 min alt, 10 min alt) wurden **genau die beiden alten** gelöscht, die frische blieb stehen.
+- **Der Trigger wirkt und ist eng:** Für ein Testkonto drei Konto-Schlüssel (`login:`, `register:`, `password-reset:`) plus ein IP-Schlüssel angelegt; nach `delete from auth.users` waren **alle drei Konto-Schlüssel weg und der IP-Schlüssel unverändert da**.
+
+**Was hier bewusst nicht existiert: ein automatischer Wächter.** Beide Mechanismen sind gemessen, nicht durch einen Test abgesichert. Ein Unit-Test mit gemocktem Client würde nur die Mock-Antwort bestätigen — dieselbe Begründung, die schon im Kopf von `throttle.test.ts` steht —, und für einen echten SQL-Test fehlt diesem Projekt der Rahmen. Wer den Trigger oder den Aufräum-Aufruf entfernt, merkt es also nicht am roten Test. **Das ist eine benannte Lücke, keine übersehene:** Ein SQL-Testrahmen wäre der Ausbauweg, wenn dieser Bereich noch einmal angefasst wird.
+
+### Bewusst akzeptierte Risiken der Drosselung (Stand 2026-09-05)
+
+Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.** Sie stehen hier, damit niemand sie später für ein Versehen hält und beiläufig „repariert" — jede Korrektur verschiebt die Abwägung zwischen IP- und Konto-Zähler und gehört entschieden, nicht nebenbei geändert.
+
+| Risiko | Die genaue Zahl | Warum akzeptiert |
+| --- | --- | --- |
+| **BUG-55 — geteilter Anschluss mit Tippfehlern** (Medium) | Acht Spieler hinter **einer** Adresse, jeder vertippt sich **einmal** und gibt dann das richtige Passwort ein: **4 von 8 kommen hinein.** Ab dem **5. Fehlversuch pro Minute** ist die Verbindung für alle dicht, auch für die, die richtig tippen. Ohne Tippfehler kommen dagegen **8 von 8** hinein (gemessen), und **25 Anmelde-/Abmelde-Zyklen** laufen ohne eine einzige Abweisung | Das Fenster heilt nach 60 Sekunden von selbst aus, ein Workaround existiert (warten), und die Alternativen berühren alle den Schutz gegen Passwort-Spraying, für den der IP-Zähler die einzige Bremse ist. Der Grenzwert bleibt bis auf Weiteres, wie er ist |
+| **BUG-57 — Aussperren eines bekannten Kontos** (Low) | **20 Anfragen je 15 Minuten** genügen, um ein bekanntes Konto draußen zu halten. Gemessen: 20 Fehlversuche von 20 **verschiedenen** Adressen kommen alle durch; danach wird der rechtmäßige Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse abgewiesen | Der Preis war schon bei der Einführung des Konto-Zählers benannt („ein hartnäckiger Angreifer kann ein bekanntes Konto phasenweise blockieren"); neu ist nur die Zahl. Das Gegenmittel wäre ein CAPTCHA, das dieses Produkt bewusst nicht hat (`docs/PRD.md`: „ohne Erklärung sofort loslegen") |
+
+**Beide hängen an derselben Stellschraube** — wie die erlaubten Versuche zwischen IP- und Konto-Zähler verteilt sind. Wer eines davon angeht, muss beide zusammen neu rechnen, und zwar für die **unbequemste realistische Nutzung**: einen Schulanschluss am Montagmorgen, nicht einen Haushalt ohne Tippfehler. Dass genau dieser Unterschied zweimal übersehen wurde (BUG-54, dann BUG-55), ist der Grund, warum er hier ausgeschrieben steht.
+
+### Entscheidungen zum finalen QA-Lauf (2026-09-05)
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **BUG-61 wird zum Deploy-Blocker umgestuft, statt im Code gehärtet zu werden** | Die Schwäche ist nicht im Anwendungscode auflösbar: Ob `x-forwarded-for` vertrauenswürdig ist, weiß nur die Ebene davor. Ein Host, der den Header selbst setzt und clientseitige Werte verwirft, beseitigt sie vollständig — **Vercel tut genau das.** Die Alternative im Code hätte die Abwägung aus BUG-55/57 wieder aufgerissen, die gerade bewusst festgeschrieben wurde | Den IP-Zähler durch etwas ersetzen, das nicht an der Herkunft hängt (CAPTCHA — vom Produkt ausgeschlossen; E-Mail-Bestätigung — vom PRD ausgeschlossen, weil sie den einzigen Weg zurück ins Konto zusätzlich belastet); den Konto-Zähler enger stellen (verschärft BUG-57) | **Der Schutz gegen Passwort-Spraying existiert bis zum Deploy nicht.** Solange die App nur lokal läuft, ist das folgenlos; ab dem ersten öffentlichen Start ist es die schärfste offene Kante des Produkts. Deshalb ist die Schließbedingung eine **Messung an der Live-URL**, nicht die Zusage eines Anbieters | 2026-09-05 |
+| **Der zeitgesteuerte Aufräum-Lauf wird nicht jetzt gebaut, sondern als Backlog `B2` für den Deploy vermerkt** | Der Weg, auf dem das **Löschungsrecht** ruht, ist der Trigger — und der arbeitet sofort und unabhängig vom Verkehr. Der verkehrsabhängige Teil betrifft nur, wie schnell ohnehin wirkungslose Zeilen verschwinden. `pg_cron` verlangt eine Erweiterung, die im Dashboard eingeschaltet werden muss; beim Deploy wird dort ohnehin gearbeitet, heute nicht | `pg_cron` sofort einschalten; die Zeilenobergrenze je Aufruf anheben (verschiebt Arbeit in den Anmelde-Pfad, ohne die Verkehrsabhängigkeit zu lösen) | **`docs/privacy.md` sagt jetzt bewusst keine feste Höchstfrist mehr zu.** Das ist ehrlicher als die vorherige Formulierung, aber es ist auch weniger, als ein Datenschutzdokument gern zusagen würde. Wer eine harte Frist will, baut `B2` | 2026-09-05 |
+
+**Warum die Formulierung in `docs/privacy.md` geändert wurde und nicht nur der Code.** Der ursprüngliche Satz — „höchstens 1 Stunde nach dem letzten Versuch" — beschrieb die *Absicht* des Mechanismus, nicht seine *Garantie*: Aufgeräumt wird bis zu 50 Zeilen je Anmeldeversuch und nur, wenn überhaupt jemand einen unternimmt. Gemessen im QA-Lauf: 200 abgelaufene Zeilen, nach einem Login-Versuch waren 100 weg und 100 lagen weiter da. In einem Dokument, das die Rechtsgrundlage trägt, ist die Zusage das, was zählt — deshalb steht dort jetzt das tatsächliche Verhalten, samt dem Hinweis, welcher der beiden Wege ohne Verkehr funktioniert.
+
+
+
+

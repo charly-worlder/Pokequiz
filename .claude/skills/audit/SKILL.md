@@ -21,6 +21,7 @@ Detect drift — verify the project's documentation still matches reality, so no
 2. For each `features/PROJ-X-*/` folder, note which of `spec.md`, `design.md`, `tasks.md`, `qa-report.md` exist.
 3. Scan the real code surface — in a kit-scaffolded project: `git ls-files src/app/api/`, `ls src/app/`, `ls src/components/*.tsx`, `src/app/layout.tsx`; in any other project the route, component and layout paths the framework pack (`docs/stacks/framework-*.md`) or the code itself names — **an empty listing of a path that does not exist is not "nothing unowned"**, it is a scan that did not happen, and check 5 must say so. Then `git log --oneline -15`, `git status -s`.
 4. Read `docs/app-shell.md` if it exists — the app-wide frame and, at its top, which feature owns it.
+5. Read `docs/data-model.md` — the app-wide entity map — and note where this project keeps its schema source (migrations, models, an ORM directory; `docs/stacks/backend-*.md` → "Where migrations live" names it for the kit's backends, `docs/codebase/architecture.md` → "Data" for a mapped project).
 
 If a `PROJ-X` argument was given, scope the audit to just that feature.
 
@@ -42,7 +43,9 @@ What still counts, unchanged: **an AC with no result in `qa-report.md`**. That o
 Say once in the report how many features are in this state, and that `/refine PROJ-X` is what brings one into the chain for real. Do not repeat it per feature.
 
 ### 1c. The codebase map, where one exists
-If `docs/codebase/features.md` exists: its **Coverage** line and **Unassigned** list are a promise that every route and table belongs to one feature. Report the Unassigned list as one finding (low) until it is empty or the user has marked it *deliberately left*. If `docs/codebase/` is older than the last ten commits that touched routes or the schema, say once that `/map` would refresh it — do not re-map here.
+If `docs/codebase/features.md` exists: its **Coverage** line and **Unassigned** list are a promise that every route and table belongs to one feature. Report the Unassigned list as one finding (low) until it is empty or the user has marked it *deliberately left*.
+
+**The map's age is measured, not guessed.** The line under the title of `docs/codebase/architecture.md` names the commit the map was taken at. List what was added since in the places where routes, schema and auth live — `git log --diff-filter=A --name-only --format= <sha>..HEAD`, filtered to the paths the framework and backend packs name for this (or the paths `architecture.md` itself lists); an old map with a date but no commit is measured by date. Every new file that no `features/*/design.md` describes is a route, table or auth rule the map and the feature documents both do not know: report them as one finding (**medium** — `/architecture` refuses to design while they exist) → `/map --refresh`. New files a `design.md` does describe are the map lagging behind the workflow, not drift; mention the count once, low, with the same fix. Do not re-map here.
 
 ### 2. Status ↔ artifacts
 Each status promises certain files exist. Flag mismatches **either way** (except as set out in 1b):
@@ -77,6 +80,14 @@ Read `docs/app-shell.md` (the app-wide map, if it exists), then look at what's r
 - **Shell grown by accretion.** Two or more features' `design.md` describe the same shell element (each adding its own nav entry, header variant, or mobile behavior). Name the features you found it in — that list *is* the evidence that it belongs to none of them.
 - **Map missing or stale.** The app clearly has navigation but there is no `docs/app-shell.md` → `/architecture` writes it from what exists. Or the map lists areas the nav doesn't have (or the nav has areas the map never got) → the map drifted; say which entries disagree.
 - **No shell to speak of** (a single-screen tool) → not drift. Don't manufacture a finding; the frame genuinely belongs to the one feature that owns the screen.
+
+### 6b. The data model ↔ the schema (the other cross-cutting drift)
+`docs/data-model.md` is the app-wide map of entities; the schema source (step 5 of Before Starting) is what actually exists. Both are written at different times by different skills, and nothing but this check puts them side by side. Compare the **Entities** table with the tables or models in the schema source — names only, at product altitude; column types are the feature's `design.md`'s business, not this map's. Skip the platform's own tables (an auth schema, a migrations ledger, framework bookkeeping) and say that you did. Flag:
+
+- **A table with no entity.** It was built, but the map never learned of it — usually a feature whose `/architecture` skipped the "update it (living document)" step, or code that grew outside the workflow. Name the table and, where a `design.md` mentions it, the feature → `/architecture PROJ-X` brings the map up to date; where none does, this is check 5's finding too (code without a spec) → `/write-spec`.
+- **An entity with no table.** Designed, never built, or renamed since — name it and the feature whose `design.md` introduced it → `/build` if the feature is open, `/refine` if the entity was dropped, or correct the map if it was renamed.
+- **Still the empty template** in a project the kit was added to → not drift on its own: in `mode: existing`, `/init` fills it only when one schema source states the whole model (then it opens with `_Source: <path>_` — compare against exactly that source) and otherwise leaves it empty with the reason, and `/architecture` fills it one verified feature at a time. Say so once, low, and point at `/map` + `/reverse-spec` as the way the entities get in. In a kit-scaffolded project with Deployed features, an empty map *is* drift → `/architecture` of the first feature that has tables.
+- **`platform` has no database** (`mcp`, `cli`, a tool with files only) → skip this check and say so.
 
 ### 7. Feature branches ↔ INDEX
 Features are built on `feat/PROJ-X-name` branches, so branches pile up over a project's life. Compare them against INDEX:
@@ -127,8 +138,12 @@ A plain-language report grouped by feature, each drift item with its one-line fi
       → Check with the user: unfinished work, or a branch you decided against?
    App shell (sidebar, logo, header) — no owning feature; grown across PROJ-1/2/3
       → Run /write-spec for "App Shell & Navigation" so it has acceptance criteria
+   docs/data-model.md — table `invoice_items` exists in the schema but is not in the entity map
+      → Run /architecture PROJ-4 (it introduced the table) to bring the map up to date
+   docs/codebase/ — mapped at a1b2c3d; 2 routes and 1 migration added since that no feature describes
+      → Run /map --refresh before the next /architecture
 
-Summary: 2 in sync · 4 drift items · 0 critical
+Summary: 2 in sync · 6 drift items · 0 critical
 ```
 
 ## Important

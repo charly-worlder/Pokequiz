@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import {
   answerCorrectly,
   answerWrongly,
@@ -82,20 +82,29 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   await expect(clockValue(page)).toHaveText(clockWhenStopped)
   await expect(page.getByRole('button', { name: 'Weiter zum Ergebnis' })).toBeVisible()
 
-  // AC-7 — der Spieler klickt selbst weiter und sieht Serie, Zeit und beide Aktionen.
+  // AC-7 — der Spieler klickt selbst weiter und sieht Serie, Zeit und die
+  // Primär-Aktion. „Zur Bestenliste" erscheint erst, wenn PROJ-3 die Seite
+  // gebaut hat; vorher stand hier ein Link auf eine 404. Dieser Test dreht sich
+  // um, sobald LEADERBOARD_PAGE_EXISTS auf true steht — dann muss der Link da
+  // sein, und wer den Schalter umlegt, sieht sofort, wo nachzuziehen ist.
   const runSaved = runSavedResponse(page)
   await page.getByRole('button', { name: 'Weiter zum Ergebnis' }).click()
   await runSaved
   await expect(page.getByText('Runde beendet')).toBeVisible()
   await expect(page.getByText('richtige Antworten in')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Nochmal spielen' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Zur Bestenliste' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Zur Bestenliste' })).toHaveCount(0)
 
   // AC-11 — das Ergebnis wird automatisch gespeichert. Sichtbar wird das über die
   // Gegenprobe: der Hinweis aus EC-3 darf nicht erscheinen, und die Bestleistung
   // steht anschließend auf dem Startbildschirm — sie kann nur aus einer
   // gespeicherten Zeile stammen.
+  //
+  // Der Weg dorthin ist `/`, nicht mehr „Nochmal spielen": Seit AC-9 startet der
+  // Knopf die nächste Runde unmittelbar (BUG-10). Der Startbildschirm bleibt der
+  // richtige Ort für diese Prüfung — AC-1 macht ihn am Öffnen von `/` fest, nicht
+  // am Rundenende.
   await expect(page.getByText('konnte noch nicht gespeichert werden')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Nochmal spielen' }).click()
+  await page.goto('/')
   await expect(page.getByText('Deine Bestleistung')).toBeVisible()
 })

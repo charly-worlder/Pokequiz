@@ -1,0 +1,4 @@
+# Git-Hooks brauchen LF, sonst scheitert die Shebang-Zeile außerhalb von Windows
+# ("bad interpreter: /usr/bin/env bash^M"). Der Hook liegt im Repository und soll
+# in jedem Klon laufen, nicht nur in dem, in dem er entstanden ist.
+.githooks/* text eol=lf

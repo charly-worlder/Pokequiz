@@ -70,7 +70,7 @@ Your job is narrower and more useful: **record how this project runs, and confir
 4. **How does it go live?** Hosting and the deploy path, including anything human-gated (a review, an approval, a release window). If there is no deploy path yet, record that — it is a real answer.
 
 ### Record the answers
-- Write them into `.ai-eng-kit`: `platform` (`web`, `mobile`, `mcp`, `cli`, `extension`, `other`), the confirmed `stack`, `commands`, and `probe`. Keep the JSON valid and change nothing else in the file.
+- Write them into `.ai-eng-kit`: `platform` (`web`, `mobile`, `desktop`, `mcp`, `cli`, `extension`, `other` — **`desktop` is a native app the user installs**, a Mac or Windows app, not a web app in a wrapper), the confirmed `stack`, `commands`, and `probe`. Keep the JSON valid and change nothing else in the file.
 - **If the project holds personal data, ask which law applies** — the multi-select question from "Data Protection Law and Stance" below — and record it in `.ai-eng-kit` → `law` and as `Data protection law:` in PRD Constraints, so `/dsgvo` does not have to ask.
 - **Question 4 is recorded too, not just asked:** the host or release path as one word into `stack.deploy` (`vercel`, `hostinger`, `heroku`, `eas`, `fastlane`, `docker`, … — `null` if there is none yet), and a `Hosting:` line plus a `Data region:` line under `docs/PRD.md` → Constraints. `/deploy` and `/dsgvo` read exactly those, so the user is not asked the same thing twice.
 - Mirror the same values into the memory file's **How This Project Runs** section, so an agent that never opens `.ai-eng-kit` still reads them. That section is generated from the answers — do not invent extra prose around it.

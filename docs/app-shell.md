@@ -44,7 +44,7 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 ## Auth-Zustände
 
 - **Ausgeloggt:** Erreichbar sind nur `/login`, `/reset-password`, `/privacy` und `/imprint`. Jeder andere Aufruf leitet auf `/login`. Die Kopfzeile zeigt rechts die Zeile „Deutsche Namen · Serie · Weltrangliste".
-- **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Button „Bestenliste" und den Nutzer-Chip mit Initiale und Trainername.
+- **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Nutzer-Chip mit Initiale und Trainername — dazu den Button „Bestenliste", **sobald `/leaderboard` existiert**. Solange PROJ-3 die Seite nicht gebaut hat, fehlt der Button ganz, statt auf eine 404 zu führen (dieselbe Regel wie bei der Fußzeile, siehe Layout-Regionen). Der Schalter dafür liegt in `src/lib/site-pages.ts` und gilt zugleich für den Ergebnis-Screen des Quiz.
 - **Rollen:** keine. Alle angemeldeten Nutzer sind gleichberechtigt.
 
 ## Shell-Komponenten
@@ -53,7 +53,7 @@ Die genauen Dateipfade legt `/architecture` fest; die Aufteilung steht hier, dam
 
 | Komponente | Zweck |
 |------------|-------|
-| Kopfzeile | Marke, Bestenlisten-Zugang, Nutzer-Chip — die einzige Navigation der App |
+| Kopfzeile | Marke, Nutzer-Chip und — sobald die Seite existiert — der Bestenlisten-Zugang; die einzige Navigation der App |
 | Wortmarke | Ball-Motiv (CSS-gezeichnet) plus Schriftzug, auch als Motiv in leeren Zuständen |
 | Fußzeile | Datenschutz- und Impressums-Links |
 | Seitenrahmen | Kopfzeile + Inhalt + Fußzeile, die gemeinsame Hülle jedes Screens |

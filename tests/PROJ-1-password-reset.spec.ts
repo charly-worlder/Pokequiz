@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { register, PASSWORD } from './helpers'
 
 /**
@@ -59,7 +60,14 @@ const fillPassword = (page: Page, value: string) => fillStable(page, 'Neues Pass
 /** Holt den Reset-Link aus der zuletzt an diese Adresse zugestellten Mail. */
 async function resetLinkFor(request: APIRequestContext, email: string) {
   // Mailpit stellt asynchron zu; kurz abwarten statt blind zu greifen.
-  for (let attempt = 0; attempt < 20; attempt++) {
+  //
+  // Das Fenster ist bewusst großzügig (30 s). Bei voller Parallelität — 16
+  // Worker über drei Browser-Projekte gegen einen Dev-Server — dauert die
+  // Zustellung spürbar länger als im Einzellauf, und mit 10 s fiel dieser Test
+  // etwa in jedem zweiten Volllauf aus, während er allein zuverlässig grün war.
+  // Ein Test, der von der Auslastung des Rechners abhängt, meldet Rauschen
+  // statt Befunden.
+  for (let attempt = 0; attempt < 60; attempt++) {
     const list = await request.get(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(email)}`)
     const body = (await list.json()) as { messages: { ID: string }[] }
 
@@ -84,6 +92,7 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
   page,
   request,
   browser,
+  clientIp,
 }) => {
   const { email } = await register(page, 'e2eRst')
 
@@ -103,7 +112,9 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
   expect(link).toContain('token_hash=')
 
   // Das „andere Gerät": eigener Kontext, kein Cookie aus der Anfrage-Sitzung.
-  const otherDevice = await browser.newContext()
+  const otherDevice = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const phone = await otherDevice.newPage()
 
   await phone.goto(link)
@@ -121,7 +132,9 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
 
   // Das neue Passwort gilt, das alte nicht mehr — sonst wäre der Reset nur
   // scheinbar durchgelaufen.
-  const check = await browser.newContext()
+  const check = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const fresh = await check.newPage()
 
   await fresh.goto('/login')
@@ -142,6 +155,7 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
   page,
   request,
   browser,
+  clientIp,
 }) => {
   const { email } = await register(page, 'e2eRs2')
 
@@ -155,7 +169,9 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
 
   const link = await resetLinkFor(request, email)
 
-  const first = await browser.newContext()
+  const first = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const firstPage = await first.newPage()
   await firstPage.goto(link)
   await fillPassword(firstPage, `${PASSWORD}-x`)
@@ -164,7 +180,9 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
   await first.close()
 
   // Derselbe Link ein zweites Mal, wieder ohne Vorbelastung.
-  const second = await browser.newContext()
+  const second = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const secondPage = await second.newPage()
   await secondPage.goto(link)
 

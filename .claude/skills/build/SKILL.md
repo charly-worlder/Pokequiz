@@ -34,7 +34,9 @@ What this skill assumes, and what to do when the project does not match:
 
 - **`platform` is not `web`** → read this one first, because it decides which of the outcomes below are
   even meaningful. A **mobile** app has no responsive breakpoints, no semantic HTML and no HTTP route to
-  protect — it has screens, device storage and transport security; an **mcp** server or a **cli** has no UI
+  protect — it has screens, device storage and transport security; a **desktop** app is the same minus the
+  store — local files and OS keychain instead of a database behind a route, and an update mechanism of its
+  own; an **mcp** server or a **cli** has no UI
   at all, its surface is its tool scope and its inputs; a browser **extension** is web technology without a
   server of its own — content-script injection and requested permissions matter, route protection does not.
   Keep every gate that has a counterpart (input validation at the boundary, data-layer access rules, rate
@@ -195,7 +197,7 @@ If your context was compacted mid-task, don't restart from zero:
 - Every task in `tasks.md` is checked off — `[user]` tasks by the user. If any of those is still open, say so as the first line of the report and list them with their `where:` — the feature is built, not done; `/qa` will treat an open one on a credential path as a bug. Don't write implementation notes into `spec.md` — it's read-only; put any short notes at the end of `design.md` or in the commit message.
 - Set the feature's status in `features/INDEX.md` (it's "In Progress" while you build).
 - Report back: what you built, the assumptions you surfaced, and the verification results.
-- Hand off, in the working language (the quote is the content, not the wording): "Feature is built. Next: run `/qa` to test against the acceptance criteria." · „Das Feature ist gebaut. Nächster Schritt: `/qa` ausführen, um es gegen die Acceptance Criteria zu testen."
+- Hand off, in the working language (the quote is the content, not the wording): "Feature is built. Next: run `/qa` to test against the acceptance criteria — it verifies in a context that has not seen this build (its own sub-agents, or a fresh session if your agent has none)." · „Das Feature ist gebaut. Nächster Schritt: `/qa` ausführen, um es gegen die Acceptance Criteria zu testen — die Prüfung läuft in einem Kontext, der diesen Build nicht kennt (eigene Sub-Agenten, oder eine neue Session, wenn dein Agent keine hat)."
 
 ## Git Commit
 ```

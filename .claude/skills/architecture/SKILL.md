@@ -32,7 +32,9 @@ Read `platform`, then `mode` and `stack` from `.ai-eng-kit` before anything else
 
 - **`platform` is not `web`** → read this one first, because it decides which of the design decisions below are
   even meaningful. A **mobile** app has no responsive breakpoints, no semantic HTML and no HTTP route to
-  protect — it has screens, device storage and transport security; an **mcp** server or a **cli** has no UI
+  protect — it has screens, device storage and transport security; a **desktop** app is the same minus the
+  store — local files and OS keychain instead of a database behind a route, and an update mechanism of its
+  own; an **mcp** server or a **cli** has no UI
   at all, its surface is its tool scope and its inputs; a browser **extension** is web technology without a
   server of its own — content-script injection and requested permissions matter, route protection does not.
   Keep every gate that has a counterpart (input validation at the boundary, data-layer access rules, rate
@@ -56,7 +58,14 @@ Read `platform`, then `mode` and `stack` from `.ai-eng-kit` before anything else
 6. Read the feature spec the user references
 
 ### Unmapped is not empty (`mode: existing`)
-Read `mode` from `.ai-eng-kit` first. **If `docs/codebase/` exists, read `architecture.md` (routes, tables, server functions, auth, shell) and `conventions.md` before anything else** — that is the map of what is there, with a path behind every row, and designing against it is the whole point of this section. A `docs/data-model.md` that opens with a `_Source: …_` line was filled from one schema source by `/init` and can be trusted to that source. Otherwise: when `mode` is `existing`, `docs/data-model.md` and `docs/app-shell.md` are very likely still the empty templates — **`/init` leaves them empty on purpose** rather than filling them from a skim of the repo. That means *not mapped yet*, **never** *nothing exists*, and the difference decides whether this design is usable:
+Read `mode` from `.ai-eng-kit` first. **If `docs/codebase/` exists, read `architecture.md` (routes, tables, server functions, auth, shell) and `conventions.md` before anything else** — that is the map of what is there, with a path behind every row, and designing against it is the whole point of this section. A `docs/data-model.md` that opens with a `_Source: …_` line was filled from one schema source by `/init` and can be trusted to that source.
+
+**The map is a snapshot — measure its age before you trust it (hard gate).** The line under the title of `architecture.md` names the commit it was mapped at (`_Mapped by /map on <date> at commit <sha>._`). Nothing in the kit maintains the map between two `/map` runs, so a stale one does not fail — it produces a design against routes and tables that no longer look like that, silently. So:
+1. List what was **added** since the Stand, in the places where routes, schema and auth live: `git log --diff-filter=A --name-only --format= <sha>..HEAD`, filtered to the paths `architecture.md` itself names for routes, schema source and auth — or the concrete ones the packs name (`docs/stacks/framework-<value>.md` → "Where the app's routes and layout live", `docs/stacks/backend-<value>.md` → "Where migrations live"). An old map with a date but no commit is measured by date: `git log --since=<date> --diff-filter=A …`.
+2. For every new file, check whether a feature already accounts for it: grep `features/*/design.md` (and `tasks.md`) for its path. Files the kit's own workflow added are in there — `/build` adds routes and migrations with every feature, and that is not staleness, it is the map lagging behind documents that exist.
+3. **Every new file is accounted for** → go on. Write one line at the top of this feature's `design.md` Technical Decisions: "Codebase map at `<sha>`, N routes/migrations newer than it, all described in PROJ-…" — so the next reader knows what the map did not know.
+4. **A new route, migration or auth file that no feature describes** → **stop.** Say which files, and: "`docs/codebase/` predates these and no feature describes them. Run `/map --refresh` first — designing against a map that does not know them is how a duplicate table or a second auth path gets built." Do not read those files yourself and carry on as if the map covered them: the map is what `/write-spec` and `/reverse-spec` also read, and a design that silently knows more than the map leaves the documents disagreeing about what exists.
+5. **No `docs/codebase/` at all** in `mode: existing` → the paragraph below applies unchanged; say once that `/map` would give this design a map to check against. Otherwise: when `mode` is `existing`, `docs/data-model.md` and `docs/app-shell.md` are very likely still the empty templates — **`/init` leaves them empty on purpose** rather than filling them from a skim of the repo. That means *not mapped yet*, **never** *nothing exists*, and the difference decides whether this design is usable:
 
 - **Do not design as if the field were clear.** A project with a working login has a users table whether or not any document names it. Designing "the users table" into it produces a duplicate, and the first person to notice is whoever debugs the data.
 - **Look before you design.** Read the schema where this project keeps it — migrations, models, an ORM directory. The running database may be read too where `probe` says how to reach it, but treat it as **corroboration, not the source**: it is one instance at one moment, seed rows and abandoned columns included, and nothing in it is reproducible from the repository. Where the files and the database disagree, that is a finding to raise, not a tie to break silently. Base the design on what you actually read, and say which it was.
@@ -213,6 +222,7 @@ If any questions came up during the design that couldn't be resolved, add them t
 
 ## Checklist Before Completion
 - [ ] Checked existing architecture via git
+- [ ] Where `docs/codebase/` exists: its age measured against the Stand commit; every route, migration and auth file added since is described by a feature, or the design stopped at `/map --refresh` — never designed against a map that does not know them
 - [ ] Feature spec read and understood
 - [ ] Component structure documented (visual tree, PM-readable)
 - [ ] Feature's data design fits `docs/data-model.md`; the map was updated (at product altitude) if this feature added/changed an entity, relationship, or ownership

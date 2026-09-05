@@ -1,13 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const { createClient, fetchGermanName, fetchGermanNames, withTimeoutAndOneRetry, spriteUrlFor, resolveOfficialImageUrl } =
+const { createClient, fetchGermanName, fetchGermanNames, withTimeoutAndOneRetry, spriteUrlFor } =
   vi.hoisted(() => ({
     createClient: vi.fn(),
     fetchGermanName: vi.fn(),
     fetchGermanNames: vi.fn(),
     withTimeoutAndOneRetry: vi.fn(),
     spriteUrlFor: vi.fn((id: number) => `https://sprites.test/${id}.png`),
-    resolveOfficialImageUrl: vi.fn(),
   }))
 
 vi.mock('@/lib/supabase/server', () => ({ createClient }))
@@ -16,11 +15,10 @@ vi.mock('@/lib/pokeapi/client', () => ({
   fetchGermanNames,
   withTimeoutAndOneRetry,
   spriteUrlFor,
-  resolveOfficialImageUrl,
   REQUEST_TIMEOUT_MS: 5000,
 }))
 
-import { getNextQuestion, repairImageUrl } from './question-action'
+import { getNextQuestion } from './question-action'
 import { POOL_SIZE } from '@/lib/validation/quiz'
 
 const signedIn = () => ({ auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }) } })
@@ -42,6 +40,24 @@ describe('getNextQuestion', () => {
   it('EC-7: weist einen Aufruf ohne Sitzung ab', async () => {
     createClient.mockResolvedValue(signedOut())
     expect(await getNextQuestion([])).toEqual({ status: 'unauthenticated' })
+  })
+
+  // BUG-12: `seenIds` ging ungeprüft in `.filter()`. Alles, was kein Array war,
+  // erzeugte eine unbehandelte TypeError und damit HTTP 500 — im Dev-Modus samt
+  // absoluter Dateipfade in der Antwort. Ein Server Action ist ein öffentlicher
+  // Endpunkt; `saveRun` hatte sein Zod-Schema von Anfang an, diese Grenze nicht.
+  it('BUG-12: weist unbrauchbare Eingaben ab, statt zu werfen', async () => {
+    for (const bad of [undefined, null, 'abc', 42, {}, [null], ['7'], [1.5], [{}]]) {
+      await expect(getNextQuestion(bad)).resolves.toEqual({ status: 'unavailable' })
+    }
+  })
+
+  // BUG-17: Der Ausschlussliste wurden beliebige Zahlen geglaubt. 386 Nummern
+  // *außerhalb* des Pools ergaben „Pool leer" — und damit die Gewinner-Meldung
+  // aus EC-2, ohne dass je eine Frage beantwortet worden wäre.
+  it('BUG-17: Nummern außerhalb des Pools erzeugen kein „Pool leer"', async () => {
+    const outside = Array.from({ length: POOL_SIZE }, (_, i) => 100_000 + i)
+    await expect(getNextQuestion(outside)).resolves.toEqual({ status: 'unavailable' })
   })
 
   it('AC-3: liefert genau vier verschiedene Namen, einer davon der richtige', async () => {
@@ -95,33 +111,17 @@ describe('getNextQuestion', () => {
     expect(await getNextQuestion([])).toEqual({ status: 'unavailable' })
   })
 
-  it('ignoriert unsinnige Einträge in der Ausschlussliste', async () => {
+  // **Vertrag geändert am 2026-09-04 (BUG-12).** Dieser Test hieß „ignoriert
+  // unsinnige Einträge in der Ausschlussliste" und verlangte `ok`: Unsinn wurde
+  // stillschweigend herausgefiltert und weitergemacht. Genau diese Nachsicht war
+  // die Lücke — sie ließ auch `[null]` oder `"abc"` bis in `.filter()` durch,
+  // und dort gab es dann HTTP 500 statt einer Antwort.
+  //
+  // Die Grenze weist jetzt ab, statt zu reparieren. Unser eigener Client schickt
+  // so etwas nie; was es schickt, ist ein Aufruf von Hand, und der bekommt eine
+  // saubere Absage.
+  it('BUG-12: weist eine Ausschlussliste mit unsinnigen Einträgen ab, statt sie zu säubern', async () => {
     const result = await getNextQuestion([NaN, 1.5, -3] as number[])
-    expect(result.status).toBe('ok')
-  })
-})
-
-describe('repairImageUrl (EC-11)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    createClient.mockResolvedValue(signedIn())
-    withTimeoutAndOneRetry.mockImplementation(runOperation)
-    resolveOfficialImageUrl.mockResolvedValue('https://cdn.test/repariert.png')
-  })
-
-  it('liefert die offizielle Adresse', async () => {
-    expect(await repairImageUrl(25)).toBe('https://cdn.test/repariert.png')
-  })
-
-  it('weist einen Aufruf ohne Sitzung ab', async () => {
-    createClient.mockResolvedValue(signedOut())
-    expect(await repairImageUrl(25)).toBeNull()
-  })
-
-  it('weist Nummern außerhalb des Pools ab, ohne die API zu fragen', async () => {
-    expect(await repairImageUrl(0)).toBeNull()
-    expect(await repairImageUrl(POOL_SIZE + 1)).toBeNull()
-    expect(await repairImageUrl(1.5)).toBeNull()
-    expect(resolveOfficialImageUrl).not.toHaveBeenCalled()
+    expect(result.status).toBe('unavailable')
   })
 })

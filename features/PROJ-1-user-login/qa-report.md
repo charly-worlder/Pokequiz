@@ -764,3 +764,74 @@ Keine neu geschrieben. Die drei Tests zu AC-15 (`register-view.test.tsx`) stamme
 - **Production Ready: NEIN** — unverändert zwei High-Bugs (BUG-7, BUG-8), beide nur am gehosteten Projekt behebbar.
 
 > **Was dieser Lauf für den PR bedeutet:** Alles, was auf diesem Branch gebaut wurde, ist unabhängig bestätigt. Was PROJ-1 von `Approved` trennt, liegt nicht im Code, sondern im fehlenden gehosteten Supabase-Projekt. BUG-24 ist ein echter, neuer Befund — aber er beschreibt Verhalten, das **vor** diesem Branch schon so war (kein Timeout gab es nie), nicht eine Regression durch ihn.
+
+---
+
+## Nachtrag — 2026-09-04: T18 ist ohne eigenen SMTP-Dienst nicht setzbar
+
+**Kein QA-Lauf.** Festgehalten beim Versuch, das gehostete Supabase-Projekt anzubinden, damit BUG-7 und BUG-8 endlich prüfbar werden.
+
+`npx supabase config push` gegen das neu angelegte Projekt scheitert:
+
+```
+unexpected status 400: {"message":"Email template modification is not available for
+free tier projects using the default email provider. Please upgrade your plan or
+configure a custom SMTP provider."}
+```
+
+**Der eigentliche Befund ist größer als die Vorlage.** Supabases Dokumentation zum eingebauten Mailversand nennt drei Einschränkungen: Zustellung **ausschließlich an Adressen im Team des Projekts** (alle anderen werden mit „Email address not authorized" abgelehnt), **2 Nachrichten pro Stunde**, und ausdrücklich **kein Produktivbetrieb**.
+
+Für dieses Produkt heißt das: **Der Passwort-Reset funktioniert für echte Spieler nicht** — nicht „mit dem falschen Link", sondern es kommt keine Mail an. Zusammen mit der Produktentscheidung gegen eine E-Mail-Bestätigung (`spec.md`, Decision Log) ist der Reset der einzige Weg zurück ins Konto.
+
+**Konsequenzen:**
+- **T18 bleibt offen** und damit **BUG-8 (High)**. Nicht wegen eines Codefehlers — die Vorlage existiert, ist lokal aktiv und in drei Browser-Engines verifiziert (Lauf vom 2026-09-04) —, sondern weil das gehostete Projekt sie nicht annimmt.
+- **AC-11, AC-12 und EC-7 sind gegen das gehostete Projekt nicht verifizierbar**, solange kein Mailversand an beliebige Adressen möglich ist.
+- **PROJ-1 bleibt `In Review`** (Entscheidung des Nutzers am 2026-09-04). Der Status wird nicht auf `Approved` gehoben, obwohl der Code fertig ist: Eine zugesagte Funktion ist in Produktion nachweislich nicht lauffähig, und ein Status, der das verschweigt, wäre wertlos.
+
+**Was es braucht:** einen SMTP-Anbieter mit kostenlosem Kontingent (Resend, Brevo) **und eine eigene Absender-Domain** — ohne verifizierte Domain stellt praktisch jeder Anbieter nur an die Adresse des Kontoinhabers zu. Stand 2026-09-04 ist keine Domain vorhanden; nachgetragen in `docs/PRD.md` → Rahmenbedingungen und in `features/INDEX.md` → Deploy-Blocker.
+
+**Weiterhin ohne SMTP prüfbar und noch offen:** AC-8 / EC-4 (Rate-Limit, braucht keine E-Mail) und T4 (Passwort-Mindestlänge, ein Dashboard-Feld). Beide sind gegen das gehostete Projekt jederzeit nachholbar und würden BUG-7 schließen sowie die offene Frage aus BUG-21 beantworten, welche IP-Adresse Supabase überhaupt sieht.
+
+**Warnung zu `supabase config push`:** Das Kommando überträgt den kompletten `[auth]`-Block aus `config.toml` — darunter `site_url = "http://localhost:3000"` und die lokalen `additional_redirect_urls`. Würde es durchlaufen, trüge das Produktivprojekt anschließend `localhost` als Site-URL und jeder Mail-Link zeigte ins Leere. Solange `config.toml` lokale Entwicklungswerte enthält, ist das Kommando für dieses Projekt ungeeignet; die Einstellungen gehören einzeln ins Dashboard.
+
+---
+
+## Verifikation gegen das gehostete Projekt — 2026-09-04
+
+**Kein vollständiger QA-Lauf.** Gezielte Messung gegen `https://twssvibxqobepmxjrqln.supabase.co`, sobald das gehostete Projekt existierte, um die seit drei Läufen offene Frage aus AC-8 zu beantworten.
+
+### AC-8 / EC-4 — VERIFIZIERT, BUG-7 geschlossen
+
+40 aufeinanderfolgende Login-Versuche mit falschem Passwort gegen dasselbe (nicht existierende) Konto, direkt gegen `POST /auth/v1/token?grant_type=password` mit dem öffentlichen Publishable Key:
+
+```
+Versuche 1–32: HTTP 400
+Versuch 33:    HTTP 429 {"error_code":"over_request_rate_limit","msg":"Request rate limit reached"}
+```
+
+Das entspricht dem dokumentierten Standardwert von 30 Versuchen / 5 Minuten pro IP (die zwei zusätzlichen Anfragen davor — ein `settings`-Abruf und ein Signup-Versuch — zählen auf dasselbe Kontingent). **AC-8 ist damit erstmals belegt**, nachdem drei lokale Läufe es mangels Container-Konfiguration nicht auslösen konnten. `[x] AC-8 — PASS (hosted)`, `[x] EC-4 — PASS (hosted)`.
+
+### BUG-21 — bestätigt und verschärft
+
+Die Messung lief **direkt von einem Client-Rechner** aus, also mit einer echten Nutzer-IP. Genau so läuft die Anwendung aber nicht: Login und Registrierung gehen über **Next.js Server Actions**, der Supabase-Client wird serverseitig gebaut und reicht keine Client-Header weiter. Supabase sieht deshalb im Produktivbetrieb **nicht die IP des Spielers, sondern die des Anwendungsservers** — für alle Spieler dieselbe.
+
+Was dieser Lauf beweist und was nicht:
+
+- ✅ **Bewiesen:** Das Limit existiert, greift und ist **pro IP** gezählt.
+- ❌ **Nicht bewiesen:** dass die Anwendung davon profitiert. Im Gegenteil — aus „pro IP" plus „alle Nutzer teilen sich eine IP" folgt eines von zwei Ergebnissen, und beide sind schlecht:
+  1. Die Egress-IP des Hosts ist stabil → **30 Fehlversuche von irgendwem sperren alle Spieler gleichzeitig für 5 Minuten aus.** Das ist kein Schutz mehr, sondern ein Denial-of-Service-Hebel, den ein einzelner Angreifer bedienen kann.
+  2. Die Egress-IP wechselt (bei serverlosen Plattformen üblich) → das Limit greift praktisch nie, und es gibt **gar keinen** Schutz.
+
+**Severity: Medium → das Urteil gehört dem Nutzer.** AC-8 verspricht wörtlich eine Drosselung „von derselben IP-Adresse". Nach dieser Messung ist die Zusage für die reale Architektur nicht haltbar — nicht weil die Umsetzung fehlerhaft wäre, sondern weil das Kriterium einen Mechanismus beschreibt, der an dieser Stelle nicht greifen kann. Das ist ein Fall für `/refine PROJ-1` auf AC-8, verbunden mit der Frage, ob die Anwendung einen **eigenen, kontobezogenen** Zähler bekommt (bisher bewusst abgelehnt, siehe Decision Log 2026-08-31).
+
+**Nicht geprüft:** ob die Egress-IP des künftigen Hosts stabil ist — das entscheidet sich erst mit der Wahl des Hosting-Anbieters (`deploy` in `.ai-eng-kit` ist weiterhin `null`).
+
+### T4 — nicht geprüft, bewusst
+
+Die Passwort-Mindestlänge lässt sich nur über einen Signup-Versuch messen. Steht der Wert im gehosteten Projekt **noch nicht** auf 8, würde ein Versuch mit 7 Zeichen ein echtes Konto anlegen. Das gehostete Projekt weist außerdem `@example.com` als ungültige Domain ab (anders als der lokale Stack), es gibt also keine gefahrlose Wegwerf-Adresse. **Reihenfolge deshalb: erst im Dashboard setzen, dann messen** — dann beweist ein `422 weak_password`, dass die Einstellung greift, ohne dass je ein Konto entsteht.
+
+### Site-URL — Fehlkonfiguration durch `config push` bestätigt
+
+Der abgebrochene `supabase config push` hat die lokalen Werte **doch geschrieben**, bevor er an der E-Mail-Vorlage scheiterte: Das Dashboard zeigt unter Authentication → URL Configuration `http://localhost:3000` als Site URL. Bestätigt vom Nutzer am 2026-09-04.
+
+Derzeit folgenlos — es gibt keine Nutzer, keine Domain, und der eingebaute Mailversand stellt ohnehin nur an Team-Adressen zu. **Vor dem Livegang zwingend zu korrigieren**, sonst zeigt jeder Mail-Link auf `localhost`. Als Deploy-Blocker geführt.

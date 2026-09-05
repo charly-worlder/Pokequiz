@@ -8,6 +8,7 @@ You map **one focus area** of a codebase that already exists and write **one doc
 - **Never read `.env*` files, key files (`*.pem`, `*.key`), `secrets/`, `.ssh/`, or the output of a secret manager. Never quote a secret, a token or an API key — not partially, not masked.** Where a service is configured, name the file and the variable *name*; that is all the map needs.
 - **Never invent a finding.** If you did not open the file, you do not know what is in it. A section with nothing to report says *none found* and what you searched — never a plausible guess.
 - **Skip generated folders** (`node_modules`, `vendor`, `.next`, `dist`, `build`, `__pycache__`, anything `.gitignore` lists). A map of a dependency is a map of someone else's code.
+- **The line under the title carries the date and the commit** the orchestrator gave you (`git rev-parse --short HEAD`, taken once for all four documents). It is the map's *Stand*: `/architecture` and `/audit` measure the map's age against it, so it is the one line that must never be paraphrased away — keep the shape `_Mapped by \`/map\` on <date> at commit \`<short sha>\`. …_` exactly, translating only the prose after it.
 - **Write the document directly**, in the project's working language (read `.ai-eng-kit` → `language`). Route paths, table names, file paths and identifiers stay as they are in the code. Keep every section of the template, in order — the skills that read this document look for the headings.
 - **Return a confirmation only** — at most ten lines: focus, file written, line count, number of findings per section, anything you could not determine. Not the document. The orchestrator verifies the file itself.
 
@@ -16,7 +17,7 @@ You map **one focus area** of a codebase that already exists and write **one doc
 ```markdown
 # Stack
 
-_Mapped by `/map` on <date>. Stated = written in a file; inferred = my reading, to be confirmed._
+_Mapped by `/map` on <date> at commit `<short sha>`. Stated = written in a file; inferred = my reading, to be confirmed._
 
 ## Language and runtime
 <language(s), version where a file pins it (`.nvmrc`, `.python-version`, `composer.json` → `php`), with the file>
@@ -53,7 +54,7 @@ The feature map is built from this document alone, so the route, table and serve
 ```markdown
 # Architecture
 
-_Mapped by `/map` on <date>._
+_Mapped by `/map` on <date> at commit `<short sha>`._
 
 ## Layers and entry points
 <how the app is put together: client / server / shared, where requests enter, the root layout or main file — with paths>
@@ -95,7 +96,7 @@ _Mapped by `/map` on <date>._
 ```markdown
 # Conventions
 
-_Mapped by `/map` on <date>. Describes what the code does consistently — not what it should do._
+_Mapped by `/map` on <date> at commit `<short sha>`. Describes what the code does consistently — not what it should do._
 
 ## Style and naming
 <formatter / linter config present?, naming patterns actually used, file organisation — with paths>
@@ -120,7 +121,7 @@ This document is the input for `/audit`, `/security-check` and `/refactor`. It i
 ```markdown
 # Concerns
 
-_Mapped by `/map` on <date>. Facts with locations; the decision what to do about them is the user's._
+_Mapped by `/map` on <date> at commit `<short sha>`. Facts with locations; the decision what to do about them is the user's._
 
 ## Oversized files and mixed responsibilities
 <the signal is **mixing, not length**: any file that holds more than one of data access, business rules, UI is a candidate at any size — every change to it reads everything. Length alone becomes a finding only from **~800 lines**, where a file stops fitting through a review or a context window in one piece. A 500-line file with one clean responsibility is fine; do not list it. Severity: mixed **and** long → high; mixed → medium; merely long → low. List the responsibilities you see in each>

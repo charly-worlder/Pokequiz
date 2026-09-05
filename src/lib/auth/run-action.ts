@@ -1,24 +1,15 @@
-import { unstable_rethrow } from 'next/navigation'
+import { runClientAction } from '@/lib/actions/run-action'
 import { NETWORK_ERROR_MESSAGE, type ActionState } from './error-mapping'
 
 /**
- * Ruft eine Server Action aus einer Client-Komponente auf und macht aus einem
- * *Transport*-Fehler einen normalen ActionState.
+ * Der Auth-Zuschnitt von `runClientAction`: ein Transport-Fehler wird zu einem
+ * normalen ActionState mit der Netzwerk-Meldung.
  *
- * Die Actions selbst bilden Supabases Fehler bereits auf ActionState ab. Was
- * sie nicht melden können, ist ein Aufruf, der nie ankommt — eine abgerissene
- * Verbindung, bevor die Antwort da ist. Ohne diesen Fänger entkam diese
- * Rejection der Transition und riss die ganze Seite mit (BUG-1, spec.md EC-6).
- *
- * `unstable_rethrow` wirft Next.js' eigene Kontrollfluss-Signale zuerst weiter
- * — sonst würde das `redirect()` einer erfolgreichen Action hier verschluckt
- * statt zu navigieren.
+ * Der generische Kern liegt seit dem 2026-09-04 unter `src/lib/actions/` —
+ * PROJ-2 hat denselben Fehler ein zweites Mal gebaut, weil der Schutz hier in
+ * einem Feature-Ordner lag (qa-report.md PROJ-2, BUG-7). Verhalten unverändert;
+ * `run-action.test.ts` gilt weiter.
  */
 export async function runAuthAction(call: () => Promise<ActionState>): Promise<ActionState> {
-  try {
-    return await call()
-  } catch (error) {
-    unstable_rethrow(error)
-    return { error: NETWORK_ERROR_MESSAGE }
-  }
+  return runClientAction(call, { error: NETWORK_ERROR_MESSAGE })
 }

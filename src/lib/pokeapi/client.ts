@@ -33,11 +33,16 @@ const CACHE_SECONDS = 60 * 60 * 24 * 30
 export const REQUEST_TIMEOUT_MS = 5_000
 
 /**
- * The constructed sprite address — the fast path (design.md → Technical
- * Decisions). Deliberately not verified here: checking it server-side would
- * cost a request per question in the normal case, and next/image fetches the
- * image anyway. The browser is what discovers a broken address, and
- * resolveOfficialImageUrl() is what repairs it (spec.md EC-11).
+ * The sprite address, constructed from the Pokémon number (design.md →
+ * Technical Decisions). Deliberately not verified here: checking it server-side
+ * would cost a request per question in the normal case, and next/image fetches
+ * the image anyway. The browser is what discovers a broken address, and a broken
+ * address means the question is discarded (spec.md EC-6).
+ *
+ * **This is the only image source.** Until 2026-09-04 a second one sat behind it
+ * (`resolveOfficialImageUrl`, spec.md EC-11), reading the officially documented
+ * address from `/pokemon/{id}`. It was removed once it was measured that the
+ * official address is character-for-character the one built here — see BUG-16.
  */
 export function spriteUrlFor(id: number): string {
   return `${SPRITE_BASE}/${id}.png`
@@ -72,34 +77,6 @@ export async function fetchGermanNames(
   signal: AbortSignal
 ): Promise<(string | null)[]> {
   return Promise.all(ids.map((id) => fetchGermanName(id, signal)))
-}
-
-/**
- * spec.md EC-11 — the repair path, asked for only once the constructed address
- * has actually failed in a browser. Reads the officially documented
- * `/pokemon/{id}` response, which is the address PokeAPI does commit to.
- * Returns null when even that has no image, which is when the question gets
- * discarded instead (spec.md EC-6).
- */
-export async function resolveOfficialImageUrl(
-  id: number,
-  signal: AbortSignal
-): Promise<string | null> {
-  const res = await cachedFetch(`${API_BASE}/pokemon/${id}`, signal)
-  if (!res.ok) return null
-
-  const pokemon = (await res.json()) as {
-    sprites?: {
-      other?: { ['official-artwork']?: { front_default?: string | null } }
-      front_default?: string | null
-    }
-  }
-
-  return (
-    pokemon.sprites?.other?.['official-artwork']?.front_default ??
-    pokemon.sprites?.front_default ??
-    null
-  )
 }
 
 /**

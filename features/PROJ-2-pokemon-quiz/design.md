@@ -7,7 +7,8 @@ Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
 +-- PageFrame                     Kopfzeile + Inhalt + Fußzeile, umschließt jede Route
     +-- SiteHeader                Server-Komponente, liest die Sitzung selbst (AC-21, AC-22)
     |   +-- Wordmark              Ball-Motiv in CSS + Schriftzug „Pokémon QUIZ"
-    |   +-- angemeldet:   Button „Bestenliste" -> /leaderboard, UserChip
+    |   +-- angemeldet:   UserChip; Button „Bestenliste" -> /leaderboard nur,
+    |   |                 wenn die Seite existiert (AC-21, siehe LEADERBOARD_PAGE_EXISTS)
     |   |                 +-- UserChip: Initiale + Trainername, unter 640px nur Initiale (AC-24)
     |   |                     +-- „Abmelden" ruft PROJ-1s logoutAction auf
     |   +-- ausgeloggt:   Zeile „Deutsche Namen · Serie · Weltrangliste"
@@ -34,7 +35,8 @@ Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
             +-- „Neue persönliche Bestleistung" mit `pop`, wenn geschlagen (AC-8)
             +-- Gewinner-Meldung statt Fehlermeldung, wenn der Pool leer ist (EC-2)
             +-- Hinweis „noch nicht gespeichert" + erneuter Versuch, falls das Speichern scheitert (EC-3)
-            +-- Primär „Nochmal spielen", sekundär „Zur Bestenliste"
+            +-- Primär „Nochmal spielen"; sekundär „Zur Bestenliste" nur,
+                wenn die Seite existiert (AC-7, siehe LEADERBOARD_PAGE_EXISTS)
 ```
 
 **Der Rundenzustand ist eine Zustandsmaschine** in `QuizScreen`. Die Zustände und die erlaubten Übergänge:
@@ -47,10 +49,12 @@ offen --falsch--> aufgelöst --Klick--> beendet
 offen --Pool leer--> beendet (Gewinner-Meldung)
 fehler --"Erneut versuchen" erfolgreich--> offen
 fehler --"Runde beenden"--> beendet
-beendet --"Nochmal spielen"--> bereit
+beendet --"Nochmal spielen"--> lädt   (direkt in die neue Runde, AC-9)
 ```
 
 Kein Übergang führt aus `beendet` zurück in `offen` — eine beendete Runde ist unveränderlich, so wie ihre Zeile in der Datenbank.
+
+**Korrigiert am 2026-09-04 (BUG-10).** Dieser Entwurf schrieb ursprünglich `beendet --"Nochmal spielen"--> bereit`, also zurück auf den Startbildschirm. Der Code folgte dem Design, und das Design widersprach dem Vertrag: AC-9 sagt „dann **startet eine neue Runde**", nicht „dann sieht der Nutzer wieder den Startknopf". Aufgefallen ist das erst im QA-Lauf vom 2026-09-04 — vier Wochen lang stand ein Übergang im Design, den niemand gegen die Spec gelesen hatte. Aufgelöst zugunsten des Vertrags, weil das PRD-Erfolgskriterium „mindestens die Hälfte startet direkt eine zweite Runde" jeden zusätzlichen Klick teuer macht.
 
 ## Data Model
 
@@ -130,18 +134,22 @@ Bilder ausliefern (Bild-Optimierung des Frameworks, keine eigene Route)
 - Der Browser fragt ausschliesslich die eigene Domain an; der Server holt das Bild
   vom CDN und liefert es verkleinert und umgewandelt aus (AC-20)
 
-Bildadresse beschaffen — vierstufige Leiter, jede Stufe nur bei Fehlschlag der vorigen
+Bildadresse beschaffen — dreistufige Leiter, jede Stufe nur bei Fehlschlag der vorigen
+
+> **Geändert am 2026-09-04 (BUG-16).** Ursprünglich stand hier eine **vierstufige** Leiter,
+> deren Stufe 2 die offizielle Adresse über `/pokemon/{id}` nachschlug. Diese Stufe ist
+> ersatzlos entfallen: Gemessen wurde, dass die offizielle Adresse für den ganzen Pool
+> zeichengleich mit der konstruierten ist, sie konnte also nie ein anderes Ergebnis
+> liefern. Siehe Technical Decisions und `spec.md` → EC-11.
+
 - Die Prüfung läuft im Vorladen der nächsten Frage (AC-10), also unsichtbar, während
   der Spieler noch die aktuelle Frage beantwortet. Eine Frage gilt erst als vorgeladen,
   wenn ihr Bild geladen ist — dadurch startet die Uhr nie über einem kaputten Bild
   (AC-2 knüpft den Uhrenstart ohnehin an das sichtbare Bild)
   1. Adresse aus der Pokémon-Nummer gebildet. Normalfall, keine Zusatzanfrage
-  2. Antwortet die nicht mit einem Bild: `/pokemon/{id}` wird abgefragt und die dort
-     hinterlegte offizielle Adresse verwendet. Kostet eine Anfrage, nur im Fehlerfall,
-     und danach liegt auch sie im Zwischenspeicher. Der Spieler merkt nichts
-  3. Liefert auch die kein Bild: Die Frage wird verworfen und eine neue gezogen (EC-6).
-     Das ist der Fall „einzelnes Pokémon kaputt"
-  4. Drei verworfene Fragen hintereinander: Das ist kein einzelnes kaputtes Pokémon mehr,
+  2. Antwortet die nicht mit einem Bild: Die Frage wird verworfen und eine neue gezogen
+     (EC-6). Das ist der Fall „einzelnes Pokémon kaputt"
+  3. Drei verworfene Fragen hintereinander: Das ist kein einzelnes kaputtes Pokémon mehr,
      sondern eine gebrochene Quelle. Die Runde geht in den Fehlerzustand aus AC-16 —
      Fehlerkarte in der Quiz-Karte, Uhr steht, Serie bleibt, „Erneut versuchen" und
      „Runde beenden". Ohne diese Grenze würde EC-6 endlos Fragen durchdrehen und wie
@@ -177,7 +185,7 @@ Ein Hinweis fürs spätere `/deploy`, keine Aufgabe: Die serverseitige Bild-Opti
 | Decision | Rationale | Alternative considered | Trade-off | Date |
 | --- | --- | --- | --- | --- |
 | Bild-Auslieferung über `next/image` mit freigeschaltetem Bild-Host statt einer selbst gebauten Proxy-Route | Erfüllt AC-20 durch Konfiguration statt durch Code: Der Browser fragt nur `/_next/image?…` auf unserer eigenen Domain an, der Server holt vom CDN. Bringt den serverseitigen Bild-Zwischenspeicher gleich mit (AC-31) und verkleinert die Bilder obendrein — die Originale sind rund 110 KB grosse PNGs, geprüft an den Nummern 25 und 386 | Eigene Route, die das Bild durchreicht | Wir sind an die Zwischenspeicher-Regeln des Frameworks gebunden (Ablauf einstellbar, gezieltes Verwerfen einzelner Bilder nicht vorgesehen). Für Pokémon-Bilder, die sich praktisch nie ändern, ist das ohne Bedeutung | 2026-09-01 |
-| Bildadresse wird aus der Pokémon-Nummer gebildet — als **schneller Weg mit Rückfallebene**, nicht als einzige Quelle | Halbiert die Anfragen an die PokeAPI: pro Frage vier Namensabfragen statt vier Namens- **und** vier Detailabfragen. Die Detailantwort ist mit über 100 KB die grösste des ganzen Dienstes und enthält fast nur Daten, die wir nie anzeigen. Das ist genau die „Anfragehäufigkeit gering halten"-Bitte der Fair-Use-Policy, und es hilft AC-2 (Start unter 3 Sekunden). **Der ganze Pool wurde am 2026-09-01 vollständig geprüft, nicht stichprobenartig: 386/386 Bilder über die gebildete Adresse erreichbar, 386/386 deutsche Namen vorhanden.** Es gibt also keine Nummer, die dauerhaft aus dem Pool ausgeschlossen werden müsste — wäre eine gefunden worden, würde sie hier stehen | Ausschliesslich `/pokemon/{id}` abfragen und die Adresse daraus lesen — der offiziell dokumentierte Weg | **Bewusst akzeptiertes Risiko: Wir hängen an einem Adressmuster, das die PokeAPI nirgends als Schnittstelle zusagt.** Ändert sie die Ablage ihrer Bilder, schlägt das nicht bei einem Pokémon fehl, sondern bei allen gleichzeitig und ohne Vorwarnung. Tragfähig ist die Entscheidung nur wegen der Rückfallebene: Stufe 2 der Leiter (siehe Behaviors & Access) holt die offizielle Adresse aus `/pokemon/{id}`, sobald die gebildete kein Bild liefert. Der schlimmste Fall ist damit nicht „alle Bilder kaputt", sondern „eine Zusatzanfrage pro Pokémon" — also exakt der Zustand, den die Alternative von vornherein hätte. Das Risiko ist Mehrverbrauch, kein Ausfall | 2026-09-01 |
+| ⚠️ **Überholt am 2026-09-04, siehe die vorletzte Zeile dieser Tabelle.** Bildadresse wird aus der Pokémon-Nummer gebildet — als **schneller Weg mit Rückfallebene**, nicht als einzige Quelle | Halbiert die Anfragen an die PokeAPI: pro Frage vier Namensabfragen statt vier Namens- **und** vier Detailabfragen. Die Detailantwort ist mit über 100 KB die grösste des ganzen Dienstes und enthält fast nur Daten, die wir nie anzeigen. Das ist genau die „Anfragehäufigkeit gering halten"-Bitte der Fair-Use-Policy, und es hilft AC-2 (Start unter 3 Sekunden). **Der ganze Pool wurde am 2026-09-01 vollständig geprüft, nicht stichprobenartig: 386/386 Bilder über die gebildete Adresse erreichbar, 386/386 deutsche Namen vorhanden.** Es gibt also keine Nummer, die dauerhaft aus dem Pool ausgeschlossen werden müsste — wäre eine gefunden worden, würde sie hier stehen | Ausschliesslich `/pokemon/{id}` abfragen und die Adresse daraus lesen — der offiziell dokumentierte Weg | **Bewusst akzeptiertes Risiko: Wir hängen an einem Adressmuster, das die PokeAPI nirgends als Schnittstelle zusagt.** Ändert sie die Ablage ihrer Bilder, schlägt das nicht bei einem Pokémon fehl, sondern bei allen gleichzeitig und ohne Vorwarnung. Tragfähig ist die Entscheidung nur wegen der Rückfallebene: Stufe 2 der Leiter (siehe Behaviors & Access) holt die offizielle Adresse aus `/pokemon/{id}`, sobald die gebildete kein Bild liefert. Der schlimmste Fall ist damit nicht „alle Bilder kaputt", sondern „eine Zusatzanfrage pro Pokémon" — also exakt der Zustand, den die Alternative von vornherein hätte. Das Risiko ist Mehrverbrauch, kein Ausfall | 2026-09-01 |
 | Nach drei hintereinander verworfenen Fragen wird auf den Fehlerzustand aus AC-16 umgeschaltet (jetzt als EC-10 in `spec.md`) | EC-6 verwirft ein nicht ladbares Bild und zieht ein neues — richtig für ein einzelnes kaputtes Pokémon, aber ohne Grenze wird daraus bei einem grossflächigen Ausfall eine Endlosschleife, die für den Spieler wie ein Hänger aussieht statt wie ein Fehler. Drei kosten unter einer Sekunde, weil ein fehlendes Bild sofort antwortet; der langsame Fall ist bereits durch AC-15 gedeckelt. Da der Pool vollständig geprüft ist, federt die Zahl keine bekannte Lücke ab, sondern spätere Änderungen an der Bildablage | Zwei statt drei; oder unbegrenzt neu ziehen | Bei einer sehr schlechten Verbindung kann die Fehlerkarte etwas früher erscheinen als nötig — sie ist mit „Erneut versuchen" aber folgenlos | 2026-09-01 |
 | Namensabfragen werden ausdrücklich zwischengespeichert (30 Tage), nicht dem Standardverhalten überlassen | **In der eingesetzten Framework-Version werden externe Abfragen standardmässig nicht zwischengespeichert** — geprüft in der mitgelieferten Dokumentation von Version 16.3.3. Eine beiläufig geschriebene Abfrage erfüllt AC-31 also nicht, und man sieht ihr das nicht an. Deutsche Namen ändern sich praktisch nie, 30 Tage sind unbedenklich | Auf ein Standardverhalten vertrauen, das es nicht mehr gibt | Ein nachträglich in der PokeAPI korrigierter Name erscheint bis zu 30 Tage später bei uns | 2026-09-01 |
 | Kein Zwischenspeicher-Schlüssel enthält eine Nutzerkennung | Der Namensspeicher wird über die Adresse der Anfrage angesprochen, der Bildspeicher über Adresse und Bildgrösse. In keinem der beiden kommt der Nutzer vor — damit kann aus dem Zwischenspeicher grundsätzlich keine Historie „wer hat wann was gesehen" entstehen (AC-28), und beide wirken spielerübergreifend, wie AC-31 es verlangt | Pro Sitzung zwischenspeichern | Keiner — die nutzerlose Variante ist zugleich die datensparsamere und die wirksamere | 2026-09-01 |
@@ -188,6 +196,9 @@ Ein Hinweis fürs spätere `/deploy`, keine Aufgabe: Die serverseitige Bild-Opti
 | Runden sind nur für den eigenen Besitzer lesbar; die Rangliste bekommt in PROJ-3 eine eigene Datenbankfunktion | Setzt die Zusage „schlechte Runden sind privat" aus `docs/data-model.md` tatsächlich durch. Eine für alle lesbare Tabelle würde jedem Angemeldeten die vollständige Historie jedes Spielers offenlegen, auch wenn die Oberfläche nur den besten Lauf zeigt | Lesen für alle Angemeldeten freigeben, wie ursprünglich im Datenmodell skizziert | PROJ-3 kann die Tabelle nicht direkt abfragen und braucht die Funktion. Das ist Mehraufwand dort — aber der richtige Ort dafür | 2026-09-01 |
 | Die Uhr läuft im Browser und wird beim Rundenende mitgeschickt | Die Uhr muss flüssig weiterlaufen und bei einem Ausfall stehenbleiben (AC-16) — beides ist Anzeigeverhalten. Eine serverseitige Zeitmessung wäre nur dann echt überprüfbar, wenn auch jede Antwort über den Server liefe, was oben bewusst verworfen wurde | Start- und Endzeitpunkt serverseitig festhalten | Die Zeit ist manipulierbar, im selben Rahmen wie die Serie. Die untere Schranke aus AC-12 begrenzt den Unsinn | 2026-09-01 |
 | Kopfzeile und Fussleiste sitzen im Wurzel-Layout, nicht in den einzelnen Seiten | AC-21 bis AC-23 verlangen denselben Rahmen auf jeder Route, angemeldet wie ausgeloggt. Im Wurzel-Layout ist das eine Stelle statt vier, und PROJ-3 und PROJ-4 erben ihn, ohne etwas zu tun | Jede Seite rendert ihren Rahmen selbst | Das Wurzel-Layout liest die Sitzung und ist damit auf jeder Route dynamisch. Durch PROJ-1s Routenschutz ist ohnehin keine Route statisch | 2026-09-01 |
+| **Die Rückfallebene der Bildadresse entfällt; die Leiter ist dreistufig.** Löst die oben markierte Entscheidung vom 2026-09-01 ab | Die Begründung von damals lautete, der schlimmste Fall sei „eine Zusatzanfrage pro Pokémon, nicht alle Bilder kaputt". **Diese Garantie hat der Code nie gehabt**: Gemessen am 2026-09-04 ist `sprites.other.official-artwork.front_default` für den Pool 1–386 zeichengleich mit `SPRITE_BASE/{id}.png` — die Nachschlage-Anfrage konnte nie eine andere Adresse liefern. Sie wurde gestellt (über 100 KB je Antwort) und ihr Ergebnis verworfen, bis zu dreimal vor jeder Fehlerkarte. Bis zum Fix von BUG-8 war das nicht einmal sichtbar, weil dieselbe Adresse erneut zu setzen die Runde stillstehen ließ | Die Anfrage als Versicherung gegen eine künftige Änderung der PokeAPI-Bildablage behalten und nur EC-11 ehrlicher formulieren | **Wir geben eine Absicherung auf, die es nie gab.** Ändert die PokeAPI ihre Bildablage, fällt jede Frage in EC-6 und nach drei Verwürfen in EC-10 — die Fehlerkarte mit „Erneut versuchen" und „Runde beenden". Der Ausfall wäre also sichtbar und benannt, nicht still. Dafür entfällt bei jedem Bildausfall echter Verkehr, der gegen die Fair-Use-Zusage arbeitete, um die dieses Feature sich sonst ausdrücklich bemüht | 2026-09-04 |
+| **Das Vorladen des Bildes bekommt eine eigene Zeitgrenze: 5 Sekunden, ein stiller zweiter Versuch, dann Verwurf** | `onLoad` und `onError` decken ein Bild ab, das ankommt, und eines, das abgelehnt wird — aber keines, das **gar nicht antwortet**. Genau das war BUG-15: Die Runde saß dann für immer auf „Runde wird vorbereitet …", ohne Fehlerkarte und ohne Ausweg, und die Serie war beim Neuladen verloren. AC-15 verspricht die Frist ausdrücklich („nach 5 Sekunden nicht vollständig ladbar"), und ein Bild ist Teil der Frage — `design.md` sagt selbst: „Eine Frage gilt erst als vorgeladen, wenn ihr Bild geladen ist." Die Frist spiegelt daher `withTimeoutAndOneRetry` der Serverseite, damit eine langsame Runde **ein** Budget hat statt zweier | Sofort verwerfen ohne zweiten Versuch; oder die Frist in `quiz-screen` statt in der Sonde führen | Ein hängendes Bild kostet jetzt bis zu 10 Sekunden, und bis zur Fehlerkarte im schlimmsten Fall drei davon. Das ist der seltene Hänge-Fall; der häufige (404) antwortet weiterhin sofort. Der zweite Versuch läuft über den React-`key` und **nicht** über die Adresse — ein Cache-Buster in der URL hätte AC-31 und AC-20 gebrochen | 2026-09-04 |
+| **Der Proxy leitet Server-Action-POSTs nicht um; die Sitzungsprüfung sitzt in der Action** | Next.js kodiert das `redirect()` einer Server Action **in-band** — Status 200 plus `x-action-redirect` —, ausdrücklich damit der Browser keiner 307 auf eine Anmeldeseite folgt (`action-handler.ts`). Eine gewöhnliche Weiterleitung auf einen Action-POST ist für den Handler deshalb ein Protokollbruch; der Client wirft „An unexpected response was received from the server". Genau das machte den `unauthenticated`-Zweig **unerreichbar** (BUG-9): Wem mitten in der Runde die Sitzung ablief, der sah einen Ergebnis-Screen, der Erfolg vortäuschte. Der Zweig existierte und war getestet — der Proxy ließ ihn nie laufen. Next.js' eigene Anleitung sagt dazu: „any Server Actions called from components must perform their own authorization checks" | Den Fehlertext der Framework-Meldung im Client auswerten und daraus auf „abgemeldet" schließen | **Wir tauschen eine Schranke davor gegen eine Schranke darin.** Ein Action-POST ohne Sitzung erreicht jetzt die Action; sie prüft selbst, und die Datenbank prüft über RLS ein zweites Mal. Damit das nicht bei der fünften Action still verfällt, erzwingt `server-actions.guard.test.ts` die Prüfung für **jede** Action. Nebenwirkung: Ein Action-Kennzeichen einer *fremden* Route ergibt ohne Sitzung HTTP 500 statt 307 — nachgemessen tut es das **mit** Sitzung genauso, ist also vorbestehendes Framework-Verhalten und kein neues Loch. Die Alternative hinge an einer Zeichenkette in einer Fehlermeldung und bräche bei jedem Next-Update still | 2026-09-04 |
 
 ## Open Questions
 
@@ -226,3 +237,88 @@ Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb de
 **Regressionstest für das Vorladen (`quiz-screen.test.tsx`).** Der Bug war in der Oberfläche unsichtbar und nur im Server-Log erkennbar; eine einmalige Beobachtung sichert nichts für die Zukunft. Zwei Tests: dass nach der ersten sichtbaren Frage sofort eine zweite geladen wird, und dass eine richtige Antwort die vorgeladene Frage ohne Ladezustand zeigt. **Beide wurden rot geprüft**, indem ausschließlich die eine wiederhergestellte Bug-Zeile entfernt wurde (die fünf anderen `fetchQuestion`-Aufrufe blieben intakt) — sie fangen also genau diesen Fehler und nicht irgendeinen.
 
 Damit weicht dieses Feature bewusst von der Konvention ab, dass Tests ausschließlich `/qa` schreibt: Für einen Bug, der beim Anschauen nicht auffällt, gehört der Test zum Fix.
+
+---
+
+## Notizen aus dem Fix-Lauf (2026-09-04)
+
+Vier Befunde aus dem QA-Lauf vom selben Tag behoben: BUG-10 (AC-9), BUG-7 (EC-3), BUG-8 (EC-6) und BUG-13 (AC-31). Alle vier innerhalb des genehmigten Designs; die einzige Design-Änderung ist der oben korrigierte Übergang.
+
+**Der Transport-Fänger liegt jetzt feature-neutral in `src/lib/actions/run-action.ts`.** PROJ-1 hatte denselben Fehlertyp am 2026-09-01 gefunden und mit `src/lib/auth/run-action.ts` behoben — in einem *Feature*-Ordner. PROJ-2 baute ihn deshalb ein zweites Mal ein (BUG-7): Ein `await saveRun(...)` ohne `try/catch` ließ bei einem Verbindungsabbruch alle folgenden Zeilen aus, `saveState` blieb auf `'saving'`, und der Ergebnis-Screen sah aus wie ein gespeichertes Ergebnis. Die Fehler-UI aus EC-3 existierte und war unerreichbar. Der generische Kern `runClientAction(call, fallback)` deckt jetzt beide Features ab; `runAuthAction` ist sein Auth-Zuschnitt und bleibt in Verhalten und Tests unverändert. Im Quiz gehen `saveRun` und `getNextQuestion` hindurch. (`repairImageUrl` stand hier ebenfalls, bis die Rückfallebene am 2026-09-04 entfiel — siehe EC-11.)
+
+**Eine unveränderte Bildadresse ist keine Reparatur (BUG-8).** Der Entwurf beschreibt die Rückfallebene als „offizielle Adresse über `/pokemon/{id}` nachschlagen" — und übersah, dass diese Adresse im Normalfall **genau die konstruierte ist**. `repairImageUrl` gab sie zurück, `setProbing` setzte denselben `src`, `ImageProbe`s `key` blieb gleich, der Browser lud nicht neu, `onError` feuerte kein zweites Mal — und die Runde hing dauerhaft auf „Runde wird vorbereitet …", ohne Meldung und ohne Ausweg. Betroffen war real **jeder Ausfall des Sprite-CDN**, also genau der Fall, für den EC-6 geschrieben wurde. Der Fix ist eine Zeile: Nur eine *abweichende* Adresse gilt als Reparatur, sonst greift der Verwurf aus EC-6. Damit werden EC-10 und EC-11 überhaupt erst erreichbar — beide Unit-Tests waren vorher grün, weil sie die Funktion direkt aufriefen und eine abweichende Adresse mockten.
+
+**Die Verwurfsgrenze gilt jetzt auch beim Vorladen (BUG-13).** Sie hing an `!hasCurrentRef.current`, griff also nur, wenn der Spieler auf die Frage wartete. Fiel die Bildquelle aus, *während* er noch antwortete, zog das Vorladen endlos neue Fragen nach — je vier Namensabfragen an die PokeAPI, ohne Backoff. Das widersprach der eigenen Begründung im Decision Log („der Nutzer klickt selbst, es entsteht also keine automatische Last gegen die Fair-Use-Policy") und war nur deshalb nicht sichtbar, weil BUG-8 die Schleife vorher zum Stillstand brachte. Die Grenze stoppt das Nachziehen jetzt in beiden Fällen; die Fehlerkarte zeigt sie weiterhin nur dem, der wartet. Bleibt das Vorladen an der Grenze stehen und der Spieler kommt später dort an, führt `advance` direkt in den Fehlerzustand — das ist EC-10, nur zeitversetzt.
+
+**Vier Abnahmetests, alle rot geprüft.** In `quiz-screen.error-states.test.tsx`, plus `src/lib/actions/run-action.test.ts` für den generischen Kern. Jeder wurde einzeln gegen den wiederhergestellten Fehler gefahren und fiel dort:
+
+| Test | ohne den Fix |
+|---|---|
+| EC-3 / BUG-7 | rot — kein Hinweis, kein „Erneut speichern" |
+| EC-6 / BUG-8 | rot — eine Frage, eine Adresse, keine zweite Anfrage |
+| AC-31 / BUG-13 | rot — zweistellig viele `getNextQuestion`-Aufrufe |
+| AC-9 / BUG-10 | rot — „Runde starten" steht wieder da |
+
+**Eine Lehre aus dem BUG-8-Test, die über diesen Fix hinausgeht.** Der erste Entwurf des Tests feuerte `error` in einer Schleife auf alle Bilder — und war **auch gegen den kaputten Code grün**. Genau das Von-Hand-Feuern ist nämlich das, was der Browser nicht tut: Der Fehler *besteht* darin, dass kein zweites Ereignis kommt. Ein Test, der das fehlende Ereignis selbst nachliefert, prüft den Fehler weg. Der jetzige Test feuert genau einmal und verlangt, dass die Runde von sich aus weitergeht.
+
+**Nicht behoben, bewusst:** BUG-9 (Medium, EC-7) teilt die Wurzel mit BUG-7, braucht aber eine eigene Entscheidung — der Proxy fängt den Server-Action-POST ab und antwortet mit HTML, was sich von einem gewöhnlichen Verbindungsabbruch nicht zuverlässig unterscheiden lässt. Mit dem Fänger sieht der Spieler jetzt immerhin „konnte noch nicht gespeichert werden" statt eines Ergebnis-Screens, der Erfolg vortäuscht; die von EC-7 zugesagte Weiterleitung auf `/login` bleibt offen. Ebenfalls offen: BUG-11 (Low, AC-25) und BUG-12 (Low).
+
+---
+
+## Notiz zur E2E-Instabilität (2026-09-04) — eine korrigierte Fehlzuschreibung
+
+`npm run test:e2e` war bei der Standard-Worker-Zahl (16 auf dieser Maschine) reproduzierbar rot, 5 bis 6 von 24. Die erste Erklärung lautete: Ursache ist BUG-15, das hängende Bild ohne Zeitgrenze. **Das war falsch, und es ist lehrreich, warum.**
+
+Das Symptom passte perfekt — die Seite stand auf „Runde wird vorbereitet …", genau dem Bild, das BUG-15 beschreibt. Nach dem Einbau der Zeitgrenze blieben aber **6 von 24 rot**. Erst das Nachmessen zeigte die Kette:
+
+1. Playwright gibt bei einer Erwartung nach **5 Sekunden** auf. Die App hat nach AC-15 **zehn** (5 s plus stiller Versuch). Der Test war ungeduldiger als der Vertrag — er hätte den Fix gar nicht sehen können.
+2. Mit 20 Sekunden Geduld blieben **4 rot**, und zwar an einer *anderen* Stelle: bei einer bereits offenen Frage mit vier Optionen. Das ist AC-2s 3-Sekunden-Budget, das unter 16-facher Last auf **einem** Dev-Server nicht zu halten ist.
+3. Auch der Mail-Ablauf von PROJ-1 wurde in derselben Konstellation instabil — ein Feature, das mit Bildern nichts zu tun hat.
+
+Es war also **Kontention im Messaufbau**, kein Produktfehler. Bestätigt durch die Gegenprobe: Derselbe Flake trat in derselben Rate schon **vor** den Fixes vom 2026-09-04 auf (gegen `4709193` gemessen). Konsequenz: Die Worker-Zahl ist in `playwright.config.ts` auf 4 gedeckelt; damit läuft die Suite reproduzierbar 24/24.
+
+**Was daran hängenbleibt:** Ein passendes Symptom ist noch keine Ursache. BUG-15 war echt und ist behoben — aber er war nicht *dieser* Fehler, und die beiden zu verwechseln hätte bedeutet, den Flake für erledigt zu halten und das Gate weiter für vertrauenswürdig zu nehmen, obwohl es die Maschine misst statt die App.
+
+---
+
+## Was der Wächter über die Server Actions leistet — und was nicht (Stand 2026-09-05)
+
+Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke *darin* (Action) gewandert. Das ist das vom Framework vorgesehene Muster, es hat aber eine offensichtliche Schwäche: Es hält nur, solange jede Action daran denkt. `src/lib/actions/server-actions.guard.ts` ist der Versuch, das maschinell abzusichern.
+
+**Dieser Abschnitt ist zweimal umgeschrieben worden, weil er zweimal mehr versprochen hat, als der Code hielt** (BUG-20, dann BUG-32). Deshalb steht hier jetzt die Grenze zuerst.
+
+### Was er zuverlässig leistet
+
+- **Er findet jede Server Action.** Ein QA-Verifizierer hat am 2026-09-05 alle in `node_modules/next/dist/docs/` dokumentierten Formen durchprobiert — Datei-Direktive, Inline-`'use server'` im Funktionsrumpf, Pfeilfunktion, Objekt-Methode, anonymer Default-Export, Currying, `export { inner as doThing }`, HOF-Umhüllung, `async function*`, `'use client'` davor. **Keine wurde übersehen.**
+- **Was er nicht analysieren kann, lässt er nicht durch.** Re-Exporte und destrukturierte Exporte fallen als „nicht analysierbar" durch, statt stillschweigend übersprungen zu werden.
+- **Er kann nicht still grün werden.** Der Gegenzeuge verlangt, dass jede Datei, die `use server` erwähnt, mindestens eine Action liefert, und hält Mindestzahlen für Actions und Dateien. Bricht die Erkennung, wird der Test rot statt leer — das war die Lücke, an der die erste Fassung scheiterte.
+
+### Was er ausdrücklich **nicht** leistet
+
+**Er prüft, ob ein Aufruf namens `getUser` im Rumpf steht — nicht, ob eine Sitzung wirksam geprüft wird.** Folgende Attrappen kommen durch, alle am 2026-09-05 gemessen:
+
+| Form | Urteil des Wächters |
+|---|---|
+| Eigene lokale `function getUser() { return { id: 'anyone' } }` | grün |
+| `if (false) { await supabase.auth.getUser() }` | grün |
+| Aufruf hinter einem Feld, das der Aufrufer nie setzt | grün |
+| Ein Callback mit dem Aufruf, der nie ausgeführt wird | grün |
+| `await supabase.auth.getUser()`, dessen Ergebnis niemand auswertet | grün |
+
+**Das bleibt so.** Ein Prüfer, der entscheidet, ob das Ergebnis eines Aufrufs den Ablauf tatsächlich steuert, ist eine Datenflussanalyse — er bräuchte Typinformationen, Erreichbarkeitsanalyse und eine Vorstellung davon, was „den Ablauf steuern" heißt. Der dritte Anlauf auf dieselbe Zusicherung würde denselben Fehler zum dritten Mal machen: einen Prüfer bauen, der etwas Schwächeres misst, als sein Name behauptet, und dem man deshalb zu Unrecht vertraut.
+
+**Weitere benannte Grenzen:**
+
+- **`PUBLIC_ACTIONS` befreit nach Namen, nicht nach Datei** (BUG-34). Eine neue Action, die irgendwo in `src/` `loginAction` heißt, ist automatisch befreit. Die „Begründungspflicht" ist eine Längenprüfung.
+- **Er sieht nur `.ts`/`.tsx` unterhalb `src/`.** Eine Action in `.js`/`.mjs` oder außerhalb wäre für Erkennung **und** Gegenzeugen gleichzeitig unsichtbar.
+- **Er läuft jetzt vor jedem Commit, der Code enthält** (BUG-36, behoben am 2026-09-05). Die frühere Begründung an dieser Stelle — „läuft in `npm test`, also in der Prüfung, die vor jedem Commit ohnehin fährt" — war zum Zeitpunkt des Schreibens **unbelegt**: Es gab kein `.husky/`, kein `.github/workflows/` und keinen Hook. Seit `.githooks/pre-commit` stimmt sie, und zwar nachprüfbar: Der Hook wird über `core.hooksPath` aktiviert (gesetzt vom `prepare`-Skript, überlebt also einen frischen Klon) und fährt `npm test`, sobald `src/`, `tests/`, `supabase/`, `package.json` oder eine Konfigurationsdatei im Commit liegt. **Die Grenze bleibt benannt:** `git commit --no-verify` umgeht ihn, und das ist Absicht — ein Wächter ohne Notausgang wird ausgebaut statt benutzt.
+
+### Was daraus folgt — die Aufgabenteilung
+
+**Der Wächter beantwortet eine Frage: „Gibt es eine Server Action, an die beim Schreiben niemand gedacht hat?"** Das ist die Frage, die im Alltag schiefgeht — eine neue Action, geschrieben unter Zeitdruck, ohne den Gedanken an die Sitzung. Dagegen hilft er zuverlässig, und dafür ist er gebaut.
+
+**Ob die vorhandene Prüfung etwas taugt, bleibt Sache des Code-Reviews.** Das ist keine Ausrede, sondern die ehrliche Grenze: Eine Attrappe wie `if (false) { getUser() }` entsteht nicht aus Vergesslichkeit, sondern nur absichtlich oder durch einen groben Fehler — und beides fällt einem Menschen auf, der den Diff liest. `.claude/rules/security.md` verlangt für Änderungen am Authentifizierungsfluss ohnehin ausdrückliche Zustimmung; genau dort sitzt diese Verantwortung.
+
+**Für den Review heißt das konkret:** Bei jeder neuen oder geänderten Server Action nicht prüfen, *ob* `getUser` vorkommt — das tut der Wächter —, sondern **ob sein Ergebnis den Ablauf beendet**, also ob auf einen fehlenden Nutzer wirklich ein früher Rücksprung folgt.
+
+**Und deshalb steht in `src/proxy.ts` kein Satz mehr, der sich auf den Wächter verlässt.** Der Kommentar dort behauptete, der Wächter halte die Sitzungsprüfung davon ab, „still zu verfallen". Das tut er nur für den Fall der vergessenen Action, nicht für den der unwirksamen Prüfung.
