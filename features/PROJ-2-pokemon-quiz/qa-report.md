@@ -1458,3 +1458,106 @@ Ein dritter Anlauf war nötig und gehört zur Ehrlichkeit dieses Eintrags: Der U
 - **Production Ready: NEIN**
 
 > **Was dieser Lauf über die Arbeit des Tages sagt.** Alle drei Bauteile funktionieren — das ist gemessen, nicht angenommen: Die Drosselung greift in den Actions und ist per Pfad nicht umgehbar, die E2E-Suite läuft wieder vollständig **und** prüft die Drosselung jetzt ausdrücklich, der Wächter stoppt einen Commit mit ungeschützter Action wirklich. Was in allen drei Fällen fehlt, ist dasselbe: **die Grenze im selben Satz wie die Zusage.** Bei der Drosselung fehlt sie ganz (BUG-39 war nicht bedacht), beim Wächter steht sie zu breit (BUG-40), bei der Bundle-Gegenprobe suggeriert die Formulierung mehr Umfang als die Messung hatte (BUG-44). Ein Beleg, der weiter klingt, als er reicht, ist schlechter als kein Beleg — weil man aufhört hinzusehen.
+
+---
+
+## QA-Nachlauf — 2026-09-05, nach dem Fix für BUG-39
+
+**Getestet:** 2026-09-05 · **App-URL:** `http://localhost:3000` · **Commit:** `8198a19` · **Tester:** QA Engineer (AI)
+
+Gezielter Nachlauf mit zwei Bahnen, beide ohne Kenntnis der Sitzung, in der gebaut wurde. Bahn B2: den Angriff aus BUG-39 wirklich nachstellen und nach weiteren Umgehungswegen suchen. Bahn C2: Regression, mit besonderem Augenmerk darauf, ob der normale Nutzer schlechter dasteht.
+
+### Das Ergebnis vorweg
+
+- **BUG-39 ist geschlossen** — über den echten Server-Action-Pfad nachgestellt, nicht aus dem Code abgeleitet.
+- **Fünf weitere Umgehungswege geprüft und ausgeschlossen.**
+- **Der Fix hat eine Nebenwirkung, die vorher nicht da war: BUG-54 (Medium).** Hinter einer geteilten Adresse teilen sich jetzt **alle** Nutzer ein Budget von 5 Anmeldungen pro Minute — auch die mit richtigem Passwort.
+- Regression sonst ohne Befund: 165/165, Lint grün, Build grün, E2E **zweimal hintereinander** 30/30.
+- **Production Ready: NEIN** — PROJ-2 bleibt **In Review**.
+
+### BUG-39 — geschlossen, mit Zahlen
+
+Bahn B2 hat `loginAction` direkt über HTTP angesprochen, mit **fester** gefälschter Herkunft, und den ursprünglichen Angriff als Schleife nachgestellt: drei Zyklen à „vier Fehlversuche gegen fremde Konten + ein erfolgreicher Login mit dem eigenen Konto".
+
+| Versuch | Was | Ergebnis |
+|---|---|---|
+| 1–4 | fremdes Konto, falsches Passwort | durchgelassen |
+| 5 | **eigenes** Konto, richtiges Passwort | Erfolg — **und die IP-Bremse bleibt gesetzt** |
+| 6–15 | weitere Versuche, auch erfolgreiche Eigen-Logins | **durchweg abgewiesen** |
+
+**15 Versuche, ab dem sechsten abgewiesen, über drei Zyklen, null durchgelassen.** Vor dem Fix lief Versuch 6 wieder durch und die Schleife war beliebig oft wiederholbar — die ursprüngliche Messung lautete 24 von 24 durchgelassen.
+
+**Fünf andere Wege zum selben Zähler, geprüft und ausgeschlossen:**
+
+| Weg | Ergebnis | Beleg |
+|---|---|---|
+| Erfolgreiche **Registrierung** als Reset | ausgeschlossen — eigener Scope `register:ip`, ruft `clearAttempts` nicht auf | `throttle.ts:101/103` |
+| **Passwort-Reset** | ausgeschlossen — Scope `password-reset:ip`, kein `clearAttempts`, prüft kein Passwort | `actions.ts:126` |
+| **Abmelden** | ausgeschlossen — rührt keinen Zähler an | `actions.ts:108` |
+| **Schreibweise** der Adresse | ausgeschlossen — IP-Zähler ist adress-unabhängig, Konto-Schlüssel wird kleingeschrieben | `throttle.ts:70` |
+| Einen Zähler durch **Überlauf des anderen** entlasten | ausgeschlossen — beide werden immer gezählt, erlaubt nur wenn beide unter Limit | `throttle.ts:103-109` |
+
+Zusätzlich bestätigt: `clearAttempts` hat genau **einen** Aufrufer im ganzen Projekt.
+
+**Die Zusagen sind durch den Code gedeckt.** Bahn B2 hat ausdrücklich geprüft, ob die Begründung in `design.md` wieder weiter reicht als die Implementierung — das Muster, das hier schon dreimal aufgetreten ist (BUG-20, BUG-32, BUG-40). Urteil: „die Zusage ist enger als der beobachtete Effekt, nicht umgekehrt". Auch der Abnahmetest hält der Prüfung stand: Er würde den alten Fehlermodus fangen und lässt sich in dieser Form nicht täuschen.
+
+### Was der Fix **nicht** löst, und das gehört in denselben Satz
+
+**Passwort-Spraying mit rotierender Herkunft funktioniert unverändert:** 30 Versuche, ein Passwort gegen 30 Konten, je eigene gefälschte `x-forwarded-for` — **30 durchgelassen, 0 abgewiesen.** Der Konto-Zähler greift hier grundsätzlich nicht (jedes Opferkonto bekommt genau einen Versuch), und der IP-Zähler lässt sich mit einem selbstgesetzten Header umgehen.
+
+Das ist **kein neuer Befund** — es steht in `throttle.ts:48-58` und in `design.md` unter „Was die IP-Hälfte wert ist, ehrlich gesagt" und ist als Deploy-Blocker geführt. Aber die Einordnung gehört klar gesagt: **Der Fix stellt die Integrität des IP-Zählers nur für den Fall einer vertrauenswürdigen Herkunft wieder her.** Ob sie vertrauenswürdig ist, entscheidet erst der Host beim `/deploy`. Vorher ist der Spraying-Schutz nicht wirksam.
+
+### BUG-54: Hinter einer geteilten Adresse teilen sich alle Nutzer 5 Anmeldungen pro Minute
+
+- **Severity: Medium** · **Nebenwirkung des BUG-39-Fixes** · PROJ-1 AC-8
+- Der IP-Zähler wird **vor** der Passwortprüfung hochgezählt (`actions.ts:84`), ein erfolgreicher Login verbraucht also ein Budget — und seit dem Fix wird nichts davon zurückgegeben. Drei Messungen von Bahn C2, jede mit eigener Herkunft:
+
+| Szenario | Ergebnis |
+|---|---|
+| **Acht verschiedene Spieler**, alle mit **richtigem** Passwort, hinter einer Adresse | **5 kommen hinein, 3 werden abgewiesen** |
+| Zwei Konten im Wechsel, beide mit richtigem Passwort | ab dem 6. Login abgewiesen |
+| Anmelden/Abmelden im Zyklus | 5 Zyklen, der 6. abgewiesen |
+
+- **Was daran neu ist:** Vor dem Fix löschte jeder erfolgreiche Login den IP-Zähler mit — für legitime Nutzer war die Grenze damit praktisch nie spürbar. Genau diese Nebenwirkung war der Bug; ihr Wegfall ist die Nebenwirkung des Fixes.
+- **Warum das mehr ist als eine Fußnote:** Die Zielgruppe im PRD schließt Kinder ausdrücklich ein, also Familien- und Schulanschlüsse. Dazu kommt Mobilfunk-CGNAT, wo sich sehr viele Anschlüsse eine öffentliche Adresse teilen. Diese Nutzer sehen „Zu viele Versuche von dieser Verbindung", ohne dass irgendjemand etwas falsch gemacht hat.
+- **Warum Medium und nicht High:** Es heilt nach 60 Sekunden von selbst aus — nachgemessen, und die Fenster-Semantik ist geprüft: `window_started_at` wird nur beim Ablaufen neu gesetzt (`0003_auth_throttle.sql:62-71`), weiteres Hämmern verlängert die Sperre also **nicht**. Ein Workaround existiert (warten, erneut versuchen).
+- **`throttle.ts:132-137` benennt diesen Preis** — aber ohne Zahl. Die Zahl ist 5 Anmeldungen pro Minute für **alle** Nutzer eines Anschlusses zusammen, und mit ihr liest sich die Entscheidung anders als ohne.
+- **Naheliegende Richtung** (nicht umgesetzt, `/qa` baut nicht): Auf dem IP-Zähler **nur Fehlversuche** zählen, statt jeden Versuch. Dann verbraucht ein erfolgreicher Login kein Budget — legitime Nutzer hinter einer geteilten Adresse laufen nie in die Sperre —, und der Angreifer bekommt trotzdem nichts zurück, weil kein Zähler zurückgesetzt wird. Das löst BUG-39 und BUG-54 zugleich. Zu beachten ist dabei die Atomarität: Der heutige Aufbau zählt und prüft in **einem** Statement (genau deshalb hält er unter Gleichzeitigkeit); eine Umstellung muss diese Eigenschaft behalten.
+
+### Regression (Bahn C2) — sonst ohne Befund
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` | **165/165 grün**, 17 Dateien, 3,61 s |
+| `npm run lint` | grün |
+| `npm run build` | grün, 6/6 Seiten, 5 Routen |
+| `npx playwright test` — **Lauf 1** | **30/30 grün**, 41,3 s |
+| `npx playwright test` — **Lauf 2**, 5 s später | **30/30 grün**, 40,5 s |
+
+Der zweite Lauf startete **mitten im 60-Sekunden-Fenster** des IP-Zählers — genau der Fall, in dem sich die Suite vorher selbst ausgesperrt hätte. Die Kennung je Lauf in `tests/fixtures.ts` trägt.
+
+Kernabläufe einzeln bestätigt: Registrierung, Anmeldung, Abmeldung (5 Zyklen sauber), Zugangsschutz (auch mit untergeschobenem Cookie → 307), Passwort-Reset über einen **echt zugestellten** Mail-Link (in Mailpit gegengeprüft), und eine vollständige Quiz-Runde bis zum gespeicherten Ergebnis samt Bestleistung.
+
+### Not Verified In This Run
+
+- [!] **Verhalten hinter einem echten Reverse Proxy** — lokal steht keiner davor; alle Herkunfts-Messungen beruhen auf selbst gesetzten Headern. Ob der Host clientseitige Werte verwirft, entscheidet, ob der IP-Zähler überhaupt etwas wert ist (und damit, ob BUG-54 in Produktion schwerer oder leichter wiegt)
+- [!] **Der Vorher-Zustand wurde von Bahn C2 nicht durch Rückbau nachgemessen** — sie darf den Repository-Zustand nicht ändern und stützt sich auf den Diff. Die Rot-Probe gegen den alten Code liegt aus dem Build vor und fiel an der erwarteten Zusage
+- [!] **Der Playwright-Abnahmetest wurde von Bahn B2 gelesen, nicht ausgeführt** — kein Browser in ihrem Lauf; sie hat den Mechanismus stattdessen direkt über HTTP nachgestellt. Ausgeführt wurde er von Bahn C2, zweimal, in drei Engines
+- [!] **Visuelle Regression** — es gibt keine Screenshot-Baselines im Repository
+- [!] **Gehostetes Projekt und Produktions-Mailversand** — geprüft wurde ausschließlich gegen den lokalen Stack
+- [!] Alles Browser-Abhängige über die drei E2E-Engines hinaus
+
+### Kleinere Beobachtungen
+
+- `throttle.ts:10-11` nennt `/privacy` als Route, unter der `loginAction` erreichbar sei — die Seite gehört zu PROJ-4 und liefert heute 404. Kosmetisch, aber beim nächsten Sicherheitsdurchgang irreführend.
+- Jeder `npm test`-Lauf gibt eine Vite-Warnung aus (ESM-Syntax in `vitest.config.ts`, als CommonJS geladen) — wird in einer künftigen Vite-Hauptversion zum Fehler. Low.
+
+### Verdikt
+
+- **BUG-39: geschlossen**, mit nachgestelltem Angriff belegt, fünf weitere Umgehungswege ausgeschlossen
+- **Neu: BUG-54 (Medium)** — Nebenwirkung desselben Fixes, trifft legitime Nutzer hinter geteilten Anschlüssen
+- **Regression: ohne Befund** — 165/165, Lint, Build, E2E 2× 30/30
+- Offen aus dem vorigen Lauf: BUG-40, BUG-41, BUG-44 bis BUG-48 (Medium), BUG-11, BUG-12, BUG-18, BUG-42, BUG-43, BUG-49 bis BUG-53 (Low), dazu die beiden offenen `[user]`-Aufgaben auf dem Zugangsdaten-Pfad
+- **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
+
+> **Die Lehre aus diesem Nachlauf.** Der Fix ist richtig und belegt — und er hat, wie jede Verschärfung einer Drosselung, jemanden getroffen, der nicht gemeint war. Bemerkenswert ist nicht, dass es passiert ist, sondern **dass es im Design bereits stand und trotzdem niemandem auffiel**: Der Preis war benannt, aber nicht beziffert. „Hinter einer geteilten Adresse zählen die Fehlversuche des einen weiter" liest sich harmlos; „fünf Anmeldungen pro Minute für alle Nutzer eines Schulanschlusses zusammen" liest sich anders. Eine Grenze ohne Zahl ist eine Grenze, die niemand prüft.
