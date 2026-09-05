@@ -1865,3 +1865,47 @@ Step 6 verlangt, isolierte Logik zu prüfen und zu testen. Ich habe gesucht und 
 - **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
 
 > **Was dieser Lauf über die Serie sagt.** Von den fünf Fixes dieses Tages hält jeder einzelne, was er zusagt — BUG-29/30/31, BUG-36, BUG-39, BUG-54, BUG-56 sind alle nachgemessen geschlossen, mehrere davon von zwei unabhängigen Bahnen. Das ist der eigentliche Fortschritt. Was in jedem einzelnen Durchgang wiederkehrt, ist nicht ein fehlerhafter Fix, sondern **ein Satz, der weiter reicht als seine Messung**: „überlebt einen frischen Klon" (BUG-40), „höchstens eine Stunde" (BUG-62), „lässt sich nicht mehr umgehen" (BUG-63), „steckt im Browser-Bundle" (BUG-64). Viermal in einem Bericht, dreimal davon in Sätzen, die als Beleg gemeint waren. **Die Zahlen in diesem Projekt sind verlässlich; die Sätze daneben sind es noch nicht.** Wer hier weiterarbeitet, sollte jede Reichweiten-Aussage wie eine Behauptung behandeln, die eine eigene Messung braucht — nicht wie eine Zusammenfassung der Messung, die daneben steht.
+
+---
+
+## Nachtrag zum finalen Sweep — 2026-09-05, Entscheidungen des Nutzers
+
+> Der Lauf oben bleibt **unverändert** stehen, samt seinem Verdikt „Production Ready: NEIN". Was hier folgt, ist keine Korrektur des Befunds, sondern eine **Umstufung durch den Nutzer** — mit ihren Bedingungen. Wer nur den Abschnitt oben liest, liest den Stand der Messung; wer beide liest, kennt auch die Entscheidung darüber.
+
+### BUG-61 — von High zu Deploy-Blocker umgestuft
+
+**Entscheidung (Nutzer, 2026-09-05):** BUG-61 wird nicht im Code gehärtet, sondern als Deploy-Blocker geführt.
+
+**Begründung, die diese Umstufung trägt:** Ob `x-forwarded-for` vertrauenswürdig ist, kann der Anwendungscode nicht wissen — das entscheidet die Ebene davor. Ein Host, der den Header selbst setzt und einen mitgebrachten Wert verwirft, beseitigt die Schwäche vollständig. Die Alternative im Code hätte die Abwägung aus BUG-55/57 wieder aufgerissen, die einen Tag zuvor bewusst festgeschrieben wurde.
+
+**Anbieter-Voraussetzung, ausdrücklich festgehalten:** Der Hosting-Anbieter muss `x-forwarded-for` **selbst setzen bzw. überschreiben** und darf ihn **nicht vom Client übernehmen**. Vercel tut das. Bei einem eigenen nginx- oder Traefik-Aufbau ist die Konfiguration ausdrücklich auf Überschreiben statt Anhängen zu stellen — `proxy_add_x_forwarded_for` **hängt an** und genügt nicht.
+
+**Schließbedingung — und nur diese zählt:** BUG-61 gilt erst als geschlossen, wenn **gegen die echte Live-URL gemessen** wurde, dass ein selbst gesetzter `x-forwarded-for` den Zähler nicht beeinflusst. Konkret: Rateversuche mit rotierendem Header müssen ab dem sechsten abgewiesen werden. **Eine Zusage in der Dokumentation des Anbieters genügt nicht** — dieses Projekt hat mehrfach erlebt, dass ein Satz weiter reichte als das, was er belegen sollte.
+
+**Was bis dahin gilt:** Der Schutz gegen Passwort-Spraying **existiert nicht**. Solange die App nur lokal läuft, ist das folgenlos. Ab dem ersten öffentlichen Start ist es die schärfste offene Kante des Produkts, und sie steht deshalb als härtester Eintrag in `features/INDEX.md` → Deploy-Blocker.
+
+### BUG-62 — Wortlaut korrigiert, Ausbau als Backlog vermerkt
+
+**Entscheidung (Nutzer, 2026-09-05):** Der zeitgesteuerte Aufräum-Lauf wird **jetzt nicht gebaut**; stattdessen beschreibt `docs/privacy.md` das tatsächliche Verhalten.
+
+**Umgesetzt:**
+- `docs/privacy.md` sagt **keine feste Höchstfrist** mehr zu. Es beschreibt beide Wege getrennt: (1) abgelaufene Zeilen verschwinden **beim nächsten Anmelde-, Registrierungs- oder Reset-Versuch**, bis zu 50 je Versuch, ohne Verkehr geschieht nichts; (2) Schlüssel mit einer **E-Mail-Adresse** verschwinden **sofort und unabhängig vom Verkehr** mit dem Konto. Der zweite Weg ist der, auf dem das Löschungsrecht ruht — und er hat die Einschränkung des ersten nicht.
+- `tasks.md` → Backlog **`B2`** hält den `pg_cron`-Ausbau samt Messung fest (200 abgelaufene Zeilen, nach einem Login-Versuch 100 gelöscht, 100 blieben liegen) und benennt, wann er akut wird.
+
+**Damit ist BUG-62 als Befund erledigt** — nicht durch eine Änderung am Verhalten, sondern dadurch, dass die Zusage jetzt beschreibt, was das Verhalten ist. Das war der Kern des Befunds.
+
+### Revidiertes Verdikt
+
+Mit BUG-61 als Deploy-Blocker und BUG-62 als korrigierter Zusage bleibt **kein Critical- oder High-Befund** offen, der PROJ-2 zugerechnet wird:
+
+- **Offen, Medium:** BUG-12, BUG-18, BUG-40, BUG-41, BUG-44 bis BUG-48, BUG-55 (akzeptiert), BUG-63
+- **Offen, Low:** BUG-11 (**AC-25 fällt weiterhin** — ein Acceptance Criterion ist nicht erfüllt), BUG-24, BUG-42, BUG-43, BUG-49 bis BUG-53, BUG-57 (akzeptiert), BUG-58, BUG-59, BUG-60, BUG-64
+- **PROJ-1:** T4 und T18 unabgehakt. Sie liegen in `features/PROJ-1-user-login/tasks.md` und betreffen das Verdikt über **PROJ-1**, nicht über PROJ-2 — PROJ-2s einzige `[user]`-Aufgabe (T34) ist erledigt und belegt. Das ist ausdrücklich festgehalten, damit niemand später den Eindruck bekommt, sie seien übersehen worden
+
+**Production Ready: JA für PROJ-2 — unter drei ausgesprochenen Bedingungen:**
+
+1. **BUG-61 muss beim Deploy gemessen geschlossen werden.** Ohne diese Messung ist der Spraying-Schutz nicht vorhanden. Das ist keine Formalie, sondern der Grund, warum dieser Lauf ursprünglich „NEIN" sagte.
+2. **AC-25 ist weiterhin nicht erfüllt.** „Approved" heißt hier: keine Critical- oder High-Befunde — nicht: alle Kriterien erfüllt.
+3. **Was nie geprüft wurde, bleibt ungeprüft.** Kein Browser, kein Viewport: das gesamte optische Verhalten, AC-24, der Netzwerk-Mitschnitt zu AC-20 und der echte Ausfall der PokeAPI (AC-15/EC-8). `/e2e-tests` deckt davon die kritischen Journeys ab, nicht alles.
+
+**Status in `features/INDEX.md`: Approved.**
