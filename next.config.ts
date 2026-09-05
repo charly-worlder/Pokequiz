@@ -14,14 +14,18 @@ const nextConfig: NextConfig = {
     // what keeps a player's IP address out of a non-EU CDN, and it is why this
     // is configuration rather than a hand-written proxy route
     // (design.md -> Technical Decisions).
+    // Exactly one pattern, as narrow as the feature needs. A second, far wider
+    // one used to sit here (`…/PokeAPI/**`), justified solely by EC-11's repair
+    // path. EC-11 was dropped on 2026-09-04 and its code removed — the entry
+    // stayed, and it was not decoration: it let /_next/image fetch and cache any
+    // image file from any repository of the PokeAPI organisation, unauthenticated
+    // (BUG-22, found independently by all three QA lanes). Removing code without
+    // removing the configuration that only existed for it is how an allow-list
+    // silently outlives its reason.
     remotePatterns: [
       new URL(
         "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/**"
       ),
-      // spec.md EC-11: the repair path reads the image address out of the
-      // official /pokemon/{id} response, which points at the same repository
-      // but not necessarily at the same folder.
-      new URL("https://raw.githubusercontent.com/PokeAPI/**"),
     ],
     // spec.md AC-31: optimized sprites are kept for 31 days. Pokemon artwork
     // does not change, and the cache key is the image URL plus its size — no

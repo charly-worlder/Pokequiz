@@ -102,6 +102,26 @@ describe('proxy — Sitzungsprüfung', () => {
     expect(response.status).not.toBe(307)
   })
 
+  // BUG-21: Next.js bindet eine Server Action nicht an die Route, auf der sie
+  // definiert wurde — jedes Action-Kennzeichen läuft unter jedem Pfad. Solange
+  // die Ausnahme für *alle* geschützten Pfade galt, waren PROJ-1s loginAction
+  // und registerAction unter allen erreichbar. Kein Datenabfluss, aber es
+  // umgeht die naheliegende Deploy-Abwehr: eine WAF-Regel, die /login bewacht.
+  it('BUG-21: ein Action-POST auf einem anderen geschützten Pfad wird weiterhin umgeleitet', async () => {
+    getUser.mockResolvedValue({ data: { user: null } })
+
+    for (const path of ['/leaderboard', '/gibtsnicht', '/irgendwas/tief']) {
+      const request = new NextRequest(new URL(`http://localhost:3000${path}`), {
+        method: 'POST',
+        headers: { 'next-action': '6022fd5c882969a13a10f62a80b850ebc8bc41d78a' },
+      })
+      const response = await proxy(request)
+
+      expect(response.status, `${path} sollte umgeleitet werden`).toBe(307)
+      expect(response.headers.get('location')).toBe('http://localhost:3000/login')
+    }
+  })
+
   it('BUG-9: ein gewöhnlicher POST ohne Action-Kennzeichen wird weiterhin umgeleitet', async () => {
     getUser.mockResolvedValue({ data: { user: null } })
 

@@ -318,6 +318,26 @@ describe('QuizScreen — Fehlerpfade', () => {
     }
   })
 
+  // BUG-23: „Pool leer" ist nicht dasselbe wie „alle geschafft". Verworfene
+  // Fragen verbrauchen Pool-Einträge, also kann der Pool zu Ende gehen, während
+  // die Serie darunter liegt. Vorher stand dann „Alle Pokémon geschafft" über
+  // einer Runde, die das nicht war.
+  it('EC-2 / BUG-23: „Pool leer" bei zu kleiner Serie zeigt keine Gewinner-Meldung', async () => {
+    getNextQuestion.mockResolvedValue({ status: 'pool-empty' })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() => expect(saveRun).toHaveBeenCalledTimes(1))
+    expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 0 })
+
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
+    expect(screen.queryByText('Alle Pokémon geschafft')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Du hast jedes Pokémon aus dem Pool richtig erkannt/)
+    ).not.toBeInTheDocument()
+  })
+
   // BUG-13 (Medium): Die Verwurfsgrenze griff nur, wenn der Spieler wartete.
   // Fiel die Bildquelle aus, während er noch antwortete, zog das Vorladen
   // endlos nach — je vier Namensabfragen an die PokeAPI, ohne Backoff.

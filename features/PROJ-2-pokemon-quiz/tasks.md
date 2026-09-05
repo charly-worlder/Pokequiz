@@ -17,7 +17,7 @@
 
 <!-- Drei voneinander unabhängige Bausteine, drei verschiedene Dateien → alle [P]. -->
 
-- [x] T2 [P]  PokeAPI-Anbindung: deutschen Namen über `/pokemon-species/{id}` holen, **mit ausdrücklich erzwungenem Zwischenspeicher (30 Tage)** — das Standardverhalten cached nicht, siehe `design.md`; Bildadresse aus der Pokémon-Nummer bilden und bei fehlendem Bild über `/pokemon/{id}` die offizielle Adresse nachschlagen; 5-Sekunden-Zeitgrenze mit genau einem stillen Wiederholungsversuch  · files: src/lib/pokeapi/client.ts  · → AC-15, AC-28, AC-31, EC-5, EC-8, EC-11
+- [x] T2 [P]  PokeAPI-Anbindung: deutschen Namen über `/pokemon-species/{id}` holen, **mit ausdrücklich erzwungenem Zwischenspeicher (30 Tage)** — das Standardverhalten cached nicht, siehe `design.md`; Bildadresse aus der Pokémon-Nummer bilden ~~und bei fehlendem Bild über `/pokemon/{id}` die offizielle Adresse nachschlagen~~ (**der Nachschlage-Teil ist am 2026-09-04 durch T18 zurückgenommen worden — siehe EC-11**); 5-Sekunden-Zeitgrenze mit genau einem stillen Wiederholungsversuch  · files: src/lib/pokeapi/client.ts  · → AC-15, AC-28, AC-31, EC-5, EC-8, EC-11
 - [x] T3 [P]  Prüfschema für Rundenergebnisse: Serie ganzzahlig 0–386, Dauer ganzzahlig ≥ 0, Dauer ≥ 500 × Serie, Runden-Kennzeichen als UUID  · files: src/lib/validation/quiz.ts  · → AC-12
 - [x] T4 [P]  Bild-Auslieferung und Beobachtbarkeit konfigurieren: Bild-Host für die Sprites freischalten (damit der Browser nur die eigene Domain anfragt), Zwischenspeicher-Dauer für optimierte Bilder setzen, `fetch`-Protokollierung für den Entwicklungsmodus aktivieren (macht Cache-Treffer für `/qa` überhaupt sichtbar, siehe Prüfhinweise unten)  · files: next.config.ts  · → AC-20, AC-28, AC-31
 
@@ -25,7 +25,7 @@
 
 <!-- Setzen auf Level 2 auf. Zwei verschiedene Dateien → beide [P]. -->
 
-- [x] T5 [P]  Server Action „nächste Frage": nimmt die Liste der bereits gezeigten Nummern entgegen, zieht eine neue Lösung plus drei verschiedene falsche Optionen aus 1–386, holt alle vier deutschen Namen, mischt die Reihenfolge, verwirft ein Pokémon ohne deutschen Namen oder ohne Bild serverseitig und zieht neu, meldet „Pool leer" wenn alle 386 verbraucht sind, weist Aufrufe ohne gültige Sitzung ab  · files: src/lib/quiz/question-action.ts  · → AC-3, AC-5, AC-15, EC-2, EC-5, EC-6, EC-7, EC-11
+- [x] T5 [P]  Server Action „nächste Frage": nimmt die Liste der bereits gezeigten Nummern entgegen, zieht eine neue Lösung plus drei verschiedene falsche Optionen aus 1–386, holt alle vier deutschen Namen, mischt die Reihenfolge, verwirft ein Pokémon ohne deutschen Namen serverseitig und zieht neu, meldet „Pool leer" wenn alle 386 verbraucht sind, weist Aufrufe ohne gültige Sitzung ab  · files: src/lib/quiz/question-action.ts  · → AC-3, AC-5, AC-15, EC-2, EC-5, EC-6, EC-7, EC-11
 - [x] T6 [P]  Server Action „Runde speichern" (prüft serverseitig gegen das Schema aus T3, schreibt immer für das Profil aus der Sitzung, zweite Einreichung desselben Runden-Kennzeichens erzeugt keine zweite Zeile und meldet trotzdem Erfolg) plus Lesefunktion für die persönliche Bestleistung  · files: src/lib/quiz/run-actions.ts  · → AC-8, AC-11, AC-12, AC-14, AC-27, EC-3, EC-4, EC-7
 
 ## Level 4 — UI-Bausteine
@@ -93,6 +93,16 @@
 
 - [x] T23  Abgelaufene Sitzung führt wieder auf `/login` (BUG-9, EC-7): Der Proxy leitet **Server-Action-POSTs** nicht mehr um. Next.js kodiert das `redirect()` einer Action in-band (Status 200 plus `x-action-redirect`), gerade damit der Browser keiner 307 folgt — eine gewöhnliche Weiterleitung darauf ist für den Action-Handler ein Protokollbruch, und der `unauthenticated`-Zweig der Actions war dadurch **unerreichbar**. Vom Nutzer ausdrücklich genehmigt (Auth-Fluss, `.claude/rules/security.md`)  · files: src/proxy.ts, src/proxy.test.ts  · → EC-7
 - [x] T24  Wächter über alle Server Actions: findet per TypeScript-AST **jede** aus einer `'use server'`-Datei exportierte Funktion und verlangt entweder eine Sitzungsprüfung oder einen begründeten Eintrag in `PUBLIC_ACTIONS`. Macht die Zusicherung aus T23 strukturell statt einmalig  · files: src/lib/actions/server-actions.guard.test.ts  · → EC-7, AC-13, AC-14
+
+## Level 8 — Fixes aus dem QA-Lauf vom 2026-09-05
+
+- [x] T25  Der Wächter über die Server Actions hält jetzt, was er verspricht (BUG-20): Die Erkennungslogik zieht in ein eigenes Modul `server-actions.guard.ts`, erfasst Inline-`'use server'` in jedem Funktionsrumpf, lehnt Re-Exporte und destrukturierte Exporte als nicht analysierbar **ab** statt sie zu überspringen, erfasst anonyme Default-Exporte und entscheidet die Sitzungsprüfung am **AST** statt am Text. Dazu ein Selbsttest, der jede der fünf Lücken einzeln festnagelt  · files: src/lib/actions/server-actions.guard.ts, src/lib/actions/server-actions.guard.test.ts, src/lib/actions/server-actions.guard.self.test.ts  · → EC-7, AC-13, AC-14
+- [x] T26  Die Proxy-Ausnahme für Server-Action-POSTs ist auf die Pfade eingegrenzt, die sie brauchen — derzeit nur `/` (BUG-21). PROJ-1s Credential-Actions laufen damit nicht mehr unter jedem Pfad, und eine pfadbasierte Abwehr beim Deploy lässt sich nicht mehr umgehen  · files: src/proxy.ts, src/proxy.test.ts  · → AC-13, EC-7
+- [x] T27  Totes `remotePattern` aus dem gestrichenen EC-11 entfernt (BUG-22). Live geprüft: Sprite → 200, `sprites/items/master-ball.png` → 400  · files: next.config.ts  · → AC-20
+- [x] T28  „Pool leer" ist nicht mehr gleichbedeutend mit „alle geschafft" (BUG-23, die zweite Hälfte von BUG-17): Die Gewinner-Meldung hängt auch auf dem Serverpfad an der Serie  · files: src/components/quiz/quiz-screen.tsx, src/components/quiz/quiz-screen.error-states.test.tsx  · → EC-2
+- [x] T29  Doku-Drift beseitigt (BUG-28): T2 und T5 beschrieben weiterhin die von T18 zurückgenommene Rückfallebene; `design.md` nannte `repairImageUrl` im Präsens  · files: features/PROJ-2-pokemon-quiz/tasks.md, features/PROJ-2-pokemon-quiz/design.md  · → EC-11
+
+**Bewusst nicht behoben:** BUG-19 (High) ist **keine PROJ-2-Änderung** — die Entscheidung des Nutzers vom 2026-09-05 lautet, die Rangliste auf verifizierte Konten zu stützen; das ist als harte Voraussetzung in `features/PROJ-3-leaderboard/spec.md` (Technical Requirements + Decision Log + Open Question zum Mechanismus) hinterlegt. Ebenfalls offen: BUG-11 (Low, AC-25), BUG-24 bis BUG-27 (Low) und die Deploy-Punkte BUG-18 und Security-Header.
 
 **Nicht durch einen Test abgesichert:** T22. Ein Abnahmetest bräuchte 386 richtige Antworten oder ein gemocktes `POOL_SIZE` in einer eigenen Testdatei; der Aufwand steht in keinem Verhältnis zu einem Low-Befund auf einem Pfad, den der QA-Lauf selbst als „praktisch nur von Hand erreichbar" eingestuft hat. Die **ausnutzbare** Hälfte von BUG-17 — erzwungenes „Pool leer" über Nummern außerhalb des Pools — ist in T21 abgedeckt und rot geprüft. Hier steht bewusst, was geprüft ist und was nur gelesen.
 

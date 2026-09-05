@@ -190,8 +190,19 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         // Only ends the round if the player is actually waiting for this
         // question; during a prefetch it just means there is nothing left to
         // preload, and answer() ends the round after the last correct answer.
+        //
+        // BUG-23: `cleared` used to be a flat `true` here — „Pool leer" was
+        // treated as „alle geschafft". Those are not the same thing. Questions
+        // discarded under EC-6 still consume pool entries, so the pool can run
+        // out while the streak is below 386, and the player would have read
+        // „Du hast jedes Pokémon aus dem Pool richtig erkannt" without having
+        // done it. EC-2 asks about correct answers, so the streak decides.
+        //
+        // This is the second half of BUG-17. The first half fixed `answer()`
+        // and its comment called this path „the honest place for it" — it was
+        // not, and nobody looked twice.
         if (!hasCurrentRef.current) {
-          await finishRound(streak, true)
+          await finishRound(streak, streak >= POOL_SIZE)
         }
         return
       }

@@ -76,7 +76,27 @@ export async function proxy(request: NextRequest) {
    * database enforces the same rules a second time through RLS.
    * `server-actions.guard.test.ts` keeps that from silently ceasing to be true.
    */
-  const isServerAction = request.method === 'POST' && request.headers.has('next-action')
+  /**
+   * BUG-21: the exception is as narrow as the reason for it.
+   *
+   * Next.js does not bind a Server Action to the route it was defined on — any
+   * action id posted to any path runs. When this exception applied to every
+   * protected path, PROJ-1's `loginAction` and `registerAction` became reachable
+   * under all of them; six accounts were created through `/` instead of `/login`
+   * during the QA run. Nothing leaked and no privilege was gained, but it defeats
+   * the obvious deployment defence: an edge or WAF rule that watches `/login`
+   * would simply be walked around.
+   *
+   * Only `/` hosts actions that need the exception (the quiz, for EC-7). Every
+   * other protected path keeps its redirect. **A new route that invokes Server
+   * Actions has to be added here** — and if it is forgotten, the symptom is
+   * loud: the action answers with a redirect instead of running.
+   */
+  const ACTION_HOST_PATHS = ['/']
+  const isServerAction =
+    request.method === 'POST' &&
+    request.headers.has('next-action') &&
+    ACTION_HOST_PATHS.includes(pathname)
 
   if (!user && !isPublicPath(pathname) && !isServerAction) {
     const url = request.nextUrl.clone()
