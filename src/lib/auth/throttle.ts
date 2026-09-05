@@ -110,38 +110,63 @@ export async function registerAttempt(
 }
 
 /**
- * Löscht den **Konto**-Zähler nach einer erfolgreichen Anmeldung.
+ * Räumt nach einer **erfolgreichen Anmeldung** auf — und tut dabei zwei
+ * verschiedene Dinge, weil die beiden Zähler verschiedene Angriffe abwehren.
  *
- * Wer sich viermal vertippt und beim fünften Mal richtig liegt, soll nicht den
- * Rest des Fensters mit einem fast vollen Zähler herumlaufen. Gedrosselt gehören
- * Fehlversuche, nicht der geglückte Login.
+ * **Konto-Zähler: gelöscht.** Wer sich viermal vertippt und beim fünften Mal
+ * richtig liegt, soll nicht den Rest des Fensters mit einem fast vollen Zähler
+ * herumlaufen. Das ist unbedenklich: Der Konto-Zähler schützt genau dieses eine
+ * Konto, und wer sein eigenes Passwort kennt, greift es nicht an.
  *
- * **Der IP-Zähler bleibt ausdrücklich stehen (BUG-39).** Vorher wurde er
- * mitgelöscht, und das machte ihn abschaltbar: Wer **ein einziges eigenes Konto**
- * besitzt, schiebt zwischen seine Rateversuche je einen erfolgreichen Login und
- * fängt von vorn an — ganz ohne Header-Fälschung. Gemessen im QA-Lauf vom
- * 2026-09-05: 24 Passwortversuche gegen 24 verschiedene Konten von einer IP in
- * 3,6 Sekunden, **null** abgewiesen.
+ * **IP-Zähler: um genau diesen einen Versuch erstattet, nicht geleert.** Damit
+ * zählt er im Ergebnis nur noch **Fehl**versuche. Die beiden Fehler, zwischen
+ * denen diese Zeile liegt, erklären warum:
  *
- * Warum das den IP-Zähler im Kern trifft: Gegen **Passwort-Spraying** — ein
- * gängiges Passwort gegen viele Konten — greift der Konto-Zähler nicht, weil
- * jedes Opferkonto genau einen Versuch abbekommt. Dort ist der IP-Zähler die
- * einzige Bremse, und eine Bremse, die der Angreifer selbst lösen kann, ist
- * keine.
+ * - **BUG-39** (High): Vorher wurde der IP-Zähler bei jedem geglückten Login
+ *   *gelöscht*. Das machte ihn abschaltbar — wer ein einziges eigenes Konto
+ *   besitzt, schiebt zwischen seine Rateversuche je einen erfolgreichen Login
+ *   und fängt von vorn an, ganz ohne Header-Fälschung. Gemessen: 24
+ *   Passwortversuche gegen 24 Konten von einer IP in 3,6 Sekunden, null
+ *   abgewiesen. Eine Bremse, die der Angreifer selbst lösen kann, ist keine —
+ *   und gegen **Passwort-Spraying** ist sie die einzige, weil der Konto-Zähler
+ *   dort nichts sieht (jedes Opferkonto bekommt genau einen Versuch).
+ * - **BUG-54** (Medium): Der Fix dafür ließ den Zähler stehen — und traf damit
+ *   die Falschen. Gezählt wird **vor** der Passwortprüfung, ein geglückter Login
+ *   verbrauchte also Budget. Gemessen: acht verschiedene Spieler mit richtigem
+ *   Passwort hinter einer geteilten Adresse — fünf kommen hinein, drei sehen
+ *   „Zu viele Versuche". Das trifft Familien- und Schulanschlüsse und
+ *   Mobilfunk-CGNAT; die Zielgruppe im PRD schließt Kinder ausdrücklich ein.
  *
- * **Der Preis, benannt statt versteckt:** Hinter einer geteilten Adresse
- * (Haushalt, Büro-NAT) zählen die Fehlversuche des einen weiter, während der
- * nächste sich anmeldet. Das ist dieselbe Grenze, die der IP-Zähler ohnehin
- * setzt — sie heilt nach 60 Sekunden von selbst aus und sperrt niemanden aus
- * seinem Konto aus, weil ein richtiges Passwort in der nächsten Minute wieder
- * durchgeht. Ein zurücksetzbarer Zähler wäre der teurere Tausch.
+ * Die Erstattung löst beides: Ein erfolgreicher Login kostet unterm Strich
+ * nichts, und ein Angreifer bekommt dadurch keinen einzigen zusätzlichen
+ * Rateversuch — er hat weiter genau `credentialsPerIp.limit` **Fehl**versuche je
+ * Fenster, egal wie oft er sich dazwischen selbst anmeldet.
+ *
+ * **Warum erstattet und nicht „erst prüfen, dann zählen":** Das Hochzählen und
+ * das Prüfen stecken bewusst in einem einzigen SQL-Statement (`0003`), damit
+ * gleichzeitige Anfragen sich nicht überholen. Getrenntes Lesen und Schreiben
+ * würde genau diese Lücke wieder aufreißen — 100 parallele Anfragen sähen alle
+ * den Zähler auf 0.
+ *
+ * **Diese Funktion gilt nur für den Login.** Sie nimmt bewusst keinen `scope`
+ * entgegen: Registrierung und Passwort-Reset dürfen **nicht** erstatten, weil
+ * dort die begrenzte Sache die Handlung selbst ist — Konten anlegen, Mails
+ * verschicken — und nicht das Raten. Mit Erstattung wäre die Massenanlage von
+ * Konten unbegrenzt (BUG-47).
  */
-export async function clearAttempts(scope: ThrottleScope, email: string): Promise<void> {
+export async function settleSuccessfulLogin(email: string): Promise<void> {
   const admin = createAdminClient()
-  const { error } = await admin.rpc('clear_auth_attempts', {
-    p_keys: [accountKey(scope, email)],
-  })
+  const scope: ThrottleScope = 'login'
+
+  const [cleared, refunded] = await Promise.all([
+    admin.rpc('clear_auth_attempts', { p_keys: [accountKey(scope, email)] }),
+    admin.rpc('refund_auth_attempt', { p_key: `${scope}:ip:${await clientIp()}` }),
+  ])
+
   // Ein Fehler hier macht den erfolgreichen Login nicht ungültig — er lässt nur
   // den Zähler stehen. Das ist die sichere Richtung, also kein Wurf.
-  if (error) console.error('Zähler konnte nach erfolgreicher Anmeldung nicht zurückgesetzt werden', error)
+  const failure = cleared.error ?? refunded.error
+  if (failure) {
+    console.error('Zähler konnte nach erfolgreicher Anmeldung nicht bereinigt werden', failure)
+  }
 }

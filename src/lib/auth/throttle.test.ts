@@ -25,7 +25,7 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient }))
 vi.mock('next/headers', () => ({ headers: async () => ({ get: headerGet }) }))
 vi.mock('server-only', () => ({}))
 
-import { registerAttempt, clearAttempts, LIMITS } from './throttle'
+import { registerAttempt, settleSuccessfulLogin, LIMITS } from './throttle'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -115,32 +115,52 @@ describe('registerAttempt', () => {
   })
 })
 
-describe('clearAttempts', () => {
-  it('löscht den Konto-Zähler und lässt den IP-Zähler stehen (BUG-39)', async () => {
-    await clearAttempts('login', 'Spieler@Example.COM')
+describe('settleSuccessfulLogin', () => {
+  it('löscht den Konto-Zähler ganz', async () => {
+    await settleSuccessfulLogin('Spieler@Example.COM')
 
     expect(rpc).toHaveBeenCalledWith('clear_auth_attempts', {
       p_keys: ['login:account:spieler@example.com'],
     })
   })
 
-  // Die vorige Fassung dieses Tests verlangte ausdrücklich **beide** Schlüssel
-  // und war damit grün, während der Fehler danebenstand: Sie beschrieb, was der
-  // Code tat, statt was er leisten soll — dasselbe Muster wie BUG-31 und BUG-35.
-  // Deshalb steht die Zusage hier zusätzlich als eigene, negative Erwartung.
-  it('rührt den IP-Schlüssel unter keinen Umständen an (BUG-39)', async () => {
+  // Die beiden Fehler, zwischen denen diese Zusage liegt, waren beide ein
+  // Zuviel bzw. Zuwenig an genau dieser Stelle: BUG-39 löschte den IP-Zähler
+  // (Angreifer konnte sich selbst freischalten), der Fix dafür ließ ihn stehen
+  // (BUG-54, geteilte Anschlüsse sperrten legitime Spieler aus). Richtig ist
+  // **genau ein** erstatteter Versuch — deshalb steht hier die Menge, nicht nur
+  // die Tatsache.
+  it('erstattet auf dem IP-Zähler genau einen Versuch (BUG-54)', async () => {
     headerGet.mockImplementation((name: string) =>
       name === 'x-forwarded-for' ? '203.0.113.9' : null
     )
 
-    await clearAttempts('login', 'spieler@example.com')
+    await settleSuccessfulLogin('spieler@example.com')
 
-    const keys = rpc.mock.calls
+    const refunds = rpc.mock.calls.filter((c) => c[0] === 'refund_auth_attempt')
+    expect(refunds).toHaveLength(1)
+    expect(refunds[0][1]).toEqual({ p_key: 'login:ip:203.0.113.9' })
+  })
+
+  // Die vorige Fassung dieses Tests verlangte ausdrücklich **beide** Schlüssel
+  // im Löschaufruf und war damit grün, während der Fehler danebenstand: Sie
+  // beschrieb, was der Code tat, statt was er leisten soll — dasselbe Muster wie
+  // BUG-31 und BUG-35. Deshalb steht die Zusage zusätzlich als negative
+  // Erwartung: Der IP-Schlüssel darf **nie** im Löschaufruf auftauchen, denn
+  // Löschen ist etwas anderes als Erstatten (BUG-39).
+  it('löscht den IP-Zähler unter keinen Umständen (BUG-39)', async () => {
+    headerGet.mockImplementation((name: string) =>
+      name === 'x-forwarded-for' ? '203.0.113.9' : null
+    )
+
+    await settleSuccessfulLogin('spieler@example.com')
+
+    const cleared = rpc.mock.calls
       .filter((c) => c[0] === 'clear_auth_attempts')
       .flatMap((c) => c[1].p_keys as string[])
 
-    expect(keys).not.toContain('login:ip:203.0.113.9')
-    expect(keys.some((key) => key.includes(':ip:'))).toBe(false)
+    expect(cleared).not.toContain('login:ip:203.0.113.9')
+    expect(cleared.some((key) => key.includes(':ip:'))).toBe(false)
   })
 
   it('macht aus einem Fehler beim Aufräumen keinen fehlgeschlagenen Login', async () => {
@@ -149,7 +169,7 @@ describe('clearAttempts', () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     rpc.mockResolvedValue({ data: null, error: { message: 'weg' } })
 
-    await expect(clearAttempts('login', 'a@b.de')).resolves.toBeUndefined()
+    await expect(settleSuccessfulLogin('a@b.de')).resolves.toBeUndefined()
     expect(logged).toHaveBeenCalled()
     logged.mockRestore()
   })

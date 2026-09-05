@@ -3,7 +3,7 @@
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { clearAttempts, registerAttempt } from '@/lib/auth/throttle'
+import { registerAttempt, settleSuccessfulLogin } from '@/lib/auth/throttle'
 import {
   loginSchema,
   registerSchema,
@@ -98,9 +98,11 @@ export async function loginAction(
     return mapLoginError(error)
   }
 
-  // Geglückt: Zähler leeren, damit vier Tippfehler vor dem richtigen Passwort
-  // nicht den Rest des Fensters nachwirken.
-  await clearAttempts('login', parsed.data.email)
+  // Geglückt: Konto-Zähler leeren, damit vier Tippfehler vor dem richtigen
+  // Passwort nicht nachwirken — und den einen IP-Versuch erstatten, damit der
+  // IP-Zähler nur Fehlversuche zählt (BUG-39, BUG-54). Warum das beides braucht
+  // und warum Registrierung und Reset ausdrücklich nicht erstatten: throttle.ts.
+  await settleSuccessfulLogin(parsed.data.email)
 
   redirect('/')
 }

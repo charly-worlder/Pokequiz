@@ -224,3 +224,30 @@ Der QA-Lauf vom selben Tag hat an dieser Drosselung einen **High** gefunden, und
 
 **Beim Aufräumen mitgefunden — und es betraf die Prüfung selbst:** Die gefälschten Testadressen aus `tests/fixtures.ts` waren pro Lauf identisch (`2001:db8:0::1` …). Weil die Zählerzeilen 60 Sekunden weiterleben, erbte jeder zweite Lauf innerhalb einer Minute den Zähler des vorigen — der Abnahmetest, der seinen Zähler absichtlich bis an die Grenze füllt, schlug dann schon beim ersten Versuch fehl. Die Adressen tragen jetzt eine Kennung je Lauf.
 
+> **Überholt seit BUG-54:** die Entscheidungszeile dieses Nachtrags („Ein erfolgreicher Login löscht nur den Konto-Zähler, nie den IP-Zähler") samt ihrer Abwägung. Der dort als tragbar beschriebene Preis war größer, als der Satz vermuten ließ — die Lösung im nächsten Abschnitt behält den Sicherheitsgewinn und streicht den Preis. Der Nachtrag bleibt unverändert stehen, weil er den Weg dorthin erklärt.
+
+### Nachtrag 2026-09-05 (später) — BUG-54: Der IP-Zähler zählt nur noch Fehlversuche
+
+Der QA-Nachlauf zum BUG-39-Fix hat gemessen, was die Abwägung oben nur benannt hat: **Acht verschiedene Spieler mit richtigem Passwort hinter einer geteilten Adresse — fünf kommen hinein, drei sehen „Zu viele Versuche von dieser Verbindung".** Ebenso wird der sechste Anmelde-/Abmelde-Durchlauf desselben Spielers abgewiesen.
+
+**Warum das schwerer wiegt, als es zuerst aussah.** Gezählt wird **vor** der Passwortprüfung — ein geglückter Login verbrauchte also Budget. Betroffen sind Familien- und Schulanschlüsse und Mobilfunk-CGNAT, wo sich sehr viele Nutzer eine öffentliche Adresse teilen. Die Zielgruppe im PRD schließt Kinder ausdrücklich ein. Der Satz „hinter einer geteilten Adresse zählen die Fehlversuche des einen weiter" liest sich harmlos; „fünf Anmeldungen pro Minute für alle Nutzer eines Schulanschlusses zusammen" liest sich anders. **Eine Grenze ohne Zahl ist eine Grenze, die niemand prüft.**
+
+**Was jetzt gilt:** Ein erfolgreicher Login erstattet **genau den einen Versuch**, den er selbst hochgezählt hat (`refund_auth_attempt`, Migration `0004`). Der IP-Zähler zählt damit im Ergebnis nur noch Fehlversuche.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Der IP-Zähler zählt nur Fehlversuche — ein geglückter Login erstattet seinen eigenen Versuch** | Löst BUG-39 und BUG-54 zugleich: Der Erfolg kostet den legitimen Nutzer nichts, und er bringt dem Angreifer nichts, weil nur *sein eigener* Versuch zurückkommt und nicht der Zähler geleert wird. Wer rät, hat weiterhin genau `credentialsPerIp.limit` Fehlversuche je Fenster — egal wie oft er sich dazwischen selbst anmeldet | **Erst prüfen, dann bei Misserfolg zählen** — verworfen: Das Hochzählen und das Prüfen stecken bewusst in *einem* SQL-Statement (`0003`), damit gleichzeitige Anfragen sich nicht überholen (nachgemessen mit 10 parallelen Versuchen bei Limit 5). Getrenntes Lesen und Schreiben reißt genau diese Lücke wieder auf: 100 parallele Anfragen sähen alle den Zähler auf 0. · Das Limit anheben — verschiebt die Grenze, ohne die Ursache zu berühren, und schwächt den Schutz für alle | **Ein zusätzlicher Datenbank-Aufruf je erfolgreicher Anmeldung.** Er läuft parallel zum Leeren des Konto-Zählers und blockiert die Anmeldung nicht; schlägt er fehl, bleibt der Zähler stehen — die sichere Richtung. Zweitens: `greatest(attempts - 1, 0)` ist nötig, weil eine Erstattung nach einem Fensterwechsel sonst einen negativen Zähler und damit stilles Freibudget erzeugen würde | 2026-09-05 |
+
+**Die Erstattung gilt ausschließlich für den Login.** `settleSuccessfulLogin()` nimmt bewusst **keinen** `scope` entgegen, damit die Abgrenzung strukturell ist und nicht nur als Kommentar dasteht: Bei **Registrierung** und **Passwort-Reset** ist die begrenzte Sache die Handlung selbst — Konten anlegen, Mails verschicken —, nicht das Raten. Würden erfolgreiche Registrierungen erstattet, wäre die Massenanlage von Konten unbegrenzt (BUG-47); beim Reset wäre es ein Versand-Vektor.
+
+**Zwei Abnahmetests, weil einer die Zusage nicht aufspannt.** Der IP-Zähler ist zweimal in Folge in die jeweils andere Richtung gekippt, und beide Male war das damalige Verhalten durch *einen* Test gedeckt. Nachgemessen mit beiden falschen Fassungen:
+
+| Codestand | „Angreifer wird gebremst" (BUG-39) | „Erfolge kosten nichts" (BUG-54) |
+|---|---|---|
+| Urzustand — Login **löscht** den IP-Zähler | **rot** („Der eigene Login hat den IP-Zähler zurückgesetzt") | grün |
+| Zwischenstand — Login lässt den Zähler stehen | rot (meldet dabei bereits BUG-54) | **rot** |
+| Jetzt — Login erstattet seinen einen Versuch | grün | grün |
+
+Der Urzustand hätte also den BUG-54-Test bestanden, der Zwischenstand keinen von beiden. **Erst beide zusammen beschreiben, was gelten soll: Gezählt werden Fehlversuche, sonst nichts.**
+
+
