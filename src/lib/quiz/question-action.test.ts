@@ -42,6 +42,24 @@ describe('getNextQuestion', () => {
     expect(await getNextQuestion([])).toEqual({ status: 'unauthenticated' })
   })
 
+  // BUG-12: `seenIds` ging ungeprüft in `.filter()`. Alles, was kein Array war,
+  // erzeugte eine unbehandelte TypeError und damit HTTP 500 — im Dev-Modus samt
+  // absoluter Dateipfade in der Antwort. Ein Server Action ist ein öffentlicher
+  // Endpunkt; `saveRun` hatte sein Zod-Schema von Anfang an, diese Grenze nicht.
+  it('BUG-12: weist unbrauchbare Eingaben ab, statt zu werfen', async () => {
+    for (const bad of [undefined, null, 'abc', 42, {}, [null], ['7'], [1.5], [{}]]) {
+      await expect(getNextQuestion(bad)).resolves.toEqual({ status: 'unavailable' })
+    }
+  })
+
+  // BUG-17: Der Ausschlussliste wurden beliebige Zahlen geglaubt. 386 Nummern
+  // *außerhalb* des Pools ergaben „Pool leer" — und damit die Gewinner-Meldung
+  // aus EC-2, ohne dass je eine Frage beantwortet worden wäre.
+  it('BUG-17: Nummern außerhalb des Pools erzeugen kein „Pool leer"', async () => {
+    const outside = Array.from({ length: POOL_SIZE }, (_, i) => 100_000 + i)
+    await expect(getNextQuestion(outside)).resolves.toEqual({ status: 'unavailable' })
+  })
+
   it('AC-3: liefert genau vier verschiedene Namen, einer davon der richtige', async () => {
     const result = await getNextQuestion([])
     expect(result.status).toBe('ok')
@@ -93,8 +111,17 @@ describe('getNextQuestion', () => {
     expect(await getNextQuestion([])).toEqual({ status: 'unavailable' })
   })
 
-  it('ignoriert unsinnige Einträge in der Ausschlussliste', async () => {
+  // **Vertrag geändert am 2026-09-04 (BUG-12).** Dieser Test hieß „ignoriert
+  // unsinnige Einträge in der Ausschlussliste" und verlangte `ok`: Unsinn wurde
+  // stillschweigend herausgefiltert und weitergemacht. Genau diese Nachsicht war
+  // die Lücke — sie ließ auch `[null]` oder `"abc"` bis in `.filter()` durch,
+  // und dort gab es dann HTTP 500 statt einer Antwort.
+  //
+  // Die Grenze weist jetzt ab, statt zu reparieren. Unser eigener Client schickt
+  // so etwas nie; was es schickt, ist ein Aufruf von Hand, und der bekommt eine
+  // saubere Absage.
+  it('BUG-12: weist eine Ausschlussliste mit unsinnigen Einträgen ab, statt sie zu säubern', async () => {
     const result = await getNextQuestion([NaN, 1.5, -3] as number[])
-    expect(result.status).toBe('ok')
+    expect(result.status).toBe('unavailable')
   })
 })

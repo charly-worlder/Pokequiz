@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { runSubmissionSchema } from '@/lib/validation/quiz'
+import { z } from 'zod'
 
 export type PersonalBest = {
   streak: number
@@ -22,12 +23,20 @@ export type SaveRunResult =
  * tie. Reads only the caller's own rows; the table's select policy does not
  * allow anything else (migration 0002).
  */
-export async function getPersonalBest(excludeRoundId?: string): Promise<PersonalBest | null> {
+export async function getPersonalBest(excludeRoundId?: unknown): Promise<PersonalBest | null> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return null
+
+  // Validated at the boundary like every other argument that arrives from
+  // outside: this is exported from a `'use server'` file, so it is a public
+  // endpoint whatever the design intended it for (BUG-12). An unparsable value
+  // is refused rather than passed into the query builder.
+  const parsedExclude = z.uuid().optional().safeParse(excludeRoundId ?? undefined)
+  if (!parsedExclude.success) return null
+  const excludeId = parsedExclude.data
 
   let query = supabase
     .from('runs')
@@ -37,7 +46,7 @@ export async function getPersonalBest(excludeRoundId?: string): Promise<Personal
   // Used when saving: the round being stored must not compete with itself, or a
   // repeated submission of a record round would report "no record" the second
   // time (spec.md EC-4).
-  if (excludeRoundId) query = query.neq('client_round_id', excludeRoundId)
+  if (excludeId) query = query.neq('client_round_id', excludeId)
 
   const { data } = await query
     .order('streak', { ascending: false })

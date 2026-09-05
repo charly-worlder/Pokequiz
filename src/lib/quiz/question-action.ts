@@ -7,7 +7,7 @@ import {
   spriteUrlFor,
   withTimeoutAndOneRetry,
 } from '@/lib/pokeapi/client'
-import { POOL_END, POOL_START, POOL_SIZE } from '@/lib/validation/quiz'
+import { POOL_END, POOL_START, POOL_SIZE, seenIdsSchema } from '@/lib/validation/quiz'
 
 export type Question = {
   pokemonId: number
@@ -61,15 +61,26 @@ function shuffle<T>(items: T[]): T[] {
  * `seenIds` are the Pokémon already used as the answer in this round, so none
  * repeats (spec.md AC-5). A Pokémon whose German name is missing is dropped and
  * another drawn, without the browser noticing (spec.md EC-5).
+ *
+ * The parameter is `unknown` on purpose: this is a Server Action, so it is a
+ * public endpoint that anyone with a session can call with anything at all. It
+ * is validated at the boundary, exactly as `.claude/rules/security.md` asks and
+ * as `saveRun` has always done (BUG-12, BUG-17).
  */
-export async function getNextQuestion(seenIds: number[]): Promise<QuestionResult> {
+export async function getNextQuestion(seenIds: unknown): Promise<QuestionResult> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { status: 'unauthenticated' }
 
-  const excluded = new Set(seenIds.filter((id) => Number.isInteger(id)))
+  const parsed = seenIdsSchema.safeParse(seenIds)
+  // Nothing our own client can send. Treated like a question that cannot be
+  // assembled, so the caller shows the error card from AC-16 instead of the
+  // browser swallowing an unhandled 500.
+  if (!parsed.success) return { status: 'unavailable' }
+
+  const excluded = new Set(parsed.data)
   if (excluded.size >= POOL_SIZE) return { status: 'pool-empty' }
 
   const built = await withTimeoutAndOneRetry(async (signal) => {

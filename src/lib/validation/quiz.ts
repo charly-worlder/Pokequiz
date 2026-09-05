@@ -12,6 +12,21 @@ export const MIN_MS_PER_ANSWER = 500
 export const pokemonIdSchema = z.number().int().min(POOL_START).max(POOL_END)
 
 /**
+ * The round's exclusion list, as it arrives from the browser (spec.md AC-5).
+ *
+ * Bounded in both directions on purpose. Without the **value** bound, 386
+ * numbers from outside the pool made the server report „Pool leer" and handed
+ * the player the winner message of EC-2 without a single question having been
+ * answered (BUG-17). Without the **length** bound — and without a schema at all
+ * — a non-array reached `.filter()` and produced an unhandled HTTP 500 with the
+ * server's file paths in the response (BUG-12).
+ *
+ * `saveRun` had its schema from day one; this boundary simply never got the
+ * same treatment, although `pokemonIdSchema` was sitting here unused.
+ */
+export const seenIdsSchema = z.array(pokemonIdSchema).max(POOL_SIZE)
+
+/**
  * spec.md AC-12 — a submitted round is accepted only if it is arithmetically
  * possible. The same three bounds exist as CHECK constraints on the table
  * (migration 0002); this is the first of the two independent checks that

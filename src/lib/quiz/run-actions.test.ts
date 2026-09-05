@@ -187,4 +187,22 @@ describe('getPersonalBest (AC-8)', () => {
     createClient.mockResolvedValue(client)
     expect(await getPersonalBest()).toBeNull()
   })
+
+  // BUG-12: Diese Funktion ist aus einer `'use server'`-Datei exportiert und
+  // damit ein vollwertiger Endpunkt — unabhängig davon, dass der Entwurf sie nur
+  // aus der Server-Komponente aufrufen wollte. Ihr Argument ging ungeprüft in den
+  // Query-Builder.
+  it('BUG-12: weist ein unbrauchbares Argument ab, statt es weiterzureichen', async () => {
+    const { client, filters } = makeClient({ best: { streak: 7, duration_ms: 20_000 } })
+    createClient.mockResolvedValue(client)
+
+    for (const bad of ['*', 'x&select=*', 'nicht-uuid', 42, {}, []]) {
+      expect(await getPersonalBest(bad)).toBeNull()
+    }
+    expect(filters['neq:client_round_id']).toBeUndefined()
+
+    // `null` ist kein Angriff, sondern schlicht „kein Ausschluss" — es verhält
+    // sich wie ein weggelassenes Argument und liefert die Bestleistung.
+    expect(await getPersonalBest(null)).toEqual({ streak: 7, durationMs: 20_000 })
+  })
 })

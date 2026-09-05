@@ -345,7 +345,17 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       setStreak(nextStreak)
 
       // spec.md EC-2 — every Pokémon in the pool answered correctly.
-      if (seenIdsRef.current.length >= POOL_SIZE && !reserve) {
+      //
+      // Counted on the streak, not on `seenIdsRef` (BUG-17): that list also holds
+      // questions that were *discarded* because their picture would not load
+      // (EC-6), so it could reach the pool size while the player had answered
+      // fewer. The winner message would then have been handed out for a round
+      // that never earned it. The streak is exactly „richtig beantwortet", which
+      // is what EC-2 asks about.
+      //
+      // A round with discards therefore no longer ends here — it ends when the
+      // server reports „Pool leer", which is the honest place for it.
+      if (nextStreak >= POOL_SIZE && !reserve) {
         window.setTimeout(() => void finishRound(nextStreak, true), CORRECT_FEEDBACK_MS)
         return
       }

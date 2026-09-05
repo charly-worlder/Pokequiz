@@ -88,6 +88,11 @@
 - [x] T19  Zeitgrenze für das Vorladen des Bildes (BUG-15): `ImageProbe` gibt nach 5 Sekunden auf, lädt genau einmal still neu (AC-15) und meldet dann den Fehlschlag, sodass EC-6 greift. Der zweite Versuch läuft über den React-`key`, nicht über die Adresse — sonst bräche er den Zwischenspeicher (AC-31) und die Auslieferung über die eigene Domain (AC-20)  · files: src/components/quiz/pokemon-image.tsx, src/components/quiz/quiz-screen.error-states.test.tsx  · → AC-15, AC-16, EC-6
 - [x] T20  Worker-Zahl der E2E-Suite deckeln  · files: playwright.config.ts  · → kein AC (Messaufbau)
 
+- [x] T21  Eingabevalidierung an beiden ungeschützten Server Actions (BUG-12) und damit zugleich BUG-17s ausnutzbare Hälfte: `seenIdsSchema` (Array von Pool-Nummern, längenbegrenzt) für `getNextQuestion`, `z.uuid().optional()` für `getPersonalBest`. **Vertragsänderung:** Die Ausschlussliste wird jetzt **abgewiesen** statt gesäubert — die alte Nachsicht war die Lücke  · files: src/lib/validation/quiz.ts, src/lib/quiz/question-action.ts, src/lib/quiz/run-actions.ts, src/lib/quiz/question-action.test.ts, src/lib/quiz/run-actions.test.ts  · → AC-5, EC-2
+- [x] T22  Gewinner-Prüfung zählt die Serie statt der Ausschlussliste (BUG-17, Client-Hälfte): Verworfene Fragen stehen in `seenIdsRef`, sind aber keine richtigen Antworten. EC-2 fragt nach „alle 386 richtig beantwortet", und genau das ist die Serie  · files: src/components/quiz/quiz-screen.tsx  · → EC-2
+
+**Nicht durch einen Test abgesichert:** T22. Ein Abnahmetest bräuchte 386 richtige Antworten oder ein gemocktes `POOL_SIZE` in einer eigenen Testdatei; der Aufwand steht in keinem Verhältnis zu einem Low-Befund auf einem Pfad, den der QA-Lauf selbst als „praktisch nur von Hand erreichbar" eingestuft hat. Die **ausnutzbare** Hälfte von BUG-17 — erzwungenes „Pool leer" über Nummern außerhalb des Pools — ist in T21 abgedeckt und rot geprüft. Hier steht bewusst, was geprüft ist und was nur gelesen.
+
 **Zur E2E-Instabilität — die erste Erklärung war falsch.** Im QA-Lauf und beim Fix von BUG-14 stand hier, die Ursache sei **BUG-15**. Das hat sich beim Nachmessen nicht gehalten:
 
 - Mit der Zeitgrenze aus T19 blieben bei 16 Workern **weiterhin 6 von 24 rot**.
