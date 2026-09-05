@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { register, PASSWORD } from './helpers'
 
 /**
@@ -91,6 +92,7 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
   page,
   request,
   browser,
+  clientIp,
 }) => {
   const { email } = await register(page, 'e2eRst')
 
@@ -110,7 +112,9 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
   expect(link).toContain('token_hash=')
 
   // Das „andere Gerät": eigener Kontext, kein Cookie aus der Anfrage-Sitzung.
-  const otherDevice = await browser.newContext()
+  const otherDevice = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const phone = await otherDevice.newPage()
 
   await phone.goto(link)
@@ -128,7 +132,9 @@ test('Passwort-Reset über den echten Mail-Link, geöffnet auf einem anderen Ger
 
   // Das neue Passwort gilt, das alte nicht mehr — sonst wäre der Reset nur
   // scheinbar durchgelaufen.
-  const check = await browser.newContext()
+  const check = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const fresh = await check.newPage()
 
   await fresh.goto('/login')
@@ -149,6 +155,7 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
   page,
   request,
   browser,
+  clientIp,
 }) => {
   const { email } = await register(page, 'e2eRs2')
 
@@ -162,7 +169,9 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
 
   const link = await resetLinkFor(request, email)
 
-  const first = await browser.newContext()
+  const first = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const firstPage = await first.newPage()
   await firstPage.goto(link)
   await fillPassword(firstPage, `${PASSWORD}-x`)
@@ -171,7 +180,9 @@ test('Ein bereits benutzter Reset-Link führt in den Fehlerzustand (AC-12)', asy
   await first.close()
 
   // Derselbe Link ein zweites Mal, wieder ohne Vorbelastung.
-  const second = await browser.newContext()
+  const second = await browser.newContext({
+    extraHTTPHeaders: { 'x-forwarded-for': clientIp },
+  })
   const secondPage = await second.newPage()
   await secondPage.goto(link)
 
