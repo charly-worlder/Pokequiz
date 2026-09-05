@@ -810,3 +810,220 @@ Ohne Befund: PROJ-1 in beide Richtungen (Registrierung live gegen die Datenbank 
 > **Was dieser Lauf über den Fix-Lauf sagt.** Die vier beauftragten Fehler sind behoben, und drei davon wurden diesmal wirklich provoziert statt gelesen — ein gelöschtes Profil für EC-3, 404-Bildantworten für EC-6, zwei Cache-Messungen für AC-31. Der Fix-Lauf hat aber **die E2E-Suite nicht gefahren** und damit die einzige Stelle übersehen, an der das alte AC-9-Verhalten festgeschrieben war. Der eigene Unit-Test schrieb das neue fest, die fremde E2E-Suite das alte, und nur der eigene wurde ausgeführt. Ein Fix ist nicht fertig, wenn die selbst geschriebenen Tests grün sind.
 
 > **Der lehrreichste Befund ist BUG-16.** Der Fix für BUG-8 war richtig — eine unveränderte Adresse ist keine Reparatur. Genau dadurch wurde sichtbar, dass die Reparaturebene für diesen Pool **nie** etwas anderes liefern kann und die Zusatzanfrage von über 100 KB immer umsonst ist. `design.md` begründet das gesamte Adressmuster mit einer Rückfallebene, die es faktisch nicht gibt. Das stand seit dem 2026-09-01 so da; niemand hat die beiden Konstanten je nebeneinandergelegt. Einen Fehler zu beheben heißt manchmal nur, den darunterliegenden freizulegen.
+
+---
+
+## QA-Lauf — 2026-09-05, nach den sechs Fixes vom Vortag
+
+**Anlass:** Seit dem letzten Lauf sind BUG-14, BUG-16 (per `/refine` EC-11 gestrichen), BUG-15, BUG-12, BUG-17 und BUG-9 bearbeitet worden. Dieser Lauf prüft sie nach **und rollt alle 31 AC-IDs und alle 11 EC-IDs neu auf**.
+
+**Aufbau:** Drei `qa-engineer`-Verifizierer in getrennten Kontexten, die den Bau nicht gesehen haben — Bahn A (Acceptance), Bahn B (Security), Bahn C (Regression). Zusammenführung und Bewertung: Hauptkontext.
+
+**Zwei Aufträge dieses Laufs waren ausdrücklich, eigene Behauptungen zu widerlegen:** Bahn B sollte den alten Beleg für „Authentication Bypass" **nicht übernehmen** (seine Grundlage ist mit BUG-9 weggefallen) und den Wächter-Test aus T24 selbst angreifen. Bahn C sollte die Begründung der Worker-Deckelung nachmessen statt glauben. Beide Aufträge haben getragen — siehe BUG-20 und BUG-27.
+
+**Bug-Nummerierung:** neue Befunde ab **BUG-19**.
+
+### Das Ergebnis vorweg
+
+**Production Ready: NEIN — 1 High, 4 Medium, 7 Low.**
+
+Die sechs Fixes wirken; fünf davon sind mit provozierten Ausnahmen belegt. Der Lauf zeigt aber drei Dinge, die vorher niemand gesehen hat:
+
+1. **Der Wächter aus T24 hält seine eigene Zusage nicht** (BUG-20). Er sollte strukturell erzwingen, dass jede Server Action ihre Sitzung prüft — und übersieht fünf Schreibweisen, darunter die, die Next.js' eigene Dokumentation als Erstes zeigt.
+2. **Der BUG-9-Fix hat eine Nebenwirkung, die bei der Genehmigung nicht auf dem Tisch lag** (BUG-21): PROJ-1s Anmelde- und Registrier-Actions laufen jetzt unter **jedem** Pfad, nicht mehr nur unter `/login`.
+3. **Die Ranglisten-Integrität trägt in der Kombination nicht mehr** (BUG-19) — ein Request erzeugt einen perfekten Bestwert, und Konten dafür lassen sich unbegrenzt und ohne CAPTCHA erzeugen.
+
+### Die sechs Fixes — nachgeprüft
+
+- [x] **BUG-14 behoben** — `npm run test:e2e` **24/24**, zweimal (Bahn C). Die beiden umgeschriebenen Specs laufen in allen drei Engines
+- [x] **BUG-16 behoben, mit einem Rest** — kein `repairImageUrl`, kein `resolveOfficialImageUrl` mehr in `src/`; der laufende Client-Chunk exportiert als Server-Referenzen nur noch `getNextQuestion` und `saveRun`. **Aber:** `next.config.ts` trägt den zugehörigen `remotePattern` weiter → **BUG-22**
+- [x] **BUG-15 behoben** — Zeitgrenze und stiller zweiter Versuch in `pokemon-image.tsx:56,110-116`, Abnahmetest mit Fake-Timern (`error-states.test.tsx:285-319`). Eine real hängende Quelle ist von außen nicht provozierbar
+- [x] **BUG-12 behoben, live nachgeprüft** — `"oops"`, `null`, `{}`, `[999]`, `[0]`, `["1","2"]` → **alle `unavailable`**, kein 500, keine Serverpfade in der Antwort. 60.000 Elemente (120 KB) → `unavailable` in 0,30 s
+- [x] **BUG-17 zur Hälfte behoben** — Zahlen außerhalb des Pools erzwingen kein „Pool leer" mehr (Bahn B). Der **Client-Pfad über „Pool leer"** trägt den Fehler jedoch weiter → **BUG-23**
+- [x] **BUG-9 behoben, real provoziert** — Bahn A hat die Sitzung mitten in der Runde **global** abgemeldet (GoTrue `/logout?scope=global`, der „anderer Tab"-Fall aus EC-7): Beide Actions liefern danach `{"status":"unauthenticated"}` als reguläre Action-Antwort, für die Runde wurde **keine** Zeile geschrieben. Der über BUG-9 unerreichbare Zweig ist nachweislich erreichbar
+
+### Acceptance Criteria
+
+Bestanden mit Beleg: **AC-1, AC-3, AC-5, AC-8 bis AC-14, AC-19 bis AC-23, AC-26 bis AC-31** (21 von 31).
+
+| ID | Beleg |
+|----|-------|
+| AC-8 | Fünf Rekord-Konstellationen live: erste Runde `true`, gleiche Serie schneller `true`, gleiche Serie langsamer `false`, höhere Serie `true`, erneutes Einreichen derselben Rekordrunde weiterhin `true` (Selbstausschluss) |
+| AC-12 | Live abgelehnt: Serie 387, −1, 3.5, `"5"`, Dauer −5, 10 Fragen in 4999 ms, ungültige UUID, `null`. Angenommen an der Grenze: 10/5000 ms und 386/193000 ms. Zweite Ebene in der DB bestätigt |
+| AC-14 | Fremdes `profile_id` **und** `profileId` injiziert → Zeile trägt die Sitzungs-ID; direkt über PostgREST → `42501` |
+| AC-20 | Kein einziges rohes `<img>` in `src/`; `/_next/image` liefert von der eigenen Domain, Wiederholung `X-Nextjs-Cache: HIT`; der PokeAPI-Client trägt `server-only` |
+| AC-26 | Konto über die Admin-API gelöscht → 0 Runden, 0 Profile. Zusätzlich in einer zurückgerollten Transaktion: Profil mit 2 Runden gelöscht → 0 verwaiste Zeilen |
+| AC-30 | Schrift von `/_next/static/media/…woff2`; **0 Treffer** für `googleapis`/`gstatic` |
+| AC-31 | 15 Fragen zweier Spieler (60 Namensabfragen) → Fetch-Cache blieb bei 393 Einträgen, **0 neue, 0 neu geschriebene Dateien** |
+
+**Nicht bestanden:**
+
+| ID | Ergebnis |
+|----|----------|
+| **AC-25** | [ ] **FAIL** — der Ladezustand der Runde ist ein alleinstehender Textabsatz ohne Skelettfläche (`quiz-screen.tsx:426-435`). Unverändert **BUG-11 (Low)** |
+| AC-2, AC-4, AC-6, AC-7, AC-15 bis AC-18, AC-24 | [~] **TEILWEISE** — Logik und Markup belegt, das sichtbare Verhalten nicht (kein Browser) |
+
+### Edge Cases
+
+| ID | Ergebnis |
+|----|----------|
+| **EC-4** | [x] **PASS** — dieselbe `clientRoundId` zweimal nacheinander **und** zweimal parallel (`Promise.all`) → beide `saved`, **eine** Zeile. Garantie in der laufenden DB: `runs_client_round_id_key UNIQUE` |
+| **EC-7** | [x] **PASS (Serverhälfte, real provoziert)** — siehe BUG-9 oben. Die Client-Navigation ist ohne Browser nicht beobachtbar |
+| **EC-6** | [~] Kette live nachgewiesen: `/_next/image?url=…/99999.png` → **404**, worauf im Browser `error` feuert; `onProbeFail` verwirft und zieht neu. Das Browser-Ereignis selbst nicht beobachtbar |
+| **EC-2** | [~] **TEILWEISE + BUG-23 (Low)** — Server meldet `pool-empty` exakt bei 386 gesehenen IDs, bei 385 kommt deterministisch das letzte Pokémon |
+| **EC-11** | [x] **Verhalten stimmt mit dem neuen Wortlaut überein** — die Ebene ist im Code weg. Rest in der Konfiguration → **BUG-22** |
+| EC-1, EC-5, EC-8, EC-9 | [!] NOT VERIFIED — Client-Interaktionen bzw. nicht herstellbare Quellenfehler; Garantien im Code belegt |
+| EC-3, EC-10 | [~] Fänger und Grenze im Code belegt, Abnahmetests grün; echter Verbindungsabbruch nicht provozierbar |
+
+### Security-Audit (Bahn B)
+
+| Prüfung | Ergebnis |
+|---------|----------|
+| **Authentication Bypass — Beleg vollständig neu erhoben** | [x] **PASS** — siehe eigener Abschnitt unten |
+| Autorisierung | [x] PASS — 8 Prüfungen: fremde Runden über App und PostgREST, Feld-Injektion, `UPDATE`/`DELETE`, `auth.users`, fremde UUID als `excludeRoundId` (kein Existenz-Orakel) |
+| Eingabevalidierung | [x] PASS — 9 Nutzlasten gegen `saveRun` (inkl. Prototype-Pollution und exakter Grenze 386/193000 gegen 192999), 6 gegen `getNextQuestion` |
+| **SSRF über `/_next/image`** | [x] **PASS** — 10 Ausbruchsversuche, alle 400; Cache-Auffüllung als DoS nicht möglich (`q` ist beschränkt) |
+| Exponierte Secrets | [x] PASS — 19 Chunks, 5,3 MB zusammengefügt: **0 Treffer** für Service-Role, `sb_secret_`, JWT-Secret, Action-`encryptionKey`, Anon-JWT |
+| Sensible Daten in Antworten | [x] PASS — im gerenderten `/` mit Sitzung: E-Mail 0, User-ID 0, Tokens 0 |
+| Zugangsdaten in URLs | [x] PASS — alle vier Formulare `method="post"` **plus** `onSubmit`. Zusatz: `/auth/confirm` hat **keinen** Open Redirect (5 Varianten geprüft) |
+| Drosselung | [!] NOT VERIFIED — nicht implementiert: `saveRun` 40/40, `getNextQuestion` 30/30 ohne Bremse. Kein Zugangsdaten-Pfad in PROJ-2 |
+| Security-Header | [ ] **FAIL** — weiterhin **keiner** der vier gesetzt |
+| CSRF (`X-Forwarded-Host`) | [ ] **FAIL** — BUG-18 unabhängig als weiterhin vorhanden bestätigt; zusätzlich wirkt auch `Host: evil.example` |
+
+#### Authentication Bypass — der alte Beleg galt nicht mehr, hier ist der neue
+
+Der frühere Beleg lautete „alle Server Actions ohne Cookie → 307". Mit BUG-9 ist diese Grundlage weggefallen. Neu erhoben, 12 Prüfungen:
+
+| Prüfung | Ergebnis |
+|---|---|
+| `getNextQuestion` ohne Sitzung | `200`, Body `{"status":"unauthenticated"}` — kein Pokémon, kein Name |
+| `saveRun` ohne Sitzung | `{"status":"unauthenticated"}`, DB-Gegenprobe: **0 Zeilen** |
+| `getPersonalBest` ohne Sitzung | `null` |
+| **Gefälschtes** Action-Kennzeichen | `404`, `x-nextjs-action-not-found: 1` — kein Seiteninhalt |
+| **Leeres** Kennzeichen | `404` |
+| `Next-Action` auf **GET** | `307 → /login` (der Proxy verlangt `POST`) |
+| Header-Groß-/Kleinschreibung | kein Unterschied — beide `unauthenticated` |
+| Quiz-Kennzeichen auf **fremden Routen** | `/login`, `/reset-password` → `unauthenticated`; `/privacy`, `/leaderboard` → 404-Status, Action gibt nichts preis |
+| Leakt die Antwort die **Seiten-Flight-Payload**? | **Nein** — auch mit `Next-Router-State-Tree` bleibt der Body ohne RSC-Baum von `/` |
+
+**Antwort auf die Kernfrage:** Ein Action-POST ohne Sitzung erreicht ausschließlich Actions, die sich selbst schützen, und sie geben nichts preis. **Der Verzicht auf die 307 öffnet für sich genommen kein Loch.** Die Nebenwirkung liegt woanders — siehe BUG-21.
+
+### Regression (Bahn C)
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` | **14 Dateien, 137 Tests, 137 grün** |
+| `npm run lint` | **Exit 0** |
+| `npm run build` | **Exit 0**, keine Kollision mit dem Dev-Server |
+| `npm run test:e2e` | **24/24**, zweimal |
+
+Ohne Befund: PROJ-1 vollständig gegen das laufende System — Registrierung, Abmelden, Login (korrekt / falsches Passwort / unbekanntes Konto mit **identischer** Meldung), Reset-Anforderung, echter Mailpit-Link, Reset in einem **frischen Browser-Kontext** („anderes Gerät"), Login mit neuem Passwort in einem dritten Kontext. Die Shell auf fünf Routen inklusive der 404-Antworten, je genau ein `<header>`/`<footer>`/`<main>`. Die Datenschicht gegen die laufende Datenbank: RLS aktiv, exakt drei Policies, keine UPDATE/DELETE, alle Constraints und Indizes deckungsgleich, keine `leaderboard`-Tabelle, Kaskade live in einer zurückgerollten Transaktion.
+
+### Bugs
+
+#### BUG-19: Ein Request genügt für einen perfekten Ranglisten-Bestwert — und Konten dafür sind unbegrenzt
+- **Severity: High** · betrifft die User Story in `spec.md:16` und **PROJ-3, das es ungefiltert erbt**
+- **Beleg:** `saveRun {"streak":386,"durationMs":193000,…}` → `200 {"status":"saved","isPersonalBest":true}` — ohne eine einzige Frage. Dazu: sechs Konten in Folge registriert, ohne Sitzung, ohne Bremse, ohne CAPTCHA (`supabase/config.toml:231-234`, `[auth.captcha]` auskommentiert).
+- **Warum das trotz der Decision-Log-Zeile ein Befund ist:** `spec.md` akzeptiert bewusst den Rest-Missbrauch einer Formprüfung statt einer serverseitig autoritativen Runde. **Es akzeptiert nicht die Kombination** mit unbegrenzter, CAPTCHA-freier Kontoerzeugung. Einzeln ist jedes Stück eine getroffene Entscheidung; zusammen machen sie den Kern-Wettbewerbsmechanismus mit einem Skript wertlos.
+- **Das ist eine Owner-Entscheidung, keine reine Fix-Frage.** Optionen: CAPTCHA bei der Registrierung, Drosselung auf `saveRun`, oder die Rangliste in PROJ-3 auf verifizierte Konten stützen. Vor PROJ-3 zu entscheiden, nicht danach.
+
+#### BUG-20: Der Wächter-Test findet nicht jede Server Action
+- **Severity: Medium** · betrifft die in `design.md` → T24 zugesagte Zusicherung, auf die sich `proxy.ts:77` ausdrücklich stützt
+- Bahn B hat die Erkennungslogik unverändert gegen fünf synthetische Dateien laufen lassen. **Fünf Umgehungen, alle ohne böse Absicht erreichbar:**
+
+| # | Form | Warum sie durchfällt |
+|---|---|---|
+| 1 | **Inline-`'use server'` im Funktionsrumpf** | `isServerActionModule` prüft nur den Dateianfang. **Das ist die Form, die Next.js' mitgelieferte Doku als Erstes zeigt** (`node_modules/next/dist/docs/…/07-mutating-data.md:38`) |
+| 2 | `export { x } from './y'` / `export *` | `exportedActions` kennt nur `FunctionDeclaration` und `VariableStatement`, keine `ExportDeclaration` |
+| 3 | `export default async function (…)` | übersprungen, weil `statement.name` fehlt |
+| 4 | `export const { doThing } = impl` | übersprungen wegen `ts.isIdentifier(decl.name)` |
+| 5 | `// TODO: getUser() here` im Rumpf | `SESSION_CHECK` ist eine **Textsuche** — ein Kommentar reicht für ein Falsch-Grün |
+
+- Zusätzlich fängt die Mindestzahl `toBeGreaterThanOrEqual(4)` das nicht ab: Fielen alle drei Quiz-Actions still aus der Erkennung, blieben die vier Auth-Actions übrig — der Test wäre grün.
+- **Kein aktueller Exploit.** Für den heutigen Code stimmt die Antwort des Wächters; Bahn B hat das unabhängig am Quelltext und am Manifest verifiziert. Der Befund ist, dass die **Zusicherung** nicht hält, während der Proxy sich auf sie stützt.
+- **Das ist die unangenehmste Stelle dieses Laufs.** Der Wächter wurde gebaut, um genau die Frage „gilt das auch für die fünfte Action?" strukturell zu beantworten. Eine Absicherung, die ihre eigene Zusage nicht einlöst, ist schlechter als keine — weil man aufhört hinzusehen.
+
+#### BUG-21: PROJ-1s Anmelde- und Registrier-Actions laufen jetzt unter jedem Pfad
+- **Severity: Medium** · **Nebenwirkung des BUG-9-Fixes, die bei der Genehmigung nicht auf dem Tisch lag**
+- **Beleg:** `loginAction` als Action-POST auf **`/`** ohne Sitzung → `200 {"error":"E-Mail-Adresse oder Passwort ist falsch."}`. `registerAction` ebenso: sechs Konten über `/` statt `/login`.
+- **Ursache:** Vor der Änderung war ein Action-POST auf einem geschützten Pfad ohne Sitzung eine 307. Jetzt lässt `proxy.ts:79-81` jeden `POST` mit `next-action`-Header durch — unabhängig vom Pfad. Next.js bindet Actions nicht an die Route, auf der sie definiert sind.
+- **Die praktische Folge, und sie ist der eigentliche Punkt:** Eine Edge- oder WAF-Regel, die nur `/login` bewacht — **der naheliegende Fix für BUG-21 aus PROJ-1** (das dortige Rate-Limit greift pro IP und damit auf der Server-IP) — **greift ins Leere.** Wer den Schutz beim Deploy plant, muss ihn auf den Action-Header stützen, nicht auf den Pfad.
+- **Kein Datenabfluss**, keine Rechteausweitung. Der Befund ist die Erreichbarkeit, nicht das Verhalten.
+
+#### BUG-22: Totes `remotePattern` weitet die Bild-Allowlist auf die ganze PokeAPI-Organisation
+- **Severity: Low** · von **allen drei Bahnen** unabhängig gefunden
+- `next.config.ts:21-24` trägt einen zweiten Eintrag `https://raw.githubusercontent.com/PokeAPI/**`, im Kommentar ausschließlich mit **EC-11** begründet — und EC-11 ist ersatzlos entfallen. Der Code dazu wurde entfernt, die Konfiguration nicht.
+- **Er wirkt:** `/_next/image?url=…/PokeAPI/sprites/master/sprites/items/master-ball.png` → **200, image/png, 285 B**. Dieser Pfad liegt außerhalb des engen ersten Musters. Ein fremdes Repo wird mit 400 abgewiesen, ein PokeAPI-fremdes Verzeichnis mit 404 (Allowlist passiert, Upstream geholt).
+- Folge: Der Bild-Proxy holt und cached auf Zuruf beliebige Bilddateien aus jedem Repository der Organisation, unauthentifiziert. Nicht-Bilder werden abgewiesen — deshalb Low.
+
+#### BUG-23: Die Gewinner-Meldung kann weiterhin ohne 386 richtige Antworten erscheinen
+- **Severity: Low** · betrifft **EC-2** · **der BUG-17-Fix war halb**
+- Der Fix stellte die Gewinner-Prüfung in `answer()` von der Ausschlussliste auf die Serie um. Auf dem **zweiten** Pfad — `fetchQuestion → pool-empty → finishRound(streak, true)` (`quiz-screen.tsx:189-197`) — hängt `cleared=true` weiterhin an „Pool leer", nicht an „386 richtig".
+- `seenIdsRef` enthält auch nach EC-6 verworfene Fragen. Wurden Bilder verworfen, ist der Pool erschöpft, bevor die Serie 386 erreicht — und der Spieler liest „Du hast jedes Pokémon aus dem Pool richtig erkannt", ohne es getan zu haben.
+- Der Kommentar im Code verweist ausdrücklich auf diesen Pfad als „den ehrlichen Ort dafür". Er ist es nicht.
+
+#### BUG-24: `durationMs` hat keine Obergrenze
+- **Severity: Low** · betrifft **AC-12** · von Bahn A und Bahn B unabhängig gefunden
+- `saveRun {"durationMs":2147483648}` → `200 {"status":"failed"}`. `validation/quiz.ts:38` hat nur `.min(0)`; der Wert passiert Zod und läuft erst im `integer`-Feld der Datenbank über.
+- Zwei Folgen: AC-12s „rechnerisch möglich" ist an dieser Stelle nicht geprüft, und der Client bekommt die **falsche Fehlerklasse** — `failed` statt `rejected` — und bietet damit ein „Erneut speichern" an, das nie gelingen kann.
+- Verwandt: `rejected` und `failed` teilen sich im Client denselben Zweig (`quiz-screen.tsx:166`). Für ehrliche Clients unerreichbar.
+
+#### BUG-25: Die `profiles`-Policy gibt alle Spalten frei, nicht nur den Trainernamen
+- **Severity: Low** · Datenminimierung (Art. 5(1)(c) DSGVO)
+- `GET /rest/v1/profiles?select=*` mit gültiger Sitzung → `[{"id":"…","trainer_name":"…","created_at":"…"}]`, `count=exact` → **574**. Die Tabelle ist von jedem angemeldeten Konto vollständig auslesbar.
+- `migrations/0001_profiles.sql:19-22` erlaubt `select` mit `using (true)` auf **alle** Spalten. `docs/data-model.md` sagt nur den Trainernamen zu; mitgeliefert werden Auth-User-ID und Registrierungszeitpunkt jedes Spielers.
+- AC-27 gilt nur für `runs` und ist nicht verletzt. Gehört zu PROJ-1s Tabelle, betrifft aber die Zusage im app-weiten Datenmodell.
+
+#### BUG-26: Der Proxy-Matcher lässt jeden Pfad mit Bild-Endung ungeprüft durch
+- **Severity: Low** · vorbeugend
+- `/secret` → `307 /login`, aber `/secret.png`, `/secret.svg`, `/secret.webp` → **404 ohne dass der Proxy läuft** (`proxy.ts:97`). `/secret?x=.png` → korrekt 307, die Query zählt also nicht mit.
+- Heute ohne Wirkung, weil keine Route auf diese Endungen hört. Eine künftige geschützte Route — Export, Sharecard, `og:image` — wäre still ungeschützt, und die zweite Schranke aus `page.tsx` gäbe es dort nicht automatisch.
+
+#### BUG-27: Die Begründung der E2E-Worker-Deckelung ist nicht reproduzierbar
+- **Severity: Low** · Testinfrastruktur · **Bahn C hat eine Behauptung aus dem Vortag widerlegt**
+- `playwright.config.ts:5-17` behauptet, ohne Deckel seien „5 bis 6 rot, reproduzierbar", an drei benannten Stellen. Bahn C hat **fünf Läufe mit 16 Workern** gefahren: **119 von 120 Einzelausführungen grün (0,8 % rot).**
+- Der eine Fehlschlag lag an **keiner** der drei genannten Stellen. Insbesondere hielt AC-2s 3-Sekunden-Budget — im Kommentar als reißend beschrieben — in **allen fünf** Läufen.
+- Der Deckel kostet **~22 % Laufzeit** (28 s → 36 s).
+- **Plausible Erklärung der Abweichung, die den Kommentar trotzdem falsch macht:** Die ursprünglichen Messungen liefen jeweils kurz nach dem Start eines **frischen** Dev-Servers, also gegen kalte Turbopack-Kompilierung; Bahn C hat gegen einen lange warmgelaufenen gemessen. Ob der Deckel bleibt, ist damit neu zu entscheiden — der Kommentar ist in jedem Fall zu korrigieren.
+- **Versteckt der Deckel einen Produktfehler?** Kein Beleg dafür. Der eine rote Lauf ist aber auch nicht sauber als Kontention erklärt: Der Snapshot zeigt das Formular ohne Bestätigung **und** ohne Fehlermeldung, und Drosselung ist als Ursache ausgeschlossen (6× `/auth/v1/recover` → 6× 200 in 56–70 ms). `[!]` Ursache nicht abschließend bestimmbar.
+
+#### BUG-28: Dokumentation verweist auf entfernten Code
+- **Severity: Low**
+- `design.md:247` sagt im Präsens: „Im Quiz gehen `saveRun`, `getNextQuestion` und **`repairImageUrl`** hindurch." Die Funktion existiert nicht mehr.
+- `tasks.md:20` (T2, abgehakt) und T5 verlangen weiterhin „bei fehlendem Bild über `/pokemon/{id}` die offizielle Adresse nachschlagen" — was T18 in derselben Datei zurücknimmt. Zwei abgehakte Tasks widersprechen sich, T2 ist nicht als überholt markiert.
+- Die Kommentare in `client.ts:43`, `quiz-screen.tsx:252` und `error-states.test.tsx:251` nennen die entfallene Ebene ausdrücklich **als Historie** — das ist Absicht und kein Rest.
+
+#### Bestätigt offen, unverändert
+- **BUG-18 (Medium)** — `X-Forwarded-Host` hebelt die Origin-Prüfung aus; zusätzlich wirkt `Host: evil.example`. `serverActions.allowedOrigins` ist nicht konfiguriert. Deploy-Blocker in `INDEX.md`
+- **Security-Header (Medium)** — weiterhin keiner der vier auf `/`, `/login`, `/reset-password`. Zusätzlich `X-Powered-By: Next.js`
+- **BUG-11 (Low)** — AC-25, keine Skelettfläche beim Rundenstart
+- **PROJ-1: T4 und T18 unabgehakt** — beide `[user]`-Aufgaben auf dem Zugangsdaten-Pfad. Nach der QA-Regel ein **High**; beide stehen bereits als Deploy-Blocker in `INDEX.md`, T18 ist hart blockiert (kein eigener SMTP). **PROJ-2 selbst hat keine `[user]`-Aufgaben**
+
+### Not Verified In This Run
+
+- [!] **Alles Optische und rein clientseitig Interaktive** — AC-4, AC-6 (`nudge`), AC-8 (`pop`), AC-19 (Verlassen-Dialog), AC-25 (Puls), EC-1, EC-9: **kein Browser**
+- [!] **Responsives Rendering (AC-24) und Cross-Browser** — kein Viewport; die E2E-Suite fährt drei Engines, prüft aber keine Breakpoints
+- [!] **AC-2 im Browser** — nur die Serverhälfte messbar (184–279 ms von 3000 ms)
+- [!] **AC-15 mit real hängender Bildquelle, EC-3 mit real abgerissenem Speicheraufruf** — von außen nicht erzeugbar, ohne den geteilten Dev-Server zu stören
+- [!] **EC-5 und EC-8** — setzen manipulierte PokeAPI-Antworten voraus; alle 386 Namen existieren
+- [!] **AC-31 unter kaltem Cache** — der Speicher war warm (393 Einträge); belegt ist die Wiederverwendung, nicht der Erstaufbau
+- [!] **Drosselung** — nicht implementiert (Backlog `B1`)
+- [!] **`Strict-Transport-Security`** — lokal nur HTTP
+- [!] **Ausnutzbarkeit von BUG-18 im Browser** — der Header-Durchgriff ist per `curl` belegt, der Preflight nicht nachstellbar
+- [!] **Ob Next die Formen 2–4 aus BUG-20 tatsächlich als Actions registriert** — Bahn B hat bewusst keinen Code ins Projekt geschrieben. Belegt ist, dass der Wächter sie nicht sieht; für Form 1 belegt die mitgelieferte Next-Doku, dass sie eine gültige Action ist
+- [!] **Ursache des einen E2E-Fehlschlags bei 16 Workern** — 1 in 120, nicht reproduzierbar
+- [!] **Verhalten gegen das gehostete Supabase-Projekt** — nur lokal geprüft
+
+### Verdikt
+
+- **Acceptance Criteria:** 21 von 31 mit Beleg bestanden · **AC-25 FAIL** · 9 teilweise (Logik belegt, Sichtbares nicht)
+- **Edge Cases:** EC-4 und EC-7 mit provozierter Ausnahme bestanden · EC-2 teilweise (BUG-23) · EC-11 verhaltensseitig erfüllt · 4 nicht verifizierbar
+- **Die sechs Fixes:** alle wirken. BUG-16 und BUG-17 jeweils mit einem Rest (BUG-22, BUG-23)
+- **Bugs:** 10 neu — **1 High** (BUG-19), **2 Medium** (BUG-20, BUG-21), **7 Low** · bestätigt offen: BUG-18 und Security-Header (je Medium), BUG-11 (Low), PROJ-1s T4/T18 (High, bereits Deploy-Blocker)
+- **Security:** **7 Prüfungen mit Beleg bestanden**, 3 mit Befund, **2 NOT VERIFIED**. Der Authentication-Bypass-Beleg wurde **vollständig neu erhoben**: kein SSRF, keine exponierten Secrets, keine sensiblen Daten in Antworten, kein Open Redirect
+- **Regression:** ohne Befund — 137/137, E2E 24/24, Lint und Build grün
+- **Production Ready: NEIN**
+
+> **Was dieser Lauf über den vorigen sagt.** Sechs Fixes, alle wirksam, zwei davon mit einem Rest, den erst ein fremder Blick fand. Bemerkenswert ist die Art der Reste: Bei BUG-16 wurde der Code entfernt und die Konfiguration vergessen; bei BUG-17 wurde der Fehler von einem Pfad auf den anderen geschoben und im Kommentar als gelöst beschrieben. Beides sind Fehler des Nachsehens, nicht des Denkens — und beide hätte man beim Bauen finden können, wenn man nach *allen* Stellen gesucht hätte statt nach der einen, die man gerade repariert.
+
+> **Der wichtigste Befund ist BUG-20.** Der Wächter wurde ausdrücklich gebaut, um zu verhindern, dass die Sitzungsprüfung bei der fünften Action still verfällt — und er übersieht fünf Schreibweisen, darunter die, die Next.js' eigene Dokumentation zuerst zeigt. Solange er unvollständig ist, ist er schlimmer als sein Fehlen: Der Proxy stützt sich in einem Kommentar ausdrücklich auf ihn, und wer das liest, hört auf zu prüfen. Das gehört als Erstes repariert — nicht weil heute etwas offen steht, sondern weil die Zusage falsch ist.
