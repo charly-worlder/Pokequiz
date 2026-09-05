@@ -85,7 +85,16 @@
 
 - [x] T18  Rückfallebene der Bildadresse ersatzlos entfernen (BUG-16, nach `/refine` auf EC-11): `repairImageUrl` (Server Action) und `resolveOfficialImageUrl` (PokeAPI-Client) samt ihrer Tests gestrichen, Reparaturzweig und `repairedRef` aus der Zustandsmaschine entfernt. Ein nicht ladbares Bild führt jetzt unmittelbar zu EC-6, drei in Folge zu EC-10. Nebenwirkung: eine Server Action weniger an der Angriffsfläche  · files: src/lib/pokeapi/client.ts, src/lib/quiz/question-action.ts, src/components/quiz/quiz-screen.tsx, src/lib/pokeapi/client.test.ts, src/lib/quiz/question-action.test.ts, src/components/quiz/quiz-screen.error-states.test.tsx, src/components/quiz/quiz-screen.test.tsx  · → EC-6, EC-10, EC-11, AC-31
 
-**Nebenbefund, kein Task:** `npm run test:e2e` läuft ohne Angabe mit **16 Workern** (32 CPUs) und ist dabei unzuverlässig — 5 von 24 rot, immer mit demselben Symptom: Die Runde hängt auf „Runde wird vorbereitet …", weil das Bild unter Last nicht rechtzeitig lädt und `ImageProbe` keine Zeitgrenze kennt. **Gegen den Stand *vor* `562bd0e` gemessen: dort ebenfalls 5 von 24 rot** — der Flake ist also vorbestehend und nicht Folge der Fixes. Bei 2 und 4 Workern: 24/24, mehrfach bestätigt. Die Ursache ist **BUG-15**; die Worker-Zahl zu deckeln würde das Symptom verstecken, nicht beheben.
+- [x] T19  Zeitgrenze für das Vorladen des Bildes (BUG-15): `ImageProbe` gibt nach 5 Sekunden auf, lädt genau einmal still neu (AC-15) und meldet dann den Fehlschlag, sodass EC-6 greift. Der zweite Versuch läuft über den React-`key`, nicht über die Adresse — sonst bräche er den Zwischenspeicher (AC-31) und die Auslieferung über die eigene Domain (AC-20)  · files: src/components/quiz/pokemon-image.tsx, src/components/quiz/quiz-screen.error-states.test.tsx  · → AC-15, AC-16, EC-6
+- [x] T20  Worker-Zahl der E2E-Suite deckeln  · files: playwright.config.ts  · → kein AC (Messaufbau)
+
+**Zur E2E-Instabilität — die erste Erklärung war falsch.** Im QA-Lauf und beim Fix von BUG-14 stand hier, die Ursache sei **BUG-15**. Das hat sich beim Nachmessen nicht gehalten:
+
+- Mit der Zeitgrenze aus T19 blieben bei 16 Workern **weiterhin 6 von 24 rot**.
+- Playwright gibt bei einer Erwartung nach **5 Sekunden** auf, die App hat nach AC-15 aber zehn (5 s plus stiller Versuch) — der Test war also ungeduldiger als der Vertrag.
+- Mit 20 Sekunden Geduld blieben **4 rot**, und zwar an einer *anderen* Stelle: bei einer bereits offenen Frage. Das ist AC-2s 3-Sekunden-Budget, das unter 16-facher Last auf **einem** Dev-Server nicht zu halten ist. Auch der Mail-Ablauf von PROJ-1 wurde instabil.
+
+Es ist also **Kontention im Messaufbau, kein Produktfehler** — passend dazu trat derselbe Flake schon vor den Fixes auf (gegen `4709193` gemessen: ebenfalls 5 von 24 rot). Deshalb T20: Bei 4 Workern läuft `npm run test:e2e` reproduzierbar 24/24, dreimal in Folge bestätigt. Das deckt BUG-15 auch nicht zu — der hat mit T19 seinen eigenen, rot geprüften Abnahmetest auf Unit-Ebene.
 
 ## Backlog — bewusst offen
 

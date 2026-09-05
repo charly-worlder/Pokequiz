@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QuizScreen } from './quiz-screen'
 import type { Question } from '@/lib/quiz/question-action'
 
@@ -273,6 +273,49 @@ describe('QuizScreen — Fehlerpfade', () => {
     await waitFor(() =>
       expect(images().some((i) => i.getAttribute('src') === 'https://example.test/2.png')).toBe(true)
     )
+  })
+
+  // BUG-15 (Medium): `onLoad` und `onError` decken ein Bild ab, das ankommt, und
+  // eines, das abgelehnt wird — aber keines, das **gar nicht antwortet**. Ohne
+  // Frist saß die Runde dann für immer auf „Runde wird vorbereitet …": keine
+  // Fehlerkarte, kein Ausweg, Serie beim Neuladen verloren.
+  //
+  // Das Bild feuert hier bewusst **kein einziges Ereignis**. Genau darin besteht
+  // der Fehler; ein Test, der zum Schluss doch `error` auslöst, prüft ihn weg.
+  it('AC-15 / BUG-15: ein hängendes Bild wird einmal still neu geladen und dann verworfen', async () => {
+    vi.useFakeTimers()
+    try {
+      let served = 0
+      getNextQuestion.mockImplementation(async () => ({
+        status: 'ok',
+        question: question(++served),
+      }))
+
+      render(<QuizScreen initialPersonalBest={null} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(getNextQuestion).toHaveBeenCalledTimes(1)
+      expect(images().length).toBeGreaterThan(0)
+
+      // Erster Ablauf: AC-15 verlangt einen stillen zweiten Versuch, keinen
+      // Verwurf. Die Frage darf hier noch nicht ersetzt werden.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(getNextQuestion).toHaveBeenCalledTimes(1)
+      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/1.png')).toBe(true)
+
+      // Zweiter Ablauf: jetzt ist die Frage nicht ladbar und wird verworfen (EC-6).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(getNextQuestion).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // BUG-13 (Medium): Die Verwurfsgrenze griff nur, wenn der Spieler wartete.
