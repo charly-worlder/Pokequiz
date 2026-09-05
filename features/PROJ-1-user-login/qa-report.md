@@ -835,3 +835,208 @@ Die Passwort-Mindestlänge lässt sich nur über einen Signup-Versuch messen. St
 Der abgebrochene `supabase config push` hat die lokalen Werte **doch geschrieben**, bevor er an der E-Mail-Vorlage scheiterte: Das Dashboard zeigt unter Authentication → URL Configuration `http://localhost:3000` als Site URL. Bestätigt vom Nutzer am 2026-09-04.
 
 Derzeit folgenlos — es gibt keine Nutzer, keine Domain, und der eingebaute Mailversand stellt ohnehin nur an Team-Adressen zu. **Vor dem Livegang zwingend zu korrigieren**, sonst zeigt jeder Mail-Link auf `localhost`. Als Deploy-Blocker geführt.
+
+---
+
+## QA-Lauf — 2026-09-05, gegen den überarbeiteten Vertrag
+
+**Anlass:** `/refine PROJ-1` vom selben Tag hat AC-8 und EC-4 auf die tatsächlich gebaute Drosselung umgeschrieben und AC-16, AC-17, AC-18 sowie EC-8 und EC-9 ergänzt. Dieser Lauf prüft den Code gegen diesen neuen Vertrag — vier Kriterien und zwei Edge Cases waren nie zuvor unter ihren IDs verifiziert.
+
+**App URL:** `http://localhost:3000` (`probe.baseUrl`, lokaler Next.js-Dev-Server + lokaler Supabase-Stack)
+**Tester:** drei unabhängige `qa-engineer`-Sub-Agenten mit disjunktem Scope, keiner mit Kenntnis des Builds oder der Spec-Überarbeitung — (1) Akzeptanz, (2) Security-Red-Team, (3) Regression. Zusammenführung, Bewertung und dieser Bericht durch den einen Owner.
+
+Vorgehen der Lanes: Server Actions direkt über das Next-Action-RPC-Protokoll angesprochen (Action-IDs aus dem ausgelieferten Client-Chunk gezogen), Zählerstände gegen `postgresql://…:54322` gelesen, Reset-Mails über Mailpit `:54324`, dazu Code-Inspektion mit `file:line` und gezielte Testläufe.
+
+### Acceptance Criteria
+
+- [x] **AC-1** — Registrierung legt Konto + Profil an, sofortiger Login. `Set-Cookie: sb-127-auth-token=…; HttpOnly; SameSite=lax` + `x-action-redirect: /;push`; Profilzeile in der DB vorhanden, `email_confirmed_at` sofort gesetzt (`supabase/config.toml:243` → `enable_confirmations = false`). Mindestlänge 8 serverseitig erzwungen (`src/lib/validation/auth.ts:26`; gemessen: `kurz12` → `{"password":"Mindestens 8 Zeichen"}`)
+- [x] **AC-2** — `QAPROBEA1` gegen bestehendes `QaProbeA1` → `{"fieldErrors":{"trainerName":"Dieser Trainername ist bereits vergeben."}}`. Garantie: Unique-Index auf `lower(trainer_name)`, `supabase/migrations/0001_profiles.sql:13`
+- [x] **AC-3** — Zweitregistrierung derselben Adresse → `{"fieldErrors":{"email":"Diese E-Mail-Adresse ist bereits registriert."}}`, Umschalter zum Login erscheint (`src/components/auth/register-view.tsx:99-109`)
+- [x] **AC-4** — Login → `x-action-redirect: /;push`; `GET /` mit dem Cookie: HTTP 200, Trainername im HTML
+- [x] **AC-5** — Cookie persistent: `Max-Age=34560000; Expires=Sun, 10 Oct 2027`, kein Session-Cookie; `timebox`/`inactivity_timeout` in `supabase/config.toml:299,301` auskommentiert; Cookie in einem *separaten* Prozess wiederverwendet und weiter gültig. Einschränkung siehe „Not Verified"
+- [x] **AC-6** — Nativer POST des Abmelde-Formulars → `HTTP 303`, `Set-Cookie: …; Max-Age=0`, `Location: /login`; danach `GET /` → `307 → /login`
+- [x] **AC-7** — Falsches Passwort und unbekannte Adresse liefern **wortgleich** `{"error":"E-Mail-Adresse oder Passwort ist falsch."}` (`src/lib/auth/error-mapping.ts:69-79`). **Einschränkung: die Antwortzeit verrät die Kontoexistenz — siehe BUG-65.** Der Wortlaut erfüllt AC-7, das erklärte Ziel des Kriteriums nicht vollständig
+- [x] **AC-8** — **unbedingter Teil bestanden, bedingter Teil lokal nicht erfüllt.** Vollständige Trennung im eigenen Abschnitt unten
+- [x] **AC-10** — Bestehende und unbekannte Adresse liefern identisch `{"message":"Falls diese Adresse registriert ist, wurde ein Link zum Zurücksetzen verschickt."}`; Mailpit zeigt die Mail nur für die bestehende Adresse
+- [x] **AC-11** — `/auth/confirm?token_hash=…&type=recovery` → `307 → /reset-password`; neues Passwort < 8 abgelehnt; gültiges gesetzt; Login mit neuem Passwort erfolgreich, mit altem abgelehnt
+- [x] **AC-12** — Wiederverwendeter und erfundener Token → beide `307 → /reset-password?error=1`; Seite zeigt „Dieser Link ist ungültig oder abgelaufen." + „Neuen Link anfordern" (`src/app/reset-password/page.tsx:36,51-59`)
+- [x] **AC-13** — Registrierung leer → alle drei Feldfehler gleichzeitig; Login leer → beide Feldfehler. Kein Neuladen, weil die Action einen ActionState statt einer Weiterleitung liefert und das Formular über `form.handleSubmit` läuft (`src/components/auth/login-view.tsx:57`)
+- [x] **AC-14** — `/privacy` antwortet 404; im ausgelieferten Client-Chunk ist der Link-Zweig wegkompiliert („TURBOPACK unreachable"), es bleibt reiner Text (`register-view.tsx:35,127-137` → `PRIVACY_PAGE_EXISTS = false`). Genau die Regel, die AC-14 verlangt
+- [x] **AC-15** — Der vollständige Satz steht als `FormDescription` dauerhaft am Feld (`register-view.tsx:81-84`), kein Tooltip, kein Aufklappen, Zuordnung über `aria-describedby` (`src/components/ui/form.tsx:116`), keine Checkbox. Unit-Tests `register-view.test.tsx:25,35,55` grün
+
+**Erstmals unter ihrer ID verifiziert:**
+
+- [x] **AC-16** (Konto-Zähler, 20/15 Min, verbindungsunabhängig) — 20 Fehlversuche von **20 verschiedenen** `x-forwarded-for`-Adressen: alle 20 durchgelassen, Zähler `login:account:qa.ec9@example.com = 20`. Der **21.** Versuch mit **richtigem** Passwort von der unbelasteten Adresse `10.32.7.7` wurde abgewiesen. Leerung nach Erfolg gemessen: Zähler stand auf 5, nach erfolgreichem Login war die Zeile weg. Schlüssel schreibweise-unabhängig (`QA.EC9@EXAMPLE.COM` zählte auf denselben Schlüssel, 21→22). Unabhängig in Lane 2 reproduziert: 20 erlaubt, ab Nr. 21 abgewiesen
+- [x] **AC-17** (Passwort-Reset, 3/5 Min, **ohne** Erstattung) — Anfragen 1–3 bestätigt, 4 und 5 abgewiesen. Keine Erstattung bei Registrierung gegengeprüft: 5 **erfolgreiche** Registrierungen von einer Adresse, die 6. abgewiesen — der Erfolg kauft kein neues Budget. Eigener Scope, getrennt vom Login
+- [x] **AC-18** (Fail-Closed) — **Zählerausfall zur Laufzeit provoziert, ohne Code oder Konfiguration zu ändern:** ein 4000 Zeichen langer `x-forwarded-for` sprengt den Primärschlüssel-Index (`index row size 4024 exceeds btree version 4 maximum 2704`). Ergebnis mit **richtigem** Passwort: `HTTP 500`, **kein** Session-Cookie, Fehler `Drosselung nicht zählbar: …` (`src/lib/auth/throttle.ts:84`). Registrierung auf demselben Weg: `HTTP 500`, **0 angelegte Konten**. Passwort-Reset: `HTTP 500`. Zusätzlich wirft `createAdminClient()` bei fehlendem Schlüssel (`src/lib/supabase/admin.ts:26-35`); Unit-Test `src/lib/auth/throttle.test.ts:111` grün
+
+### Edge Cases
+
+- [x] **EC-1** — Echter Wettlauf: 4 gleichzeitige Registrierungen mit demselben Trainernamen in unterschiedlicher Schreibweise → genau **1** Konto und 1 Profil, die anderen 3 mit Feldfehler, **keine halb angelegten Konten**. Garantie im Code bestätigt: Unique-Index `0001_profiles.sql:13` plus Trigger in derselben Transaktion (`0001_profiles.sql:49-51`)
+- [x] **EC-2** — `GET /` und `GET /irgendwas` ohne Sitzung → `307 → /login`; `/login` ohne Sitzung → 200; `/login` **mit** Sitzung → `307 → /`
+- [x] **EC-3** — Identische Meldung, keine Mail für die unbekannte Adresse (siehe AC-10)
+- [x] **EC-4** — Versuch 6 und 7 innerhalb des Fensters beide abgewiesen, Meldung für bestehendes und unbekanntes Konto wortgleich. **Selbstheilung gemessen:** Adresse `10.70.0.16` um 22:04:40 gesperrt, um 22:05:57 (nach 70 s) kam ein Versuch wieder durch, Zähler danach 1
+- [x] **EC-5** — `ab`, `mein name`, `Pika🔥`, 26 Zeichen → jeweils `{"fieldErrors":{"trainerName":"Trainername: 3–20 Zeichen, nur Buchstaben, Zahlen und _"}}`
+- [!] **EC-6 — teilweise verifiziert.** Der Fehler-Renderpfad wurde zur Laufzeit erreicht (`{"error":"Die Verbindung ist fehlgeschlagen. Bitte erneut versuchen."}`), und die eingegebenen Werte bleiben nachweislich erhalten, weil die Actions ausschließlich `setServerError` setzen und den react-hook-form-Zustand nicht anfassen (`login-view.tsx:44-49`, `register-view.tsx:54-59`). **Nicht verifiziert:** ein echter Netzwerkausfall zu Supabase — dafür hätte der Auth-Container gestoppt werden müssen, was die beiden parallel laufenden Lanes zerstört hätte. Anzumerken: eine eigene „Erneut versuchen"-Schaltfläche gibt es nicht; die Möglichkeit besteht darin, dass das ausgefüllte Formular absendbar bleibt
+- [x] **EC-7** — Reset-Link mit **frischem, leerem Cookie-Jar** geöffnet (fremdes Gerät): `307 → /reset-password`, Sitzung serverseitig gesetzt, Passwort erfolgreich geändert. Die lokale Vorlage liefert korrekt `…/auth/confirm?token_hash=…&type=recovery&next=/reset-password` (aus Mailpit ausgelesen)
+
+### EC-8 / EC-9 — die akzeptierten Grenzen, gegen die Vertragszahlen gemessen
+
+Diese beiden Edge Cases beschreiben **bewusst akzeptiertes** Verhalten. Geprüft wurde deshalb nicht, ob das Verhalten wünschenswert ist, sondern ob die im Vertrag zugesagten **Zahlen noch stimmen**. Eine Abweichung wäre der Befund gewesen — es gab keine.
+
+| Zusage im Vertrag | Gemessen in diesem Lauf | Deckung |
+|---|---|---|
+| **EC-8:** ohne Tippfehler kommen **8 von 8** hinter einer Adresse hinein | 8 von 8, 0 abgewiesen, Zähler danach `login:ip:10.61.0.176 = 0` | ✔ identisch |
+| **EC-8:** bei je **einem** Tippfehler kommen **4 von 8** hinein, ab dem 5. Fehlversuch je Minute dicht | Spieler 1–4 drin, Spieler 5–8 „Zu viele Versuche von dieser Verbindung" → **4 von 8** | ✔ identisch |
+| **EC-8:** **25** Anmelde-/Abmelde-Zyklen ohne eine Abweisung | 25 von 25 erfolgreich, 0 abgewiesen, Zähler danach 0 | ✔ identisch |
+| **EC-9:** **20** Fehlversuche je 15 Min von **20 verschiedenen** Adressen kommen durch, danach ist der Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse draußen | 20 von 20 durchgelassen (Zähler = 20); 21. Versuch, richtiges Passwort, saubere Adresse → abgewiesen | ✔ identisch |
+
+**Ergebnis: keine Abweichung.** EC-8 und EC-9 sind `[x]` verifiziert als beschriebenes Soll-Verhalten. Sie sind **kein** offener Befund und werden in der Bug-Liste unten bewusst nicht geführt.
+
+### AC-8 getrennt: unbedingter Teil gegen bedingten Teil
+
+AC-8 ist das einzige Kriterium dieses Features mit einer **Bedingung**. Beides wird hier getrennt ausgewiesen, weil ein gemeinsames Häkchen die eine Hälfte mit der anderen decken würde.
+
+**Unbedingt — lokal vollständig belegt `[x]`:**
+
+| Zusage | Beleg |
+|---|---|
+| 5 Fehlversuche je Verbindung und Minute, der **6.** wird abgewiesen | Von einer Adresse gemessen; unabhängig in Lane 2 reproduziert (erster abgewiesener Versuch = Nr. 6) |
+| Abweisung **vor** der Zugangsdaten-Prüfung | `registerAttempt` in `src/lib/auth/actions.ts:84`, `signInWithPassword` erst in Zeile 95 |
+| Login und Registrierung zählen **getrennt** | Nach 6 Fehl-Logins auf `10.96.0.139` war der Login gesperrt, eine Registrierung von derselben Adresse ging durch; DB: `login:ip:10.96.0.139 = 7` neben `register:ip:10.96.0.139 = 1` |
+| Erstattung des **eigenen** Versuchs bei Erfolg | 4 Fehlversuche → 1 erfolgreicher Login → Zähler wieder auf **4** → der 5. Fehlversuch kam durch, der 6. wurde abgewiesen. Der Angreifer gewinnt durch den eigenen Login **keinen** Rateversuch (`0004_auth_throttle_refund.sql:40-51`) |
+| Atomarität unter Gleichzeitigkeit | Hochzählen und Prüfen in einem Statement, `on conflict do update … returning` (`0003_auth_throttle.sql:57-72`) |
+| Umgehung über eine matcher-ausgenommene Route | `loginAction` per POST an `/icon.png` **wird** erreicht — die Drosselung greift dort **identisch ab dem 6. Versuch**. Die Gegenmaßnahme zu BUG-30/31 hält |
+
+**Bedingt — lokal nicht erfüllt `[ ]`, hängt an der Deploy-Umgebung:**
+
+Die Zusage gilt laut Vertrag nur, wenn die anfragende IP verlässlich feststellbar ist. Lokal ist sie es nicht:
+
+- **Richtung (b), gemessen:** 40 Rateversuche gegen 40 verschiedene Konten mit rotierendem `x-forwarded-for` — **0 abgewiesen, in 3,0 s.** Unabhängig in beiden Lanes reproduziert. Der Dev-Server überschreibt einen mitgebrachten Header nicht; jeder gesetzte Wert wurde 1:1 zum Zählerschlüssel. Ebenso: **25 Konten in 7,7 s** angelegt, 0 abgewiesen
+- **Richtung (a), `[!] NOT VERIFIED`:** dass ohne jeden Header alle Spieler auf den Sammelschlüssel `unbekannt` fallen, ließ sich lokal **nicht** zeigen — der Next-Dev-Server setzt selbst `x-forwarded-for: ::1`; der Fallback `'unbekannt'` (`src/lib/auth/throttle.ts:65`) ist damit lokal unerreichbar. Beobachtet wurde stattdessen der gleichwertige Effekt: **alle** Anfragen ohne eigenen Header landeten auf dem **einen** Schlüssel `login:ip:::1`
+
+**Das ist kein neuer Befund.** Es ist die exakte Reproduktion des in `features/INDEX.md` geführten Deploy-Blockers **BUG-61**, samt dessen Zahlen. Die Schließbedingung bleibt unverändert: gemessen gegen die **echte Live-URL**, dass ein selbst gesetzter `x-forwarded-for` den Zähler nicht beeinflusst. Als eigenständiger Bug wäre der Zustand High; er wird bewusst als Deploy-Blocker geführt (Entscheidung vom 2026-09-05).
+
+### Security-Audit (Red Team)
+
+**20 Prüfungen belegt · 2 Befunde · 5 `[!] NOT VERIFIED`.**
+
+- [x] **Authentifizierungs-Umgehung** — `/` und `/nonexistent-protected` ohne Sitzung → 307 `/login`; `/auth/confirm` ohne Token → 307 `/reset-password?error=1`
+- [x] **Server Action über matcher-ausgenommenen Pfad** — erreichbar, aber gedrosselt (siehe AC-8-Tabelle). Kein Befund
+- [x] **Autorisierung / RLS** — anon-REST auf `profiles`, `runs`, `auth_throttle` liefert je `[]`, obwohl belegt (1268 / 410 / 380 Zeilen per `psql`) → echte RLS-Filterung, keine leeren Tabellen. RLS auf allen dreien aktiv
+- [x] **`auth_throttle` von außen nicht manipulierbar** — anon-DELETE löschte 0 Zeilen (380→380), anon-INSERT → `42501 new row violates RLS`. Der Zähler ist weder leerbar noch vergiftbar
+- [x] **Drossel-RPCs nur für `service_role`** — `register_auth_attempt`, `clear_auth_attempts`, `refund_auth_attempt` je `42501 permission denied for function` als anon
+- [x] **Input-Injection** — XSS und SQLi im Trainername sowie SQLi im E-Mail-Feld von Zod abgewiesen, `profiles` danach unverändert. Validierung greift **vor** dem Auth-Aufruf
+- [x] **Brute Force** — alle vier Zähler mit den oben genannten Zahlen belegt; Umgehung über einen eigenen Login zwischendurch ist geschlossen
+- [x] **Exponierte Geheimnisse** — 20 tatsächlich verlinkte Dateien der `/login`-Seite geladen und durchsucht. **Mit Positivkontrolle:** der Client-Text `Trainername` **wurde gefunden** → die Suche erreicht das ausgelieferte JavaScript. Service-Role-Wert, ANON-Wert, `sb_secret_…` und das Literal `service_role`: **kein Treffer**. Einschränkung: gegen den Dev-Server gemessen, die Produktions-Build-Messung ist in `design.md` dokumentiert
+- [x] **Sensible Daten in Antworten** — Server Actions geben ausschließlich `{error}` / `{fieldErrors}` zurück, keine Nutzerfelder
+- [x] **Zugangsdaten in der URL** — alle vier Auth-Formulare tragen `method="post"` (`login-view.tsx:56`, `register-view.tsx:68`, `forgot-password-view.tsx:65`, `reset-password-form.tsx:54`), im ausgelieferten HTML bestätigt. Kein nativer GET-Submit
+- [x] **Session-Cookie** — `HttpOnly: true`, `SameSite: lax`, `Secure` an `NODE_ENV === 'production'` gebunden (`src/lib/supabase/cookie-options.ts:19-23`), per JS nicht auslesbar. **Damit sieht der als BUG-13 geführte Punkt erledigt aus**; `Secure` ist erst an der Live-URL abschließend prüfbar
+- [ ] **BUG-65 — Antwortzeit verrät die Kontoexistenz** (Medium, neu)
+- [ ] **Security-Header fehlen** — deckt sich mit dem dokumentierten **BUG-12** (Deploy-Blocker, Medium). Lokal bestätigt weiterhin abwesend; kein neuer Befund
+
+### Bugs
+
+#### BUG-65: Die Antwortzeit des Logins verrät, ob ein Konto existiert
+**Severity: Medium** · betrifft AC-7
+
+Die Fehlermeldung ist wortgleich, die Antwortzeit nicht. 12 Messungen je Fall mit jeweils frischer Adresse: **falsches Passwort Median 176 ms / Mittel 164 ms**, **unbekannte Adresse Median 102 ms / Mittel 98 ms** — konstant rund **74 ms** Unterschied. Bestehende Konten laufen durch die Passwort-Hash-Prüfung, unbekannte kehren früher um.
+
+AC-7 ist im Wortlaut erfüllt, sein erklärtes Ziel („verrät nicht, ob die E-Mail-Adresse existiert") und die Erwartung aus `.claude/rules/security.md` („comparable response times where it matters") sind es nicht. Enumeration ist genau das, was Passwort-Spraying von Raten ins Effiziente hebt.
+
+**Warum Medium und nicht High:** Die Ursache sitzt in Supabase GoTrue (`signInWithPassword`), nicht im App-Code; die App kann sie nicht trivial glätten. Nicht von EC-8/EC-9 gedeckt — die betreffen die Drosselung, nicht das Timing.
+
+**Repro:** je 12 Logins gegen ein reales Konto (falsches Passwort) und gegen eine nicht existierende Adresse, jeweils mit frischem `x-forwarded-for`, Antwortzeiten messen.
+
+#### BUG-66: Ein neues Passwort, das dem alten entspricht, meldet „Verbindung fehlgeschlagen"
+**Severity: Medium** · betrifft AC-11
+
+`updatePasswordAction` mit dem aktuell geltenden Passwort liefert `{"error":"Die Verbindung ist fehlgeschlagen. Bitte erneut versuchen."}`. Supabase antwortet mit 422, die Fehlerzuordnung (`src/lib/auth/actions.ts:189-191`) kennt für diesen Fall nur den Netzwerkfehler. Der Nutzer sieht einen Verbindungsfehler für ein Feldproblem und erfährt nicht, was er ändern soll — dieselbe Fehlerklasse, die als BUG-9 und BUG-11 bereits zweimal behoben wurde.
+
+Workaround vorhanden (anderes Passwort wählen), deshalb Medium.
+
+**Repro:** einloggen, Passwort-Reset durchlaufen und als neues Passwort das geltende eingeben.
+
+#### BUG-67: Die Sperrmeldung nennt immer „diese Verbindung", auch wenn der Konto-Zähler sperrt
+**Severity: Low** · betrifft AC-16, EC-9
+
+Beim Aussperren über den Konto-Zähler wird der rechtmäßige Besitzer von einer völlig unbelasteten Adresse abgewiesen und liest „Zu viele Versuche von dieser Verbindung" (`src/lib/auth/error-mapping.ts:27-28`). AC-7 und EC-4 bleiben gewahrt — über die Kontoexistenz wird nichts verraten, weil der Konto-Zähler auch für nicht existierende Adressen zählt. Aber die Meldung führt in die Irre und schickt den Nutzer zum falschen Workaround („anderes WLAN versuchen"), obwohl Warten die einzige Abhilfe ist.
+
+#### BUG-68: Jeder 500 während der Registrierung wird als „Trainername bereits vergeben" gedeutet
+**Severity: Low** · betrifft AC-2, EC-1
+
+`mapRegisterError` (`src/lib/auth/error-mapping.ts:51-53`) deutet **jeden** Status 500 als vergebenen Trainernamen. Genau das macht EC-1 unter Gleichzeitigkeit korrekt — aber ein echter Datenbank- oder Auth-Ausfall während der Registrierung meldet dem Nutzer einen vergebenen Trainernamen statt einer Störung. Der Kommentar an der Stelle benennt die Annahme („nichts anderes in diesem Fluss erzeugt einen 500"), sie ist jedoch nicht abgesichert.
+
+#### BUG-69: `NEXT_PUBLIC_SITE_URL` wird verwendet, ist aber nicht dokumentiert
+**Severity: Low**
+
+`src/lib/auth/actions.ts:140` nutzt `NEXT_PUBLIC_SITE_URL` als Rückfallebene für `origin` beim Reset-Link. In `.env.local.example` steht die Variable nicht (dort nur `SUPABASE_SERVICE_ROLE_KEY:30`). Das verstößt gegen `.claude/rules/security.md` → „Any new environment variable must be documented in the example env file" — und trifft eine Variable, die beim Deploy gesetzt sein muss, damit der Reset-Link stimmt.
+
+#### BUG-70: `auth_throttle` trägt breite Tabellen-GRANTs für `anon` und `authenticated`
+**Severity: Low** (Defense-in-Depth)
+
+Die Tabelle trägt die Supabase-Standard-GRANTs (INSERT/SELECT/UPDATE/DELETE/TRUNCATE) für `anon` und `authenticated`. **Aktuell ungefährlich und gemessen wirkungslos**, weil RLS aktiv ist und **keine** Policy existiert (deny-all) — der Angriff darauf ist oben unter Security belegt fehlgeschlagen. Der Schutz hängt damit aber allein an „RLS an, Policy leer": Eine später versehentlich hinzugefügte Policy würde sofort die E-Mail-Adressen im Schlüssel `login:account:<adresse>` exponieren. Härtung: GRANTs für `anon`/`authenticated` auf dieser Tabelle explizit entziehen.
+
+#### Unverändert offen aus den Vorläufen
+- **BUG-61** (Deploy-Blocker) — in diesem Lauf mit seinen Zahlen reproduziert, siehe AC-8-Abschnitt
+- **BUG-12** Security-Header (Deploy-Blocker, Medium) — lokal weiterhin abwesend
+- **BUG-18** `X-Forwarded-Host` (Deploy-Blocker, PROJ-2)
+- **T4** und **T18** — offene `[user]`-Aufgaben, siehe eigenen Abschnitt
+
+### `[user]`-Aufgaben in `tasks.md`
+
+- [!] **T4 — Passwort-Mindestlänge (8) im gehosteten Projekt: offen.** Ein **Zugangsdaten-Pfad**, und die Skill-Regel wertet einen offenen `[user]`-Haken darauf als **High**. Das wird hier so ausgewiesen — mit zwei Einschränkungen, die der Nutzer kennen muss, um bewusst zu entscheiden: **(1)** Die Regel selbst ist lokal **durchgesetzt und gemessen** — Zod lehnt Passwörter unter 8 Zeichen auf beiden Pfaden ab (`src/lib/validation/auth.ts:26`), der Spiegel in `config.toml:199` ist gesetzt. Der Pfad ist also nicht ungeschützt; es fehlt die zweite Ebene beim Anbieter. **(2)** `features/INDEX.md` führt T4 als „erst nach dem ersten `/deploy`" — das trifft nach dem Wortlaut von `tasks.md:17` **nicht** zu: Die Aufgabe braucht „**nur** ein gehostetes Projekt, **keinen** App-Deploy", und ein gehostetes Projekt existiert (`Pokequiz-PRO`, gegen das am 2026-09-04 bereits gemessen wurde). **T4 ist damit heute setzbar.** Genaue Stelle: *Dashboard → Authentication → Sign In / Providers → Email → Minimum password length: 8*
+- [!] **T18 — Reset-Mail-Vorlage im gehosteten Projekt: offen.** Betrifft AC-11 und EC-7, **kein** Zugangsdaten-Rate-Pfad. Lokal ist die Vorlage gesetzt und der geräteübergreifende Reset damit nachgewiesen; ohne T18 verschickt die Produktion den PKCE-Standardlink und EC-7 ist dort erneut kaputt. Laut INDEX derzeit **nicht setzbar**, solange kein eigener SMTP-Dienst konfiguriert ist. Genaue Stelle: *Dashboard → Authentication → Email Templates → Reset Password*
+
+### Regression und automatisierte Tests
+
+| Prüfung | Befehl | Ergebnis |
+|---|---|---|
+| **Test** | `npm test` | ✅ 17 Dateien, **166/166** grün, zweimal reproduziert |
+| **Lint** | `npm run lint` | ✅ **72 Dateien, 0 Errors, 0 Warnings** — gegengeprüft mit `--format json`, dass der Lauf nicht leerläuft |
+| **Build** | `next build` | ✅ Exit 0, plus `tsc --noEmit` über den vollständigen Baum inkl. `tests/`, Exit 0 |
+| **E2E** | `npx playwright test` | ✅ **33/33** grün (11 Specs × Chromium, Firefox, Mobile Safari). Browser waren aus einem früheren `/e2e-tests`-Lauf vorhanden — **nichts nachinstalliert** |
+
+**Regression an Nachbar-Features: 0 Befunde.** Kein Feature trägt Status „Deployed"; geprüft wurde daher **PROJ-2** (Approved), das sich App-Shell, Proxy-Wächter, Startseite, Supabase-Server-Client und Datenbank mit PROJ-1 teilt:
+
+- Routen-Wächter intakt (`/` → 307 `/login`, `/login` → 200, `/reset-password` → 200)
+- Kopfzeile samt Abmelden funktioniert in allen drei Engines (`tests/PROJ-2-access-guard.spec.ts:37`), Verdrahtung bestätigt in `src/components/shell/site-header.tsx:73`
+- PROJ-2-Datenpfad schreibt durch: 9 neue Zeilen in `public.runs` während des Laufs
+- Schema unversehrt: alle 5 Migrationen angewandt, beide Trigger vorhanden, RLS auf allen drei Tabellen aktiv, PROJ-2s Policies unverändert; 1268 `profiles` zu 1268 `auth.users` — die 1:1-Zusage des Datenmodells hält
+- Aufräumen der Zählertabelle läuft: 334 Zeilen, davon **0 älter als eine Stunde**, älteste 3 Minuten alt
+
+**Der Production-Build lief in einer isolierten Kopie**, nicht im Projektordner, damit er sich nicht über ein geteiltes `.next/` mit dem laufenden Dev-Server der anderen Lanes ins Gehege kommt. Die dadurch entstandene Lücke (`tests/` war in der Kopie nicht enthalten) wurde mit `tsc --noEmit` im echten Projekt geschlossen. `git status --porcelain` war vor und nach allen Läufen leer — **keine Projektdatei verändert**.
+
+### Unit-Tests aus diesem Lauf
+
+**Keine neuen geschrieben — und das ist ein Befund, kein Auslassen.** Die isolierte Logik hinter den vier erstmals geprüften Kriterien ist bereits abgedeckt, und zwar an den Stellen, die dieser Lauf gegen die laufende App gegengemessen hat:
+
+- `src/lib/auth/throttle.test.ts` (13 Tests, grün) — Grenzwerte gegen `docs/production/rate-limiting.md`, getrennte Zählung von IP und Konto, Ablehnung sobald **einer** der Zähler ablehnt, der engere Reset-Grenzwert (AC-17), das Werfen statt Durchwinken bei Datenbankfehlern (AC-18), die Erstattung genau eines Versuchs (AC-8) und dass der IP-Zähler unter keinen Umständen gelöscht wird
+- `src/lib/auth/error-mapping.test.ts` (12), `src/lib/validation/auth.test.ts` (14), `src/app/auth/confirm/route.test.ts` (17), `src/proxy.test.ts` (11)
+
+Ein zusätzlicher Test hätte hier nur bestätigt, was diese schon prüfen. Die Lücken, die dieser Lauf gefunden hat (BUG-66, BUG-68), sind **Defekte, keine Testlücken** — sie gehören in `/build` behoben und dort mit einem Test abgesichert, nicht hier mit einem absichtlich roten Test dokumentiert.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser (Chrome/Firefox/Safari) und responsive Darstellung bei 375 / 768 / 1440 px** — kein Browser-Engine in `/qa`, kein Viewport. Betrifft die *sichtbare* Darstellung von AC-13, AC-14, AC-15 und des AuthCard-Umschalters. Dass die Playwright-Suite in drei Engines grün lief, belegt Funktion, **nicht Layout**
+- [!] **Visuelle Regression an geteilten Komponenten** — kein Screenshot-Baseline-Vergleich vorhanden und kein Browser für einen Sichtvergleich
+- [!] **AC-5, „Browser schließen und zurückkehren"** — nicht beobachtbar. Belegt sind die Cookie-Lebensdauer und das Fehlen jeder Session-Ablauffrist
+- [!] **AC-13, das *visuelle* Ausbleiben des Seiten-Neuladens** — der Mechanismus ist im Code belegt, die Beobachtung braucht einen Browser
+- [!] **EC-6, echter Netzwerkausfall** — nicht provoziert; der Auth-Container hätte gestoppt werden müssen, was die beiden parallelen Lanes zerstört hätte
+- [!] **EC-4, das 15-Minuten-Fenster des Konto-Zählers** — Laufzeit nicht abgewartet. Die Selbstheilung ist am 60-Sekunden-Fenster gemessen, die Fensterlogik ist für beide dieselbe (`0003_auth_throttle.sql:62-71`)
+- [!] **AC-8, Richtung (a) des Blockers** („Host setzt gar keinen Header") — lokal unerreichbar, der Dev-Server setzt selbst `x-forwarded-for: ::1`
+- [!] **AC-18, Datenbank zur Laufzeit unerreichbar** — der Zählerausfall wurde über einen Index-Sprengsatz provoziert (belegt), ein echter Verbindungsverlust nicht
+- [!] **Secrets im Produktions-Build** — hier gegen den Dev-Server geprüft, mit Positivkontrolle. Die `next build`-Messung ist in `design.md` dokumentiert, wurde in diesem Lauf nicht wiederholt
+- [!] **Security-Header und die Schließbedingung von BUG-61** — nur gegen die echte Live-URL prüfbar
+- [!] **T4 und T18** — Anbieter-Einstellungen im Dashboard des gehosteten Projekts, lokal nicht prüfbar. Genaue Pfade oben genannt
+- [!] **Build im Projektordner selbst** — bewusst ausgelassen wegen des geteilten `.next/`; Ersatzbelege oben
+
+### Verdikt
+
+**NOT READY.** Kein Critical. Kein neuer High-Befund im Code — aber die offene `[user]`-Aufgabe **T4** liegt auf einem Zugangsdaten-Pfad und wird nach der Skill-Regel als **High** geführt. Neu gefunden: **2 Medium** (BUG-65, BUG-66) und **4 Low** (BUG-67, BUG-68, BUG-69, BUG-70).
+
+**Was dieser Lauf positiv festgestellt hat:** Alle 17 Acceptance Criteria und alle 9 Edge Cases wurden gegen die laufende App geprüft, keines ist defekt. Die vier erstmals unter ihrer ID geprüften Kriterien (AC-16, AC-17, AC-18) und die beiden neuen Edge Cases halten ihre Zahlen **exakt** — auch AC-18 wurde nicht nur im Code gelesen, sondern durch einen echten, provozierten Zählerausfall zur Laufzeit belegt. Test, Lint, Build und die vorhandene E2E-Suite sind grün, es gibt keine Regression an PROJ-2.
+
+**Was READY im Weg steht:** allein T4, und der ist nach Aktenlage **heute setzbar** (siehe `[user]`-Abschnitt) — nicht, wie `INDEX.md` behauptet, erst nach dem ersten Deploy.
+
+`features/INDEX.md` bleibt bei **In Review**.
