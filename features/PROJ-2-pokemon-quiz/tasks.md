@@ -122,7 +122,11 @@ Es ist also **Kontention im Messaufbau, kein Produktfehler** — passend dazu tr
 
 **Warum der Wächter nicht weiter aufgebohrt wird.** Ein Prüfer, der entscheidet, ob das Ergebnis von `getUser` den Ablauf tatsächlich steuert, wäre eine Datenflussanalyse. Der dritte Anlauf auf dieselbe Zusicherung würde denselben Fehler zum dritten Mal machen: einen Prüfer bauen, der etwas Schwächeres misst als sein Name behauptet — und dem man deshalb zu Unrecht vertraut. Entscheidung des Nutzers am 2026-09-05.
 
-**Offen und ausdrücklich benannt:** BUG-29, BUG-30 und BUG-31 (Zugangsdaten-Pfad, Proxy-Matcher, öffentliche Pfade) werden **zusammen** als Drosselung an den Credential-Actions gelöst — unabhängig vom Pfad. Entscheidung des Nutzers am 2026-09-05; der Mechanismus ist noch zu wählen.
+- [x] T33  Drosselung der Zugangsdaten-Pfade (BUG-29, BUG-30, BUG-31 in einem Zug): Zähler in Postgres, aufgerufen **aus den Actions** statt aus dem Proxy — eine Schranke am Pfad ist bei Server Actions umgehbar. Zwei Zähler (IP und Konto), Grenzwerte aus `docs/production/rate-limiting.md`, Zurücksetzen nach erfolgreicher Anmeldung. Die Zählfunktionen sind nur für `service_role` ausführbar, sonst wäre die Drosselung eine Aussperr-Waffe  · files: supabase/migrations/0003_auth_throttle.sql, src/lib/supabase/admin.ts, src/lib/auth/throttle.ts, src/lib/auth/actions.ts, src/lib/auth/throttle.test.ts, .env.local.example  · → PROJ-1 AC-8, EC-4
+
+- [ ] **T34 [user]  `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` eintragen.** Lokal der Wert aus `npx supabase status` (SERVICE_ROLE_KEY), gehostet aus Dashboard → Project Settings → API. **Ohne ihn kann sich niemand anmelden** — die Drosselung ist bewusst fail-closed, siehe `features/PROJ-1-user-login/design.md`. Solange dieser Punkt offen ist, ist `npm run test:e2e` rot.
+
+**Entscheidungen und ihr Preis** stehen in `features/PROJ-1-user-login/design.md` → „Drosselung der Zugangsdaten-Pfade": Postgres statt Upstash (kein zweiter externer Blocker neben SMTP), Service-Role statt Browser-Schlüssel (sonst Aussperr-Waffe), fail-closed statt fail-open, und ein bewusst weiter gefasster Konto-Zähler, weil ein enger ohne CAPTCHA jedes Konto aussperrbar machen würde.
 
 ## Backlog — bewusst offen
 

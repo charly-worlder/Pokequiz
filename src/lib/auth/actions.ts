@@ -3,6 +3,7 @@
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { clearAttempts, registerAttempt } from '@/lib/auth/throttle'
 import {
   loginSchema,
   registerSchema,
@@ -15,6 +16,7 @@ import {
   mapPasswordResetRequestError,
   mapRegisterError,
   NETWORK_ERROR_MESSAGE,
+  THROTTLED_MESSAGE,
   INVALID_RESET_LINK_MESSAGE,
   type ActionState,
 } from '@/lib/auth/error-mapping'
@@ -36,6 +38,13 @@ export async function registerAction(
   }
 
   const { trainerName, email, password } = parsed.data
+
+  // BUG-29: gezählt wird **hier**, nicht im Proxy. Eine Server Action ist an
+  // keine Route gebunden — eine Schranke am Pfad ließe sich über `/privacy` oder
+  // ein beliebiges `*.png` umgehen (BUG-30, BUG-31).
+  if (!(await registerAttempt('register', email)).allowed) {
+    return { error: THROTTLED_MESSAGE }
+  }
 
   let supabase
   try {
@@ -70,6 +79,12 @@ export async function loginAction(
     return { fieldErrors: fieldErrorsFromZod(parsed.error.issues) }
   }
 
+  // BUG-29: siehe registerAction. Der Zähler läuft vor dem Auth-Aufruf, damit
+  // ein Rateversuch gar nicht erst nach oben durchgereicht wird.
+  if (!(await registerAttempt('login', parsed.data.email)).allowed) {
+    return { error: THROTTLED_MESSAGE }
+  }
+
   let supabase
   try {
     supabase = await createClient()
@@ -82,6 +97,10 @@ export async function loginAction(
   if (error) {
     return mapLoginError(error)
   }
+
+  // Geglückt: Zähler leeren, damit vier Tippfehler vor dem richtigen Passwort
+  // nicht den Rest des Fensters nachwirken.
+  await clearAttempts('login', parsed.data.email)
 
   redirect('/')
 }
@@ -100,6 +119,12 @@ export async function requestPasswordResetAction(
 
   if (!parsed.success) {
     return { fieldErrors: fieldErrorsFromZod(parsed.error.issues) }
+  }
+
+  // BUG-29: eigener, engerer Grenzwert (3 pro 5 Minuten). Der Reset verschickt
+  // E-Mail, ist also nicht nur ein Rate-, sondern auch ein Belästigungsvektor.
+  if (!(await registerAttempt('password-reset', parsed.data.email)).allowed) {
+    return { error: THROTTLED_MESSAGE }
   }
 
   let supabase
