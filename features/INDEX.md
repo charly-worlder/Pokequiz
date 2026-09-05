@@ -46,6 +46,7 @@
 | PROJ-1 | **AC-11 / AC-12** — der Passwort-Reset-Link hängt an Site-URL und Redirect-URLs des gehosteten Projekts | erst gegen das gehostete Projekt |
 | PROJ-1 | ~~**Warnhinweis am Trainername-Feld**~~ — **erledigt** am 2026-09-03: `AC-15` gebaut (`T14`) und im QA-Lauf verifiziert | ✅ |
 | PROJ-1 | **Security-Header fehlen** — `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` sind nirgends gesetzt (BUG-12). Werden beim Host konfiguriert und müssen gegen die Live-URL geprüft werden. **Am 2026-09-04 im QA-Lauf zu PROJ-2 neu bewertet: Medium statt Low** — es trifft jede Route, auch die Shell, und `Referrer-Policy` ist in einem Produkt mit Bild-Weiterleitung nicht kosmetisch | beim Deploy |
+| PROJ-1 | **Die Drosselung braucht einen Host, der `x-forwarded-for` selbst setzt** (BUG-53) — ohne einen solchen Header fallen **alle** Spieler auf den gemeinsamen Zählerschlüssel `unbekannt` mit 5 Versuchen pro Minute; der Schutz wird dann zur Aussperr-Waffe gegen die eigenen Nutzer. Beim gewählten Host prüfen und clientseitige Werte verwerfen — dieselbe Hausaufgabe wie bei BUG-18 | beim Deploy |
 | PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen | beim Deploy |
 
 ## Next Available ID: PROJ-5
