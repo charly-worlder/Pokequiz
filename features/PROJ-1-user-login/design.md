@@ -191,6 +191,8 @@ Rund **25 ms mehr pro Navigation**, etwa +20 %. In Produktion liegt der Auth-Ser
 
 Eingebaut nach **BUG-29** aus dem QA-Lauf zu PROJ-2: 35 Fehlversuche gegen ein bestehendes Konto ergaben 35-mal dieselbe Antwort, ohne Sperre — und zwar über `POST /`, nicht über `/login`. Next.js bindet eine Server Action nicht an ihre Route, und der Proxy-Matcher nimmt Bild-Endungen aus; eine Schranke am Pfad war damit über `/privacy` oder ein beliebiges `*.png` umgehbar (BUG-30, BUG-31). **Die Drosselung sitzt deshalb in den Actions selbst.**
 
+**Wo das im Vertrag steht** (seit `/refine PROJ-1` am 2026-09-05 — vorher beschrieb `spec.md` an dieser Stelle noch Supabases eingebaute Regel): **AC-8** Verbindungs-Zähler samt Erstattung und der Bedingung, dass die IP überhaupt feststellbar ist · **AC-16** Konto-Zähler · **AC-17** Passwort-Reset, ohne Erstattung · **AC-18** Verweigern statt Durchlassen im Fehlerfall · **EC-4** Verhalten an der Grenze · **EC-8/EC-9** die bewusst akzeptierten Grenzen. Gebaut unter **T20–T23** in `tasks.md`.
+
 | Decision | Rationale | Alternative considered | Trade-off | Date |
 | --- | --- | --- | --- | --- |
 | **Zähler in Postgres statt Upstash Redis** | Das Stack-Pack nennt Upstash (`docs/stacks/framework-nextjs.md`). Dagegen sprach der Projektstand, nicht die Technik: Dieses Projekt hängt bereits an einem externen Dienst, der seit Tagen blockiert (SMTP, `docs/PRD.md`). Ein zweiter externer Blocker auf einem High-Befund wäre der falsche Tausch. Postgres ist da, funktioniert lokal und gehostet gleich und braucht kein neues Konto | Upstash Redis nach Stack-Pack; ein Zähler im Prozessspeicher | **Jeder Rateversuch schreibt in die Produktivdatenbank** — der Angreifer flutet genau das, was ihn bremsen soll. Bei dieser Größenordnung mit Index und schmaler Tabelle unkritisch, und Supabases eigenes Per-IP-Limit sitzt als Untergrenze davor. Upstash bleibt der dokumentierte Ausbauweg | 2026-09-05 |
@@ -277,6 +279,8 @@ Schwerer als die Größe wiegt die Aufbewahrung: Der Konto-Schlüssel lautet `lo
 ### Bewusst akzeptierte Risiken der Drosselung (Stand 2026-09-05)
 
 Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.** Sie stehen hier, damit niemand sie später für ein Versehen hält und beiläufig „repariert" — jede Korrektur verschiebt die Abwägung zwischen IP- und Konto-Zähler und gehört entschieden, nicht nebenbei geändert.
+
+> **Seit dem 2026-09-05 stehen beide auch im Vertrag** — BUG-55 als **EC-8**, BUG-57 als **EC-9** in `spec.md` (nachgetragen durch `/refine PROJ-1`). Der Grund: Eine Grenze, die nur im Design steht, wird beim nächsten QA-Lauf erneut als frischer Befund gemeldet. Als Edge Case ist sie prüfbares Soll-Verhalten. Die Zahlen unten sind die Quelle, der Vertrag die Zusage — wer eine davon ändert, ändert beide.
 
 | Risiko | Die genaue Zahl | Warum akzeptiert |
 | --- | --- | --- |
