@@ -12,10 +12,14 @@ follows is only *how Supabase does it*.
 
 ## Where migrations live, and the pre-flight check
 
-_Reached from `/deploy`, step 1._
+_Reached from `/deploy`, step 1, and from `/architecture` and `/audit` when they measure the codebase
+map's age._
 
-Schema changes are versioned `.sql` files in **`supabase/migrations/`**, one per change. That path is
-what `/deploy`'s pre-flight checks mean by "the migrations path":
+Schema changes are versioned `.sql` files in **`supabase/migrations/`**, one per change — and because
+Row Level Security policies, database functions and auth triggers are written as migrations too, a
+new file there is the one signal that the schema *or* the access rules changed since a codebase map
+was taken: "added since the map's commit" is filtered to `supabase/migrations/*.sql` in this backend.
+That path is also what `/deploy`'s pre-flight checks mean by "the migrations path":
 
 ```bash
 git log -- supabase/migrations/
@@ -324,8 +328,9 @@ Work top to bottom and hand off only what needs a human:
 - **Stack running** — not up → run `supabase start`. **Warn first:** the first run downloads several
   GB of Docker images and takes a few minutes. When it finishes it prints the local API URL and anon
   key.
-- **Clients wired** — the Supabase client code in `src/lib/supabase.ts` is active (uncommented) so
-  features can import it.
+- **Clients wired** — the Supabase client code is active so features can import it: in a
+  kit-scaffolded project that is `src/lib/supabase.ts` (shipped commented out); in any other project,
+  wherever it creates its Supabase client — find it, do not add a second one.
 - **Local keys in the env file** — tell the user which values from `supabase start` go where. You do
   not read or write that file; these keys are local-only and safe, but they are still theirs to
   paste.

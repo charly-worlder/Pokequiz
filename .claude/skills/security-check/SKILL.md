@@ -36,7 +36,8 @@ on it.
   enforces per-user access and check *that*, read-only. Report "not checked, and here is why" rather than
   silently dropping the most important test in the list.
 - **`platform` is not `web`** → most of this does not apply. An MCP server's surface is its tool scope,
-  what its tool results can inject, and what secrets they leak; a mobile app's is storage and transport.
+  what its tool results can inject, and what secrets they leak; a mobile or desktop app's is storage and
+  transport — plus, for desktop, what the installer and the updater trust (signing, the update URL).
   Say plainly which checks you skipped and why, and do not report a green result for a surface you never
   looked at.
 

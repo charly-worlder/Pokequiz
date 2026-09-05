@@ -66,6 +66,20 @@ Every checked box in `qa-report.md` is a claim that someone will trust without r
 
 A false green here is worse than a red: a red gets fixed, a false green ships.
 
+## Independence — the verifier never carries the builder's context
+Most users type `/qa` right after `/build`, in the same conversation. Then the verifier knows exactly how the feature was built, which shortcuts were taken and what was skipped — and it leans toward confirming its own work. The red-team stance above is worthless when it is asked of the very context that built the gaps. So the verification runs **in a context that has never seen the build**:
+
+- **Your agent has named sub-agents and `qa-engineer` is installed** (Claude Code): delegate the verification — Steps 1–5 below — to `qa-engineer` sub-agents. Hand each one **only**: the feature folder path; the AC-/EC-ID list; the path to this skill file and **which step is its scope** (`.claude/skills/qa/SKILL.md` → Step 2, 3 or 4 — the step text is the checklist, and a sub-agent that was not pointed at it works from memory); a pointer to `.ai-eng-kit` (`probe`, `commands`, `language`) and `docs/stacks/`; and how the app is reachable (next paragraph). **Never** this conversation, never "what was built", never a summary of the implementation. Fan out by scope: **(1) acceptance verification** (Step 2), **(2) security red-team** (Step 3), **(3) regression** (Step 4) — three `qa-engineer` runs in parallel, disjoint scopes, one owner. (Sub-agents could fork further; do not let them — nested forks blur who verified what.) Each returns raw findings keyed by AC-ID / EC-ID with the evidence the Evidence Rule demands; none of them self-certifies and none writes `qa-report.md`. **This session is the one owner**: it merges the findings, writes the report (Step 7), writes the unit tests (Step 6), runs the user dialogue (Step 8) and the recorded-human-test route — a sub-agent cannot talk to the user.
+- **Your agent has no named sub-agents**: `/qa` runs in a **fresh session**. If this conversation already contains the `/build` of this feature, stop and say so — "Start a new session and run `/qa` there; the verifier must not know how the feature was built" — and do not verify here. An honest hand-off costs one restart; a verifier that knows the answers costs a false green.
+
+**How the verifiers reach the app — decided by `probe.kind`, before you fan out:**
+- `http` → **start the app once, here** (`commands.dev`) and hand `probe.baseUrl` to every sub-agent; three verifiers each starting a dev server collide on the port. A `null` `commands.dev` is a question for the user — ask it now, a sub-agent cannot.
+- `stdio-jsonrpc` → there is no shared URL and no port to collide on: tell each sub-agent to spawn its own process with `commands.dev` and talk to it over the protocol.
+- `simulator` or `none` → there is nothing to start. Tell each sub-agent so explicitly; every runtime check comes back `[!] NOT VERIFIED — no way to run and probe this project was recorded` (that exact reason, see above), and the recorded-human-test route in the Production-Ready Decision stays yours.
+- `null` → do not fan out at all; see the `probe` list above.
+
+Steps 1–5 below are written for whoever performs them — the sub-agents or this fresh session — and hold unchanged either way. A tiny feature (1–2 AC, no deployed neighbours) needs one `qa-engineer` run, not three: hand that one run **all three scopes, named, in the order 2 → 3 → 4**, so its scope rule still holds; never skip the delegation itself to save the fork.
+
 ## Workflow
 
 ### 1. Read Feature Folder
@@ -77,9 +91,9 @@ A false green here is worse than a red: a red gets fixed, a false green ships.
 ### 2. Functional Verification
 You have **no browser** (see the note above). So verify against what you can actually observe — the running app over HTTP, the test suites, and the source:
 
-- Test EVERY acceptance criterion (mark pass/fail) using: automated tests you run, requests against the app started with `commands.dev` and probed the way `probe` says, and inspection of the implementing code
+- Test EVERY acceptance criterion (mark pass/fail) using: automated tests you run, requests against the running app (started once by the owner — see Independence — and probed the way `probe` says), and inspection of the implementing code
 - Test ALL documented edge cases, plus undocumented ones you identify
-- For AC that depend on rendered output, assert against the server-rendered HTML (`curl http://localhost:3000/…`) and the component source — not on a guess about how it looks
+- For AC that depend on rendered output, assert against the server-rendered HTML (`curl <probe.baseUrl>/…`) and the component source — not on a guess about how it looks
 
 **What you cannot verify here — mark `[!] NOT VERIFIED` with the reason, never `[x]`:**
 - Cross-browser behaviour (Chrome / Firefox / Safari) — no browser engine available
@@ -94,7 +108,7 @@ These belong to `/e2e-tests` or a human pass. Say so in the report instead of qu
 ### 3. Security Audit (Red Team)
 These checks are independent of `/build`'s build-time security gates (RLS, auth, input validation) — defense in depth, not duplication. Audit as if those gates could have gaps.
 
-Think like an attacker. Every one of these is reachable **without a browser** — start the app with `commands.dev` and probe it the way `probe` says (over HTTP, over its protocol, or not at all), then corroborate in the source. Each result goes into the report with its evidence:
+Think like an attacker. Every one of these is reachable **without a browser** — probe the running app the way `probe` says (over HTTP at the base URL you were given, over its protocol, or not at all), then corroborate in the source. Each result goes into the report with its evidence:
 
 - **Authentication bypass** — request protected routes/APIs with no session (`curl -i`). A 200 where a redirect or 401 belongs is a bug. Corroborate in the middleware/route guard.
 - **Authorization** — request user Y's resources while authenticated as user X (two sessions, or two public keys). Corroborate against the data-layer access rules in this project's schema; `docs/stacks/backend-<value>.md` says where they live and what they are called.
@@ -114,8 +128,7 @@ Verify existing features still work:
 - Verify no visual regressions on shared components
 
 ### 5. Run Automated Tests
-Run the existing test suites before manual testing:
-Run them with `commands.test` from `.ai-eng-kit` — that is what this project recorded, and it stays right when scripts are renamed. `docs/stacks/tests-*.md` covers the kit's own runners.
+Run the existing test suites with `commands.test` from `.ai-eng-kit` — that is what this project recorded, and it stays right when scripts are renamed. `docs/stacks/tests-*.md` covers the kit's own runners.
 
 If a critical-path E2E suite already exists from a previous `/e2e-tests` run, run it as regression too. If none exists yet, **skip it** — never install a browser runner here; that happens only in `/e2e-tests`, and only after telling the user what it downloads.
 
@@ -123,17 +136,8 @@ Note any failures — these are regressions and must be treated as High bugs.
 
 Route integration tests are authored by `/build` and run here as regression; `/qa` authors unit tests for isolated logic (Step 6). End-to-end browser tests are written separately by `/e2e-tests` for critical journeys.
 
-### 5b. Fan Out Parallel Verification Lanes (Subagents)
-The independent parts of verification fan out as parallel **subagents via your agent's own sub-agent tool** (NOT a workflow tool, NO special keyword). Spawn lanes whose outputs are disjoint, then aggregate. Lanes:
-
-- **(a) Security Red-Team lane.** Runs the full attacker checklist from Step 3 (auth bypass, authorization across users, injection, rate limiting, exposed secrets, sensitive data in responses).
-- **(b) Regression lane.** Exercises features listed in `features/INDEX.md` with status **Deployed** plus related shared components (Step 4).
-
-Each subagent gets its own context and reports raw findings back; subagents do NOT self-certify. `/qa` remains the ONE owner that merges all lane outputs, keys every finding to its AC-ID / EC-ID in `qa-report.md`, and renders the final production-ready judgment.
-
-Use lanes where the isolation pays off. For a tiny feature (1–2 AC, no deployed neighbors) just run the steps inline — don't fork for its own sake.
-
-**If your agent has no sub-agents, run the lanes one after another.** The parallelism is an optimization; the disjoint outputs and the single verification owner are what must hold.
+### 5b. Merging the lanes (owner only — not part of a sub-agent's scope)
+The three scopes — acceptance verification (Step 2), security red-team (Step 3), regression (Step 4) — are the lanes named under **Independence** above: parallel `qa-engineer` runs with disjoint scopes where your agent has named sub-agents, one after another in a fresh session where it has not. Each lane reports raw findings back and does NOT self-certify; `/qa` remains the ONE owner that merges all lane outputs, keys every finding to its AC-ID / EC-ID in `qa-report.md`, and renders the final production-ready judgment. The parallelism is an optimization; the disjoint scopes, the clean context and the single verification owner are what must hold.
 
 ### 6. Write Unit Tests
 Before E2E tests, identify and test isolated logic with this project's test runner (`stack.test`; `docs/stacks/tests-*.md` where one matches, otherwise follow the tests already in the repo). Place them **where this project places its tests** — co-located next to the source file in a kit-scaffolded project (`src/hooks/useFeature.test.ts` beside `src/hooks/useFeature.ts`):
@@ -196,7 +200,7 @@ If your context was compacted mid-task:
 - NEVER fix bugs yourself - that is for the `/build` skill
 - Focus: Find, Document, Prioritize
 - Be thorough and objective: report even small bugs
-- Write `qa-report.md` in the project's working language (memory file → Key Conventions) — it is a document the product team reads, not a log
+- Write `qa-report.md` in the project's working language (`.ai-eng-kit` → `language`, mirrored in the memory file → Key Conventions) — it is a document the product team reads, not a log
 
 ## Production-Ready Decision
 - **READY:** No Critical or High bugs remaining — **and at least the runtime acceptance criteria were actually exercised**, by you or by a recorded human test.
@@ -214,7 +218,7 @@ If your context was compacted mid-task:
 - [ ] For timing EC: the guarantee named in `design.md` (constraint, transaction, idempotency key) confirmed in the code, with the `file:line` as evidence
 - [ ] Additional edge cases identified and tested
 - [ ] Browser-dependent checks (cross-browser, responsive, DevTools) marked `[!] NOT VERIFIED` with reason — not ticked
-- [ ] Parallel verification lanes fanned out where it pays off (security, regression) and aggregated
+- [ ] Verification ran in a context that never saw the build — `qa-engineer` sub-agents with only the folder, the IDs and `.ai-eng-kit`, or a fresh session — and the lanes were aggregated by this one owner
 - [ ] Security audit completed (red-team perspective), every check either evidenced or marked NOT VERIFIED
 - [ ] `[user]` tasks in `tasks.md` checked: ticked ones verified where observable, open ones on a credential path reported as High (a spec carrying `> Reconstructed from code` has no `tasks.md` — expected, skip this line, and read the spec's Open Questions instead: each deviation listed there is a failure you are expected to find)
 - [ ] Regression test on related features

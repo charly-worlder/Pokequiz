@@ -1,5 +1,5 @@
 {
-  "version": "0.5.1",
+  "version": "0.5.2",
   "mode": "new",
   "language": "de",
   "agents": [
@@ -79,5 +79,43 @@
       "dsg.md",
       "gdpr.md"
     ]
+  },
+  "hashes": {
+    ".claude/skills/architecture": "b64d11e3884e4655",
+    ".claude/skills/audit": "d43bdaaa4e94b133",
+    ".claude/skills/build": "43d41377e4d2fe61",
+    ".claude/skills/cleanup": "5f8b6fe7e1f9b19b",
+    ".claude/skills/deploy": "7d83af790e99a005",
+    ".claude/skills/dsgvo": "a2f66eaa6de6d5fd",
+    ".claude/skills/e2e-tests": "fe0f54758c495687",
+    ".claude/skills/help": "265884fedfb83461",
+    ".claude/skills/init": "6823647c20b7c665",
+    ".claude/skills/map": "12e93e10974963ff",
+    ".claude/skills/qa": "bfd94f20ac88ba23",
+    ".claude/skills/refactor": "e670f7dbe5aa8291",
+    ".claude/skills/refine": "55d531a289ce6e65",
+    ".claude/skills/reverse-spec": "464fc6c3d1745428",
+    ".claude/skills/security-check": "d400cc736d4b5469",
+    ".claude/skills/starter-kit-migration": "49e6c87d896270ef",
+    ".claude/skills/tasks": "4f7b8fe560792069",
+    ".claude/skills/verify-setup": "7a8dd0347c2da1df",
+    ".claude/skills/write-spec": "984dfde56ea6101e",
+    ".claude/rules/general.md": "7f37b5882a004b69",
+    ".claude/rules/security.md": "ddd99b4b1754878b",
+    ".claude/agents/qa-engineer.md": "81e98bdd1209c07f",
+    "docs/production/database-optimization.md": "ea25a896ca251692",
+    "docs/production/error-tracking.md": "9a26ae3d0029ae96",
+    "docs/production/performance.md": "c592f2aa3f8eb761",
+    "docs/production/rate-limiting.md": "ae53c1276171f153",
+    "docs/production/security-headers.md": "e0d533266cc33ef2",
+    "docs/stacks/backend-supabase.md": "3c3bce2f2ba7e8ef",
+    "docs/stacks/deploy-hostinger.md": "e695932a009c76fc",
+    "docs/stacks/deploy-vercel.md": "76675af7e1486260",
+    "docs/stacks/framework-nextjs.md": "58df5b91ac520643",
+    "docs/stacks/tests-vitest-playwright.md": "512feb9407368171",
+    "docs/stacks/ui-shadcn.md": "86c2202698f1a17f",
+    "docs/law/ai-act.md": "b6574aab246dfb1a",
+    "docs/law/dsg.md": "3e1892eb5267a198",
+    "docs/law/gdpr.md": "f9672b0986f9eb55"
   }
 }

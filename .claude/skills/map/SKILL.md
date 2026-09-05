@@ -14,14 +14,15 @@ The map is **evidence, not opinion**. It says what the code does and where, neve
 
 ## When to run
 - **Before `/init` in `mode: existing`** — the normal case. `/init` reads `docs/codebase/` first and turns it into proposals.
-- **After large changes** (`/map --refresh`, or just `/map` again) — the map is a snapshot, and `/architecture` trusts it. A refresh re-reads everything, rewrites the five documents and says what changed.
+- **After large changes** (`/map --refresh`, or just `/map` again) — the map is a snapshot, and `/architecture` trusts it only as far as its **Stand** reaches: every document records the commit it was mapped at, and `/architecture` and `/audit` count the routes, tables and auth files added since. When one of them sends you here, that is why. A refresh re-reads everything, rewrites the five documents and says what changed since that commit.
 - **Not** in an empty project: there is nothing to map. Say so and hand off to `/init`.
 
 ## Before Starting
 1. Read `.ai-eng-kit` → `mode`, `platform`, `stack`, `commands`, `probe`. `null` means "no file stated it" — the map may *propose* a value with its evidence, and only `/init` may record one.
-2. Check whether `docs/codebase/` already holds a map. If it does, this is a refresh: keep the old files readable until the new ones are written, then report what moved (new routes, new tables, concerns resolved or added).
-3. Check whether `graphify-out/graph.json` exists at the project root. If it does, the project has a knowledge graph from [graphify](https://github.com/Graphify-Labs/graphify): dependency edges, communities, shortest paths — use it (`graphify query`, `graphify path`, `GRAPH_REPORT.md`) wherever a mapper would otherwise trace imports by hand. If it does not, **do not install it and do not suggest it as a prerequisite**; read the code directly. Mention once, at the end, that the graph is an optional accelerator for the next refresh — nothing more.
-4. Read `.gitignore` and note the generated folders (`node_modules`, `vendor`, `.next`, `dist`, `build`, `__pycache__`, …). Mappers skip them; a map of `node_modules` is a map of someone else's code.
+2. Take the **Stand** once: `git rev-parse --short HEAD` and today's date. Every mapper writes both into the line under its document's title, and so do you in `features.md` — the same commit in all five files, because it is what `/architecture` and `/audit` measure the map's age against. (No git repository → write the date alone and say in the output that the map cannot be dated by commit.)
+3. Check whether `docs/codebase/` already holds a map. If it does, this is a refresh: read the old Stand from the header of `architecture.md`, keep the old files readable until the new ones are written, then report what moved since that commit — `git log --diff-filter=A --name-only --format= <old>..HEAD` for the additions, plus what the new documents say differently (new routes, new tables, concerns resolved or added). An old map without a commit in its header is compared by date (`git log --since=<date>`).
+4. Check whether `graphify-out/graph.json` exists at the project root. If it does, the project has a knowledge graph from [graphify](https://github.com/Graphify-Labs/graphify): dependency edges, communities, shortest paths — use it (`graphify query`, `graphify path`, `GRAPH_REPORT.md`) wherever a mapper would otherwise trace imports by hand. If it does not, **do not install it and do not suggest it as a prerequisite**; read the code directly. Mention once, at the end, that the graph is an optional accelerator for the next refresh — nothing more.
+5. Read `.gitignore` and note the generated folders (`node_modules`, `vendor`, `.next`, `dist`, `build`, `__pycache__`, …). Mappers skip them; a map of `node_modules` is a map of someone else's code.
 
 ## The four focus areas
 Each focus area is one mapper with one brief — the brief is `.claude/skills/map/mapper.md`, and it carries the document templates and the rules every mapper follows (evidence, secrets, no invented findings, confirmation-only return).
@@ -49,10 +50,11 @@ Read `docs/codebase/architecture.md` (routes, tables, server functions, nav entr
 
 Per feature: a **name** (two to four words, the way a user would say it), **one sentence** of what it does, the **evidence** (routes, tables, server functions, the main files), an **estimated number of acceptance criteria** (one per observable rule you can see — validation, permission, state change, error case; a rough count, not a list), and the **order** with its reason. Then the **Unassigned** list and a single **Coverage** line: `N of M routes, N of M tables, N of M server functions assigned`.
 
-Names and sentences are in the project's working language. Route paths, table names and file paths stay as they are in the code.
+Names and sentences are in the project's working language. Route paths, table names and file paths stay as they are in the code. The file opens like the other four: `# Feature Map` and, under it, `_Mapped by \`/map\` on <date> at commit \`<short sha>\`._` — the same commit as in `architecture.md`.
 
 ## Verify before you report
 - All five files exist under `docs/codebase/` and each carries every section of its template — an empty section says *none found* with what was searched, never nothing.
+- The line under every title carries today's date and the same short commit — the Stand. Five files, one commit; a mapper that dropped or paraphrased it has left `/architecture` with no way to measure the map's age.
 - Every finding in `concerns.md` has a file path. Spot-check three at random: open the file, confirm the claim. A mapper that invented one has likely invented more — re-run that focus rather than patching the line.
 - `features.md` accounts for every route and table listed in `architecture.md`, assigned or unassigned. Count them; the coverage line must add up.
 - No document quotes a secret, an API key, a token, or the contents of an env file — not even masked. If one does, delete the value before anything else and re-brief that mapper.
@@ -63,7 +65,7 @@ In the project's working language, short:
 - how many files were read, how many skipped as generated;
 - the proposed feature map as a list — name and one sentence each — with the coverage line and the Unassigned list, because that is what the user will be asked to confirm next;
 - the three most serious concerns, one line each, with the path;
-- on a refresh: what changed since the last map;
+- on a refresh: what changed since the last map's Stand — the commit, and the additions and differences you found;
 - whether a knowledge graph was used (one line, optional accelerator, no instruction to install).
 
 ## Handoff

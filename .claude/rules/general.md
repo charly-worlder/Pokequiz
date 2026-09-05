@@ -52,6 +52,9 @@ Every change to app behavior belongs to a feature, so the docs never drift. Rout
 
 Avoid the drift trap: a conversational "just fix/add this" that changes behavior **without** routing through a skill leaves INDEX, `spec.md`, and `qa-report.md` stale. When unsure whether the docs still match reality, run `/audit`.
 
+## Independent Verification
+The verifier never carries the builder's context. `/qa` delegates verification to `qa-engineer` sub-agents that receive only the feature folder, the AC-IDs, the step of the skill that is their scope and `.ai-eng-kit` — or, where the agent has no named sub-agents, runs in a fresh session. A `/qa` typed into the conversation that built the feature is asked to move, not answered there.
+
 ## Feature Tracking
 - All features are tracked in `features/INDEX.md` - read it before starting any work
 - Each feature lives in a folder `features/PROJ-X-feature-name/` with `spec.md` (contract), `design.md`, `tasks.md`, and `qa-report.md`
