@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#
+# Pre-Commit-Wächter — zwei Aufgaben, in dieser Reihenfolge:
+#
+#   1. Nichts Geheimes in den Commit lassen: keine echten Umgebungsdateien,
+#      keine Schlüssel-Muster im vorgemerkten Inhalt.
+#   2. `npm test` wirklich fahren, wenn Code im Spiel ist (BUG-36).
+#
+# BUG-36 im Klartext: `design.md` hat den Verzicht auf eine eigene ESLint-Regel
+# damit begründet, der Wächter-Test laufe „in `npm test`, also in der Prüfung,
+# die dieses Projekt ohnehin vor jedem Commit fährt". Diese Prüfung gab es
+# nicht — kein Hook, kein CI. Die Begründung stimmt erst mit dieser Datei.
+#
+# Aktiv wird der Hook über `core.hooksPath`, gesetzt vom `prepare`-Skript in
+# package.json. Er liegt damit im Repository und überlebt einen frischen Klon —
+# anders als alles unter `.git/hooks/`, das nie mitkommt.
+#
+# Umgehen geht bewusst weiterhin: `git commit --no-verify`. Ein Wächter, der
+# sich nicht abschalten lässt, wird umgebaut statt benutzt. Er soll das
+# Versehen abfangen, nicht die Absicht.
+
+set -u
+
+RED=$'\033[31m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+fail() { printf '%s\n' "${RED}✖ Commit gestoppt:${RESET} $*" >&2; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+blocked=0
+
+# ---------------------------------------------------------------------------
+# 1a) Echte Umgebungsdateien
+#
+# `.env.local` ist ignoriert — hierher kommt sie nur über `git add -f`, also
+# genau im Versehensfall. Erlaubt bleiben ausschließlich die Beispieldateien,
+# die den Platzhalter tragen und tragen sollen.
+# ---------------------------------------------------------------------------
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  base=${file##*/}
+  case "$base" in
+    *.example) continue ;;
+    .env|.env.*)
+      fail "$file ist eine echte Umgebungsdatei und gehört nicht ins Repository."
+      printf '  Platzhalter gehören nach .env.local.example, echte Werte bleiben lokal.\n' >&2
+      blocked=1
+      ;;
+  esac
+done <<< "$staged"
+
+# ---------------------------------------------------------------------------
+# 1b) Schlüssel-Muster im vorgemerkten Inhalt
+#
+# Geprüft wird der **vorgemerkte** Stand (`git show :datei`), nicht die Datei auf
+# der Platte: Was committet würde, ist das, was zählt.
+#
+# Gemeldet wird nur der Dateiname, nie die Fundstelle — eine Trefferzeile im
+# Terminal wäre der Schlüssel selbst, und der landete dann im Scrollback, in der
+# Shell-History und womöglich in einem Log.
+# ---------------------------------------------------------------------------
+SECRET_PATTERNS='eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|sb_secret_[A-Za-z0-9_-]{8,}|sbp_[a-f0-9]{40}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  # -I lässt Binärdateien aus, -q schweigt: Es soll nichts durchsickern.
+  if git show ":$file" 2>/dev/null | grep -IqE "$SECRET_PATTERNS"; then
+    fail "$file enthält ein Schlüssel-Muster (JWT, sb_secret_…, sbp_… oder einen privaten Schlüssel)."
+    printf '  Die Fundstelle wird absichtlich nicht ausgegeben — sie wäre der Schlüssel.\n' >&2
+    printf '  Selbst prüfen: git show ":%s" | grep -nE %s\n' "$file" "'$SECRET_PATTERNS'" >&2
+    blocked=1
+  fi
+done <<< "$staged"
+
+if [ "$blocked" -ne 0 ]; then
+  printf '\n%s\n' "${YELLOW}Ist ein Schlüssel schon einmal ausgecheckt worden, hilft Entfernen allein nicht:${RESET}" >&2
+  printf 'Er gilt als kompromittiert und gehört im Supabase-Dashboard neu erzeugt.\n' >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2) Tests — aber nur, wenn etwas dabei ist, das sie überhaupt bewegen kann.
+#
+# Dieses Projekt committet viel Prosa (features/, docs/, *.md). Ein Lauf von
+# ~20 s auf einen Tippfehler in einem QA-Bericht ist der sichere Weg dahin, dass
+# der Hook mit --no-verify umgangen wird — und dann schützt er gar nichts mehr.
+# Ausgelöst wird deshalb an den Pfaden, die Tests wirklich beeinflussen.
+# ---------------------------------------------------------------------------
+if grep -qE '^(src/|tests/|supabase/|package(-lock)?\.json$|[^/]*\.config\.(ts|js|mjs)$|\.githooks/)' <<< "$staged"; then
+  printf '%s\n' "Pre-Commit: npm test (Code ist im Commit) …"
+  if ! npm test --silent; then
+    fail 'npm test ist rot.'
+    printf '  Wirklich nötig? git commit --no-verify\n' >&2
+    exit 1
+  fi
+else
+  printf '%s\n' "Pre-Commit: nur Dokumentation vorgemerkt — npm test übersprungen."
+fi
+
+exit 0

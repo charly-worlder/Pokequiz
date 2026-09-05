@@ -311,7 +311,7 @@ Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke
 
 - **`PUBLIC_ACTIONS` befreit nach Namen, nicht nach Datei** (BUG-34). Eine neue Action, die irgendwo in `src/` `loginAction` heißt, ist automatisch befreit. Die „Begründungspflicht" ist eine Längenprüfung.
 - **Er sieht nur `.ts`/`.tsx` unterhalb `src/`.** Eine Action in `.js`/`.mjs` oder außerhalb wäre für Erkennung **und** Gegenzeugen gleichzeitig unsichtbar.
-- **Er läuft nur, wenn jemand ihn startet** (BUG-36). Die frühere Begründung an dieser Stelle — „läuft in `npm test`, also in der Prüfung, die vor jedem Commit ohnehin fährt" — war unbelegt: Es gibt kein `.husky/`, kein `.github/workflows/` und keinen Hook.
+- **Er läuft jetzt vor jedem Commit, der Code enthält** (BUG-36, behoben am 2026-09-05). Die frühere Begründung an dieser Stelle — „läuft in `npm test`, also in der Prüfung, die vor jedem Commit ohnehin fährt" — war zum Zeitpunkt des Schreibens **unbelegt**: Es gab kein `.husky/`, kein `.github/workflows/` und keinen Hook. Seit `.githooks/pre-commit` stimmt sie, und zwar nachprüfbar: Der Hook wird über `core.hooksPath` aktiviert (gesetzt vom `prepare`-Skript, überlebt also einen frischen Klon) und fährt `npm test`, sobald `src/`, `tests/`, `supabase/`, `package.json` oder eine Konfigurationsdatei im Commit liegt. **Die Grenze bleibt benannt:** `git commit --no-verify` umgeht ihn, und das ist Absicht — ein Wächter ohne Notausgang wird ausgebaut statt benutzt.
 
 ### Was daraus folgt — die Aufgabenteilung
 
