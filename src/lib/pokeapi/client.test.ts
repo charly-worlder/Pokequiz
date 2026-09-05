@@ -1,7 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import {
   fetchGermanName,
-  resolveOfficialImageUrl,
   spriteUrlFor,
   withTimeoutAndOneRetry,
   REQUEST_TIMEOUT_MS,
@@ -79,41 +78,6 @@ describe('spriteUrlFor', () => {
     expect(spriteUrlFor(25)).toBe(
       'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png'
     )
-  })
-})
-
-describe('resolveOfficialImageUrl (EC-11 — die Rückfallebene)', () => {
-  beforeEach(() => vi.restoreAllMocks())
-  afterEach(() => vi.restoreAllMocks())
-
-  it('liest die offizielle Adresse aus /pokemon/{id}', async () => {
-    const fetchMock = vi.fn((_url: string) =>
-      okJson({
-        sprites: { other: { 'official-artwork': { front_default: 'https://cdn.test/offiziell.png' } } },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    expect(await resolveOfficialImageUrl(25, signal())).toBe('https://cdn.test/offiziell.png')
-    expect(fetchMock.mock.calls[0][0]).toBe('https://pokeapi.co/api/v2/pokemon/25')
-  })
-
-  it('weicht auf front_default aus, wenn es kein official-artwork gibt', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => okJson({ sprites: { front_default: 'https://cdn.test/klein.png' } }))
-    )
-    expect(await resolveOfficialImageUrl(25, signal())).toBe('https://cdn.test/klein.png')
-  })
-
-  it('EC-6: liefert null, wenn auch die offizielle Antwort kein Bild hat', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => okJson({ sprites: {} })))
-    expect(await resolveOfficialImageUrl(25, signal())).toBeNull()
-  })
-
-  it('liefert null bei einer Fehlerantwort', async () => {
-    vi.stubGlobal('fetch', vi.fn(notOk))
-    expect(await resolveOfficialImageUrl(25, signal())).toBeNull()
   })
 })
 

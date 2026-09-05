@@ -83,6 +83,8 @@
 
 - [x] T17  E2E-Suite auf das neue AC-9-Verhalten nachziehen (BUG-14). `PROJ-2-personal-best.spec.ts` prüft jetzt **positiv**, dass nach „Nochmal spielen" von selbst eine offene Frage erscheint; die Bestleistung wird über `/` geprüft, so wie AC-1 sie festmacht. `PROJ-2-quiz-round.spec.ts` tauscht nur das Vehikel (`goto('/')` statt Knopf), die Aussage zu AC-11 bleibt unverändert  · files: tests/PROJ-2-personal-best.spec.ts, tests/PROJ-2-quiz-round.spec.ts  · → AC-1, AC-8, AC-9, AC-11
 
+- [x] T18  Rückfallebene der Bildadresse ersatzlos entfernen (BUG-16, nach `/refine` auf EC-11): `repairImageUrl` (Server Action) und `resolveOfficialImageUrl` (PokeAPI-Client) samt ihrer Tests gestrichen, Reparaturzweig und `repairedRef` aus der Zustandsmaschine entfernt. Ein nicht ladbares Bild führt jetzt unmittelbar zu EC-6, drei in Folge zu EC-10. Nebenwirkung: eine Server Action weniger an der Angriffsfläche  · files: src/lib/pokeapi/client.ts, src/lib/quiz/question-action.ts, src/components/quiz/quiz-screen.tsx, src/lib/pokeapi/client.test.ts, src/lib/quiz/question-action.test.ts, src/components/quiz/quiz-screen.error-states.test.tsx, src/components/quiz/quiz-screen.test.tsx  · → EC-6, EC-10, EC-11, AC-31
+
 **Nebenbefund, kein Task:** `npm run test:e2e` läuft ohne Angabe mit **16 Workern** (32 CPUs) und ist dabei unzuverlässig — 5 von 24 rot, immer mit demselben Symptom: Die Runde hängt auf „Runde wird vorbereitet …", weil das Bild unter Last nicht rechtzeitig lädt und `ImageProbe` keine Zeitgrenze kennt. **Gegen den Stand *vor* `562bd0e` gemessen: dort ebenfalls 5 von 24 rot** — der Flake ist also vorbestehend und nicht Folge der Fixes. Bei 2 und 4 Workern: 24/24, mehrfach bestätigt. Die Ursache ist **BUG-15**; die Worker-Zahl zu deckeln würde das Symptom verstecken, nicht beheben.
 
 ## Backlog — bewusst offen
@@ -106,9 +108,13 @@ Der Zwischenspeicher gehört nicht unserem Code, sondern der `fetch`-Umhüllung 
 1. **Unit-Test prüft die Anweisung:** `fetch` stubben, den Client einmal aufrufen, prüfen, dass er mit erzwungenem Zwischenspeicher und 30-Tage-Gültigkeit aufgerufen wurde. Das fängt den eigentlichen Fehlerfall — ein blank geschriebenes `fetch` — deterministisch ab.
 2. **Laufzeit-Beobachtung beweist die Wirkung:** Die in T4 aktivierte `fetch`-Protokollierung schreibt jeden Aufruf mitsamt Cache-Status ins Terminal. `npm run dev` starten, eine Runde spielen, und prüfen, dass ein zum zweiten Mal vorkommendes Pokémon als Treffer erscheint und nicht als frische Anfrage. Das ist die einzige Stelle, an der der Zwischenspeicher überhaupt sichtbar wird.
 
-**EC-11 (Rückfallebene der Bildadresse) — vollständig als Unit-Test.**
+**~~EC-11 (Rückfallebene der Bildadresse)~~ — hinfällig seit dem 2026-09-04.**
 
-Anders als AC-31 ist das unsere eigene Logik und damit ohne Laufzeit-Trick prüfbar: `fetch` so stubben, dass die aus der Nummer gebildete Adresse kein Bild liefert und `/pokemon/{id}` eine gültige Antwort — dann prüfen, dass die offizielle Adresse herauskommt und der Umweg genau einmal gegangen wird. Ein zweiter Fall, in dem auch das fehlschlägt, muss zum Verwerfen der Frage führen (EC-6).
+Die Rückfallebene ist ersatzlos entfallen (T18, `spec.md` → EC-11). An ihre Stelle tritt ein Hinweis, der über dieses Feature hinaus gilt:
+
+**EC-6 (kaputtes Bild) — das Fehlerereignis genau *einmal* auslösen.**
+
+Der Verwurf hängt am `onError` eines `<img>`. Ein Test, der das Ereignis in einer Schleife von Hand nachfeuert, prüft den interessanten Fall weg: Genau das tut der Browser nämlich nicht. Der ursprüngliche Abnahmetest zu BUG-8 war deshalb **auch gegen den kaputten Code grün** und musste umgeschrieben werden. Einmal feuern, dann verlangen, dass die Runde von selbst weiterzieht.
 
 ## Parallelization
 

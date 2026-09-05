@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { runClientAction } from '@/lib/actions/run-action'
-import { getNextQuestion, repairImageUrl, type Question } from '@/lib/quiz/question-action'
+import { getNextQuestion, type Question } from '@/lib/quiz/question-action'
 import { saveRun, type PersonalBest } from '@/lib/quiz/run-actions'
 import { POOL_SIZE } from '@/lib/validation/quiz'
 import { ImageProbe } from './pokemon-image'
@@ -61,7 +61,6 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
 
   const seenIdsRef = useRef<number[]>([])
   const discardsRef = useRef(0)
-  const repairedRef = useRef<Set<number>>(new Set())
   const roundIdRef = useRef<string>('')
   const fetchingRef = useRef(false)
   /**
@@ -246,25 +245,20 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     void fetchQuestion()
   }, [probing, fetchQuestion])
 
-  /** spec.md EC-11 → EC-6 → EC-10: repair, else discard, else admit the source is broken. */
-  const onProbeFail = useCallback(async () => {
-    const failed = probing
-    if (!failed) return
-
-    if (!repairedRef.current.has(failed.pokemonId)) {
-      repairedRef.current.add(failed.pokemonId)
-      const repaired = await runClientAction(() => repairImageUrl(failed.pokemonId), null)
-      // BUG-8 (qa-report.md 2026-09-04): Die offiziell dokumentierte Adresse
-      // ist im Normalfall *dieselbe*, die gerade gescheitert ist. Sie erneut zu
-      // setzen ließ `ImageProbe`s `key` unverändert — der Browser lud nicht
-      // neu, `onError` feuerte kein zweites Mal, und die Runde hing dauerhaft
-      // auf „Runde wird vorbereitet …", ohne Meldung und ohne Ausweg. Eine
-      // unveränderte Adresse ist keine Reparatur.
-      if (repaired && repaired !== failed.imageUrl) {
-        setProbing({ ...failed, imageUrl: repaired })
-        return
-      }
-    }
+  /**
+   * spec.md EC-6 → EC-10: verwerfen, und nach dreien die Quelle für gebrochen
+   * erklären.
+   *
+   * **Hier gab es bis zum 2026-09-04 eine Reparaturstufe** (EC-11): Bei einem
+   * kaputten Bild wurde die offizielle Adresse über `/pokemon/{id}` nachgeschlagen
+   * und erneut versucht. Sie ist ersatzlos entfallen (BUG-16) — die offizielle
+   * Adresse ist für den Pool 1–386 zeichengleich mit der konstruierten, das
+   * Nachschlagen konnte also nie ein anderes Ergebnis liefern. Es kostete über
+   * 100 KB je verworfener Frage und arbeitete damit gegen die Fair-Use-Zusage aus
+   * AC-31. Ein nicht ladbares Bild führt jetzt unmittelbar zum Verwurf.
+   */
+  const onProbeFail = useCallback(() => {
+    if (!probing) return
 
     setProbing(null)
     discardsRef.current += 1
@@ -294,7 +288,6 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
 
     seenIdsRef.current = []
     discardsRef.current = 0
-    repairedRef.current = new Set()
     roundIdRef.current = crypto.randomUUID()
     accumulatedRef.current = 0
     startedAtRef.current = null
@@ -376,7 +369,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   // --- Render ---------------------------------------------------------------
 
   const probe = probing ? (
-    <ImageProbe src={probing.imageUrl} onOk={onProbeOk} onFail={() => void onProbeFail()} />
+    <ImageProbe src={probing.imageUrl} onOk={onProbeOk} onFail={onProbeFail} />
   ) : null
 
   if (phase === 'finished') {

@@ -17,15 +17,14 @@ import type { Question } from '@/lib/quiz/question-action'
  * eine Anfrageschleife, die nur im Server-Log auffällt.
  */
 
-const { getNextQuestion, repairImageUrl, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
+const { getNextQuestion, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
   getNextQuestion: vi.fn(),
-  repairImageUrl: vi.fn(),
   saveRun: vi.fn(),
   getPersonalBest: vi.fn(),
   push: vi.fn(),
 }))
 
-vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion, repairImageUrl }))
+vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion }))
 vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
 // `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
 // benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
@@ -59,7 +58,6 @@ describe('QuizScreen — Fehlerpfade', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
-    repairImageUrl.mockResolvedValue(null)
   })
 
   it('AC-16: zeigt die Fehlerkarte mit beiden Auswegen, wenn die Quelle nichts liefert', async () => {
@@ -109,7 +107,6 @@ describe('QuizScreen — Fehlerpfade', () => {
   it('EC-10: nach drei verworfenen Fragen in Folge erscheint die Fehlerkarte statt weiterer Versuche', async () => {
     let served = 0
     getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
-    repairImageUrl.mockResolvedValue(null) // auch die Rückfallebene liefert nichts
 
     render(<QuizScreen initialPersonalBest={null} />)
     fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
@@ -125,25 +122,6 @@ describe('QuizScreen — Fehlerpfade', () => {
     await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
     // Die Grenze greift, bevor unbegrenzt weitergezogen wird.
     expect(getNextQuestion.mock.calls.length).toBeLessThanOrEqual(4)
-  })
-
-  it('EC-11: eine kaputte Bildadresse wird über die Rückfallebene repariert, ohne die Frage zu verlieren', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(9) })
-    repairImageUrl.mockResolvedValue('https://example.test/repariert.png')
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    failImages()
-
-    await waitFor(() => expect(repairImageUrl).toHaveBeenCalledWith(9))
-    await waitFor(() =>
-      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/repariert.png')).toBe(true)
-    )
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name9')).toBeInTheDocument())
-    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument()
   })
 
   it('EC-7: eine abgelaufene Sitzung führt auf /login, statt die Runde fortzusetzen', async () => {
@@ -266,19 +244,19 @@ describe('QuizScreen — Fehlerpfade', () => {
     )
   })
 
-  // BUG-8 (High): Die offizielle Bildadresse ist im Normalfall *dieselbe*, die
-  // schon gescheitert ist. Sie erneut zu setzen ließ `ImageProbe`s `key`
-  // unverändert — der Browser lud nicht neu, `onError` feuerte kein zweites
-  // Mal, und die Runde hing dauerhaft auf „Runde wird vorbereitet …".
+  // BUG-8 (High) und BUG-16: Bis zum 2026-09-04 wurde bei einem kaputten Bild die
+  // offizielle Adresse nachgeschlagen. Sie ist für den ganzen Pool *dieselbe*, die
+  // gerade gescheitert war — erneut gesetzt ließ sie `ImageProbe`s `key` unverändert,
+  // der Browser lud nicht neu, `onError` feuerte kein zweites Mal, und die Runde hing.
+  // Die Reparaturstufe ist inzwischen ersatzlos entfallen (spec.md EC-11); ein kaputtes
+  // Bild führt unmittelbar zum Verwurf.
   //
-  // Der Test feuert `error` deshalb **genau einmal**. Ein zweites Feuern von
-  // Hand ist genau das, was der Browser nicht tut, und würde den Hänger
-  // zudecken: Der Fehler steckt darin, dass es kein zweites Ereignis gibt.
-  it('EC-6 / BUG-8: eine identische Reparaturadresse verwirft die Frage, statt hängenzubleiben', async () => {
+  // Der Test feuert `error` deshalb **genau einmal**. Ein zweites Feuern von Hand ist
+  // genau das, was der Browser nicht tut, und würde einen Hänger zudecken: Der Fehler
+  // bestünde ja gerade darin, dass kein zweites Ereignis kommt.
+  it('EC-6: ein kaputtes Bild verwirft die Frage nach einem einzigen Fehlerereignis', async () => {
     let served = 0
     getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
-    // Die Rückfallebene liefert exakt die konstruierte Adresse zurück.
-    repairImageUrl.mockImplementation(async (id: number) => `https://example.test/${id}.png`)
 
     render(<QuizScreen initialPersonalBest={null} />)
     fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
@@ -289,10 +267,8 @@ describe('QuizScreen — Fehlerpfade', () => {
     expect(getNextQuestion).toHaveBeenCalledTimes(1)
 
     failImages() // genau einmal
-    await waitFor(() => expect(repairImageUrl).toHaveBeenCalledWith(1))
 
     // Die Runde muss von sich aus weitergehen: verwerfen und neu ziehen (EC-6).
-    // Vor dem Fix bleibt es bei einer Frage und einer Adresse — für immer.
     await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(2))
     await waitFor(() =>
       expect(images().some((i) => i.getAttribute('src') === 'https://example.test/2.png')).toBe(true)

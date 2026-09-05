@@ -1,13 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const { createClient, fetchGermanName, fetchGermanNames, withTimeoutAndOneRetry, spriteUrlFor, resolveOfficialImageUrl } =
+const { createClient, fetchGermanName, fetchGermanNames, withTimeoutAndOneRetry, spriteUrlFor } =
   vi.hoisted(() => ({
     createClient: vi.fn(),
     fetchGermanName: vi.fn(),
     fetchGermanNames: vi.fn(),
     withTimeoutAndOneRetry: vi.fn(),
     spriteUrlFor: vi.fn((id: number) => `https://sprites.test/${id}.png`),
-    resolveOfficialImageUrl: vi.fn(),
   }))
 
 vi.mock('@/lib/supabase/server', () => ({ createClient }))
@@ -16,11 +15,10 @@ vi.mock('@/lib/pokeapi/client', () => ({
   fetchGermanNames,
   withTimeoutAndOneRetry,
   spriteUrlFor,
-  resolveOfficialImageUrl,
   REQUEST_TIMEOUT_MS: 5000,
 }))
 
-import { getNextQuestion, repairImageUrl } from './question-action'
+import { getNextQuestion } from './question-action'
 import { POOL_SIZE } from '@/lib/validation/quiz'
 
 const signedIn = () => ({ auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }) } })
@@ -98,30 +96,5 @@ describe('getNextQuestion', () => {
   it('ignoriert unsinnige Einträge in der Ausschlussliste', async () => {
     const result = await getNextQuestion([NaN, 1.5, -3] as number[])
     expect(result.status).toBe('ok')
-  })
-})
-
-describe('repairImageUrl (EC-11)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    createClient.mockResolvedValue(signedIn())
-    withTimeoutAndOneRetry.mockImplementation(runOperation)
-    resolveOfficialImageUrl.mockResolvedValue('https://cdn.test/repariert.png')
-  })
-
-  it('liefert die offizielle Adresse', async () => {
-    expect(await repairImageUrl(25)).toBe('https://cdn.test/repariert.png')
-  })
-
-  it('weist einen Aufruf ohne Sitzung ab', async () => {
-    createClient.mockResolvedValue(signedOut())
-    expect(await repairImageUrl(25)).toBeNull()
-  })
-
-  it('weist Nummern außerhalb des Pools ab, ohne die API zu fragen', async () => {
-    expect(await repairImageUrl(0)).toBeNull()
-    expect(await repairImageUrl(POOL_SIZE + 1)).toBeNull()
-    expect(await repairImageUrl(1.5)).toBeNull()
-    expect(resolveOfficialImageUrl).not.toHaveBeenCalled()
   })
 })

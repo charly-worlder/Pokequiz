@@ -4,7 +4,6 @@ import { createClient } from '@/lib/supabase/server'
 import {
   fetchGermanName,
   fetchGermanNames,
-  resolveOfficialImageUrl,
   spriteUrlFor,
   withTimeoutAndOneRetry,
 } from '@/lib/pokeapi/client'
@@ -107,23 +106,4 @@ export async function getNextQuestion(seenIds: number[]): Promise<QuestionResult
   if (!built) return { status: 'unavailable' }
   if ('poolEmpty' in built) return { status: 'pool-empty' }
   return { status: 'ok', question: built.question }
-}
-
-/**
- * spec.md EC-11 — called only after the browser failed to load the constructed
- * image address. Returns the officially documented address, or null when even
- * that has none, in which case the caller discards the question (EC-6).
- */
-export async function repairImageUrl(pokemonId: number): Promise<string | null> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return null
-
-  if (!Number.isInteger(pokemonId) || pokemonId < POOL_START || pokemonId > POOL_END) {
-    return null
-  }
-
-  return withTimeoutAndOneRetry((signal) => resolveOfficialImageUrl(pokemonId, signal))
 }
