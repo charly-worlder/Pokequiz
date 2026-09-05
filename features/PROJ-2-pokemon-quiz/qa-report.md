@@ -1700,3 +1700,168 @@ Step 6 verlangt, isolierte Logik zu prüfen und zu testen. Ich habe das getan un
 - **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
 
 > **Was dieser Durchgang zeigt.** Der Fix ist gut und hält auch dem gezielten Angriff stand — das ist das erste Mal in dieser Serie, dass eine Angriffsbahn mit „keine neuen Befunde" zurückkommt. Und trotzdem steht wieder ein Befund an derselben Stelle: BUG-55 ist nicht der Fehler, der behoben wurde, sondern **der Fall daneben, den die Messung nicht abgedeckt hat**. Bei BUG-39 war es der geteilte Anschluss, bei BUG-54 der Anschluss mit Tippfehlern. Die Lehre ist nicht „schlechter fixen", sondern: Wer eine Grenze verschiebt, muss sie für die **unbequemste realistische Nutzung** durchrechnen, nicht für die glatte. Beim IP-Zähler ist die unbequeme Nutzung ein Schulanschluss am Montagmorgen.
+
+---
+
+## QA-Lauf — 2026-09-05 (finaler Sweep), nach BUG-56
+
+**Getestet:** 2026-09-05 · **App-URL:** `http://localhost:3000` (`probe.kind: http`) · **Commit:** `dc71557` · **Tester:** QA Engineer (AI)
+
+> Legende: `[x]` in diesem Lauf verifiziert (Beleg Pflicht) · `[ ] BUG` als kaputt verifiziert · `[!]` in diesem Lauf nicht prüfbar (Grund Pflicht)
+
+Vollständiger Sweep mit drei Bahnen, getrennte Bereiche, keine kannte die Sitzung, in der gebaut wurde. Ausdrückliche Vorgabe an alle drei: **„hat letztes Mal bestanden" gilt nicht als Beleg** — jede Prüfung neu.
+
+### Das Ergebnis vorweg
+
+- **30 von 31 AC bestanden**, AC-25 FAIL (unverändert BUG-11, Low), AC-24 ohne Viewport nicht verifizierbar.
+- **10 von 10 geltenden EC bestanden**, EC-11 spec-konform entfallen.
+- **BUG-56 ist geschlossen** — beide Mechanismen unabhängig nachgemessen.
+- **Regression ohne Befund:** 166/166, Lint, Build, E2E **zweimal hintereinander** je 33/33.
+- **Ein neuer High: BUG-61.** Die IP-Hälfte der Drosselung ist mit einem selbst gesetzten Header abschaltbar — **40 Rateversuche gegen 40 Konten in 5 Sekunden, null abgewiesen**, dazu 25 Konten in 9 Sekunden.
+- **Production Ready: NEIN** · **PROJ-2 bleibt In Review.**
+
+> **Das Ziel dieses Laufs war „Approved". Er erreicht es nicht, und der Grund ist keine Formalie.** Die Substanz von BUG-61 war bekannt und in `throttle.ts` und `design.md` ehrlich benannt — als etwas, das der Host beim Deploy löst. Neu und entscheidend ist, was diese Bahn dazu gemessen und nachgeschlagen hat: Der Deploy-Blocker in `features/INDEX.md` deckt **nur die eine Richtung** ab (Host setzt gar keinen Header), nicht die häufigere (Host **hängt an** einen vom Client mitgebrachten Wert, wie es ein gewöhnlicher nginx-Aufbau tut — dann bleibt der erste Eintrag angreiferkontrolliert). Und im Code gibt es keine Behandlung vertrauenswürdiger Proxys. Ohne CAPTCHA — bewusst nicht vorhanden — ist der IP-Zähler die einzige Bremse gegen Passwort-Spraying, und sie lässt sich mit einer Kopfzeile ausschalten.
+
+### BUG-56 — geschlossen, beide Mechanismen belegt
+
+| Zusage | Ergebnis | Beleg |
+|---|---|---|
+| Abgelaufene Fenster werden laufend entfernt | **bestätigt** | Ausgangslage 976 Zeilen, **0 älter als eine Stunde**. Gezielt: drei Probezeilen (3 h / 30 min / 2 min), nach **einem** Login-Versuch war die 3-h-Zeile weg, die anderen standen |
+| Konto-Schlüssel verschwinden mit dem Konto | **bestätigt** | Konto mit sechs Zeilen angelegt; nach `DELETE /auth/v1/admin/users/<uid>` alle **drei** Konto-Schlüssel weg, alle **drei** IP-Schlüssel unverändert. `profiles` und `runs` ebenfalls leer → **AC-26 hält** |
+| Der Aufräumer löscht **nicht zu viel** | **bestätigt** | Die 30-Minuten-Zeile trägt formal noch eine Entscheidung und wurde **nicht** gelöscht |
+| Von außen auslösbar? | **nein** | `prune_auth_throttle` für `anon` 401, für `authenticated` 403 |
+| Öffnet die Kontolöschung eine Umgehung? | **nein** | Wegwerf-Konto registriert, 7 Rateversuche (ab 6 gesperrt), Konto gelöscht → Versuche 8 und 9 **weiterhin gesperrt**, Zähler unverändert bei 9 |
+
+Bahn C hat dasselbe unabhängig in einer Wegwerf-Datenbank nachgestellt und die Migrationskette `0001`–`0005` vollständig durchlaufen lassen.
+
+### BUG-61: `x-forwarded-for` ist frei fälschbar — Passwort-Spraying und Massenregistrierung ungebremst
+
+- **Severity: High** · PROJ-1 AC-8, EC-4 · `.claude/rules/security.md` → Authentication
+- `clientIp()` nimmt ungeprüft den **ersten** Eintrag aus `x-forwarded-for` (`src/lib/auth/throttle.ts:60-66`). Lokal kommt der Header direkt vom Client.
+- **Gemessen:**
+  - **Passwort-Spraying:** 40 Login-Versuche gegen **40 verschiedene Konten**, je eigene gefälschte Herkunft → **40 durchgelassen, 0 gedrosselt, in 5 Sekunden.** Der Konto-Zähler sieht je Konto einen Versuch, der IP-Zähler je Adresse einen — **keiner der beiden greift.**
+  - **Massenregistrierung:** **25 Konten in 9 Sekunden.** Von einer unmanipulierten Adresse: 5 pro Minute.
+  - Gegenprobe ohne Header: Der Zähler greift korrekt (`login:ip:::1` = 7 nach 7 Versuchen).
+- **Warum das trotz bekannter Dokumentation ein High ist:**
+  1. Der Skill führt unbegrenztes Raten auf einem Login ausdrücklich als High. Für einen Angreifer mit rotierendem Header ist das Raten hier unbegrenzt.
+  2. **Der Deploy-Blocker deckt es nicht ab.** `features/INDEX.md` nennt bei BUG-53 nur den Fall „Host setzt **keinen** Header" (alle fallen auf `unbekannt`). Der häufigere Fall — der Host **hängt an**, statt zu überschreiben — steht nirgends. Ein Plan, der die halbe Bedingung nennt, wird zur halben Prüfung.
+  3. **Es gibt keine Code-Ebene dagegen:** keine Behandlung vertrauenswürdiger Proxys, kein CAPTCHA (bewusste Produktentscheidung), keine E-Mail-Bestätigung (`enable_confirmations = false`).
+  4. Zusammen mit **BUG-48** (die Registrierung verrät, ob eine Adresse existiert) ist der gesamte Nutzerbestand mit rund 40 Anfragen je 5 Sekunden durchprobierbar.
+- **Produktfolge über PROJ-2 hinaus:** Massenregistrierung ist die Voraussetzung dafür, die Weltrangliste zu fluten (PROJ-3), und jedes Konto belegt dauerhaft einen öffentlichen, unveränderlichen Trainernamen.
+
+### BUG-62: Die Aufbewahrungsfrist in `docs/privacy.md` ist absolut formuliert, der Mechanismus garantiert sie nicht
+
+- **Severity: Medium** · DSGVO Art. 5(1)(e)
+- `docs/privacy.md` sagt „**Höchstens 1 Stunde** nach dem letzten Versuch". Der Code leistet das nicht unbedingt: `prune_auth_throttle()` löscht **höchstens 50 Zeilen je Aufruf** und läuft **nur**, wenn jemand einen Anmelde-, Registrierungs- oder Reset-Versuch macht.
+- **Gemessen:** 200 künstliche Zeilen mit fünf Stunden Alter eingefügt, danach **ein** Login-Versuch (zwei Zählaufrufe) → **100 gelöscht, 100 blieben stehen**; ohne weiteren Verkehr blieben sie liegen.
+- `design.md` benennt die Verkehrsabhängigkeit, aber **nicht** die 50-Zeilen-Grenze. `docs/privacy.md` — das Dokument, das die Rechtsgrundlage trägt — nennt keine der beiden Einschränkungen.
+- **Das ist eine Zusage, die ich in diesem Zyklus selbst geschrieben habe**, und sie ist breiter als die Messung, die sie belegen sollte. Genau das Muster, das dieser Bericht seit BUG-20 verfolgt.
+
+### BUG-63: Die Zusage aus T26 über den Proxy-Pfad stimmt nicht
+
+- **Severity: Medium**
+- `tasks.md` (T26) und `src/proxy.ts:86-100` behaupten, die Ausnahme für Server-Action-POSTs sei „auf die Pfade eingegrenzt, die sie brauchen — derzeit nur `/`", weshalb eine pfadbasierte Abwehr beim Deploy „sich nicht mehr umgehen" lasse.
+- **Gemessen:** `loginAction` läuft weiterhin unter `/`, `/login`, `/reset-password`, `/privacy`, `/imprint` **und jedem Pfad mit Bild-Endung** (`POST /beliebig.png` → die Action antwortet). Ursache: Öffentliche Pfade werden ohnehin durchgelassen, und der Matcher nimmt Bild-Endungen komplett aus — dort läuft der Proxy gar nicht.
+- Heute ohne Sicherheitsfolge, weil die Drosselung **in** der Action sitzt (belegt: der 6. Versuch wird abgewiesen, egal über welchen Pfad). Der Befund ist die zu breite Zusage, auf die sich der Deploy-Plan stützt.
+
+### BUG-64: `design.md` behauptet, der öffentliche Schlüssel stecke im Browser-Bundle
+
+- **Severity: Low**
+- `features/PROJ-1-user-login/design.md` führt als Verifizierungsplan, anon key und Projekt-URL „stecken im ausgelieferten Browser-Bundle" und seien „ohnehin öffentlich". **Messbar falsch:** 0 Treffer in `.next/static`, 0 im angemeldeten Client-Code. Diese App hat gar keinen Browser-Supabase-Client.
+- Der darauf gestützte Deploy-Prüfplan beruht auf einer falschen Annahme.
+
+### BUG-59: Die Drosselmeldung stimmt weder in der Dauer noch in der Ursache
+
+- **Severity: Low** · von **zwei** Bahnen unabhängig gefunden
+- **Dauer:** „Bitte **in ein paar Minuten** erneut versuchen" — tatsächlich sind es höchstens 60 Sekunden (gemessen: Wiedereintritt nach 37 s). Der Nutzer wartet länger als nötig oder gibt auf.
+- **Ursache:** Beim Überschreiten des **Konto**-Zählers erscheint dieselbe Meldung „Zu viele Versuche von **dieser Verbindung**". Gemessen: rechtmäßiger Besitzer, richtiges Passwort, **unbelastete** 21. Adresse → genau diese Meldung. Der Nutzer sucht den Fehler an der falschen Stelle; ein Netzwechsel hilft nicht, nur Warten.
+
+### BUG-60: Eine endgültig abgelehnte Runde wird wie ein Transportfehler behandelt
+
+- **Severity: Low**
+- `quiz-screen.tsx:172-180` behandelt `rejected` (AC-12) wie `failed` und zeigt „noch nicht gespeichert" samt „Erneut speichern" — obwohl die Runde endgültig abgelehnt ist und die Wiederholung nie gelingen kann.
+- Relevant, falls die 0,5-Sekunden-Untergrenze aus AC-12 — laut `spec.md` → Open Questions eine Schätzung — je einen echten schnellen Spieler trifft: Er sieht eine Meldung, die Rettung verspricht, und verliert die Runde stillschweigend.
+
+### Acceptance Criteria
+
+- [x] **AC-1 bis AC-23 und AC-26 bis AC-31** — bestanden mit Beleg. Vieles diesmal zur **Laufzeit** statt aus dem Code: AC-12 als neunfache Grenzwert-Matrix gegen die echte Action (`386/193000` → saved, `386/192999` → rejected); AC-14 mit untergeschobener fremder `profile_id` (Zeile landet beim eigenen Konto) **und** direktem Insert-Versuch (`42501`); AC-26 mit echter Kontolöschung; AC-5 mit 12 Fragen ohne Wiederholung; AC-3 mit 30 Stichproben; AC-31 mit **0 neuen Cache-Einträgen** bei über 250 Namensabfragen aus drei Konten
+- [ ] **AC-25 — FAIL** (unverändert **BUG-11**, Low). Der Ladezustand der Quiz-Karte ist ein Textabsatz statt einer Skelettfläche (`quiz-screen.tsx:457-466`); das Layout springt beim Übergang. Das **Bild** hat sein Skelett in exakter Größe — die Lücke ist die Karte
+- [!] **AC-24** — kein Viewport, kein Browser
+
+### Edge Cases
+
+- [x] **EC-1 bis EC-10** — bestanden. **EC-4 mit echter Gleichzeitigkeit:** vier **parallele** Einreichungen derselben Runden-ID → alle „saved", in der Datenbank **genau eine** Zeile. Garantie: `client_round_id … unique`
+- [x] **EC-11** — spec-konform entfallen, Code konsistent
+
+### Security-Audit (Bahn B)
+
+- [x] **Authentifizierung** — geschützte Routen 307; Actions ohne Sitzung `unauthenticated`; **gefälschtes Sitzungs-Cookie** mit gültiger Struktur → 307, weil der Proxy den Auth-Server fragt statt nur die Signatur zu prüfen; auch im **Produktionsbuild** geprüft
+- [x] **Autorisierung** — zwei echte Konten, zwei echte Token: fremde Runden `[]`, Insert für fremdes Profil 403, Runden unveränderlich (PATCH/DELETE ändern nichts), Drosseltabelle und alle **vier** RPCs für `anon`/`authenticated` gesperrt
+- [x] **Eingabevalidierung** — SQL, XSS, Header-Injection, Typverwechslungen, 400-Element-Arrays: durchweg abgewiesen, **kein 500er** auf Feldinhalte
+- [x] **Open Redirect / SSRF** — fünf Redirect-Varianten abgewiesen; `/_next/image` weist fremde Hosts, `127.0.0.1:54321` und PokeAPI-fremde Pfade mit 400 ab
+- [x] **Geheimnisse im Bundle** — **0 Treffer** für Service-Role-Schlüssel, anon key und Projekt-URL in `.next/static` **und** im angemeldeten Zustand (20 Dateien). Der Service-Role-Schlüssel steht nicht einmal in den Serverbündeln — er wird zur Laufzeit gelesen
+- [x] **Zugangsdaten in der URL** — alle vier Formulare `method="post"`, Abmelden ebenfalls
+- [x] **Kontoaufzählung über Login und Reset** — beide neutral
+- [x] **Brute Force, beide Zähler** — 25 Fehlversuche von einer Adresse: ab dem 6. gesperrt; 24 Fehlversuche von 24 Adressen gegen ein Konto: ab dem 21. gesperrt; **BUG-39 und BUG-54 als Regression bestätigt**
+- [ ] **BUG: `x-forwarded-for` fälschbar** → **BUG-61 (High)**
+- [ ] **BUG: Kontoaufzählung über die Registrierung** → unverändert **BUG-48 (Medium)**, Vertragskonflikt mit PROJ-1 AC-3
+- [ ] **BUG: `/auth/confirm` ungedrosselt** → unverändert **BUG-45 (Medium)**; 40 Versuche ohne App-Absage
+- [ ] **BUG: `X-Forwarded-Host`** → unverändert **BUG-18 (Medium)**, auch am Produktionsbuild reproduziert
+- [ ] **BUG: Security-Header** → unverändert **BUG-12 (Medium)**, auch am Produktionsbuild keiner der vier
+- [ ] **BUG: `profiles` gibt UUID und Anmeldedatum aller Spieler heraus** → unverändert **BUG-51 (Low)**
+- [!] **Rate-Limit auf `getNextQuestion` und `saveRun`** — nicht implementiert (Backlog `B1`): 30/30 bzw. 30/30 durchgelassen. Anmerkung der Bahn: Die Begründung in B1 („`saveRun` ist durch AC-12 begrenzt") verwechselt **Werte** mit **Anzahl** — AC-12 begrenzt keine Zeilen
+- [!] **Supabases eigenes Limit** — lokal gar nicht gesetzt (45 direkte Versuche, 0 × 429); erst gegen das gehostete Projekt messbar
+
+### Regression (Bahn C) — ohne Befund
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` | **166/166 grün**, 17 Dateien |
+| `npm run lint` | grün |
+| `npm run build` | grün, 6/6 Seiten, kein `/leaderboard` (konsistent mit PROJ-3 = Planned) |
+| `npx playwright test` — Lauf 1 | **33/33 grün**, 51,0 s |
+| `npx playwright test` — Lauf 2, unmittelbar danach | **33/33 grün**, 49,5 s |
+| Migrationskette `0001`–`0005` | in Wegwerf-Datenbank vollständig durchgelaufen, alle fünf ohne Fehler |
+| Kernabläufe | Registrierung, Anmeldung, Abmeldung, Zugangsschutz, Passwort-Reset über echten Mail-Link, Quiz-Runde bis zum gespeicherten Ergebnis — alle bestanden |
+| App-Shell | je eine Kopf- und Fußzeile, keine toten Links auf `/leaderboard`, `/privacy`, `/imprint` |
+
+**Die drei Nutzer-Abläufe:** Vertippen-dann-richtig bestanden (4 Fehler, 5. Versuch richtig → drin); Ab- und wieder Anmelden bestanden; **8 von 8** Spielern mit richtigem Passwort von einer Adresse. Die von Bahn C gemeldeten Fälle REG-1 und REG-2 (fünf Tippfehler sperren den Anschluss für alle) sind **kein neuer Befund**, sondern exakt das als BUG-55 bewusst akzeptierte Risiko — von einer dritten, unabhängigen Bahn bestätigt.
+
+### Keine neuen Unit-Tests in diesem Lauf — mit Begründung
+
+Step 6 verlangt, isolierte Logik zu prüfen und zu testen. Ich habe gesucht und **nichts Ungedecktes gefunden**, das sich sinnvoll isoliert testen ließe: Die neuen Mechanismen aus `0005` sind SQL; ein Unit-Test mit gemocktem Client würde nur die Mock-Antwort bestätigen — dieselbe Begründung, die seit `0003` im Kopf von `throttle.test.ts` steht. Für die offenen Befunde wäre ein Test verfrüht: Er würde das heutige Verhalten festschreiben, bevor entschieden ist, wie es aussehen soll.
+
+**Die daraus folgende Lücke ist benannt, nicht übersehen** — und Bahn B hat sie unabhängig bestätigt: `grep` über `src` und `tests` findet **keinen** Treffer für `prune_auth_throttle`, `on_auth_user_deleted` oder `forget_auth_throttle`. Jede künftige Migration, die `register_auth_attempt` erneut überschreibt, kann das Aufräumen stillschweigend wieder entfernen — genau so, wie `0005` die Fassung aus `0003` ersetzt hat. Ein SQL-Testrahmen wäre der Ausbauweg.
+
+### Not Verified In This Run
+
+- [!] **AC-24** und **alles Optische** (Farben, `pop`, `nudge`, `float`, Skelett-Puls, Layout-Sprünge) — kein Browser, kein Viewport; belegt sind Klassennamen und Keyframes, nicht die Darstellung
+- [!] **AC-2, browserseitiger Anteil** — Hydration und Rendering nicht messbar; gemessen ist der Serverpfad (Action 0,111–0,127 s, Bild kalt 0,273 s)
+- [!] **AC-20 als Netzwerk-Mitschnitt** — ohne DevTools nicht beobachtbar
+- [!] **AC-15 / EC-8 mit echtem Ausfall der PokeAPI** — nicht provozierbar; der Zwischenspeicher war warm, es ging keine Anfrage hinaus
+- [!] **EC-1, echter Doppelklick** — nur der Code-Riegel ist belegt
+- [!] **Rate-Limit auf gewöhnlichen Endpunkten** — nicht implementiert (Backlog `B1`)
+- [!] **`supabase db reset`** — bewusst nicht ausgeführt (zerstörend: Testdaten und Mailpit-Zustand, auf dem die Reset-Journey aufsetzt). Ersatzweg über eine Wegwerf-Datenbank; der deckt **nicht** ab: RLS-/Grant-Durchsetzung im Stub, Supabase-Seed und Rollen-Setup
+- [!] **Alles gegen das gehostete Projekt** — `0005` ist dort nicht eingespielt; Supabases eigenes Limit, T4 und T18 dort nicht prüfbar
+- [!] **Verhalten des künftigen Hosts bei `x-forwarded-for` und `X-Forwarded-Host`** — `deploy` ist in `.ai-eng-kit` `null`, es gibt keinen Anbieter, gegen den man messen könnte. **Davon hängt ab, ob BUG-61 in Produktion entschärft ist**
+- [!] **Browserseitige Ausnutzbarkeit von BUG-18** — aus Preflight und `sameSite` abgeleitet, nicht beobachtet
+- [!] **Security-Header gegen die Live-URL** — es gibt keine
+- [!] **Optische Regression** — keine Baselines im Repository
+- [!] **Konto-Fenster (20 / 15 min) beim Ausheilen** — nicht ausgemessen, der IP-Zähler greift in den meisten Szenarien zuerst
+
+### Bewusst zurückgestellt (Entscheidungen des Nutzers)
+
+- **BUG-55 und BUG-57** — akzeptiertes Risiko, mit Zahlen in `design.md` dokumentiert. Bahn B hat **beide Zahlen unabhängig nachgestellt und exakt bestätigt** (4 von 8 mit Tippfehlern, 8 von 8 ohne; 20 Anfragen je 15 Minuten zum Aussperren)
+- **BUG-58** — zurückgestellt. Nebenbefund dieses Laufs: Im **Produktionsbuild** liefert der Fall nur noch `{"digest":"…"}` statt Name und Meldung — kein Informationsleck in Produktion
+- **BUG-40, BUG-41** — zurückgestellt, Begründung des Nutzers: geringes Risiko bei Einzelarbeit am Repository
+
+### Verdikt
+
+- **Acceptance Criteria:** 30 von 31 mit Beleg bestanden · **AC-25 FAIL** (Low) · AC-24 nicht verifizierbar
+- **Edge Cases:** 10 von 10 geltenden bestanden
+- **Bugs:** 6 neu — **1 High** (BUG-61), **2 Medium** (BUG-62, BUG-63), **3 Low** (BUG-59, BUG-60, BUG-64) · bestätigt offen: BUG-11, BUG-12, BUG-18, BUG-24, BUG-45, BUG-48, BUG-51 · dazu **T4 und T18** von PROJ-1, vom Skill als High geführt
+- **Security:** **9 Prüfungen mit Beleg bestanden** · **6 mit Befund** · **2 NOT VERIFIED**
+- **Regression:** ohne Befund — 166/166, Lint, Build, E2E 2× 33/33, Migrationskette vollständig
+- **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
+
+> **Was dieser Lauf über die Serie sagt.** Von den fünf Fixes dieses Tages hält jeder einzelne, was er zusagt — BUG-29/30/31, BUG-36, BUG-39, BUG-54, BUG-56 sind alle nachgemessen geschlossen, mehrere davon von zwei unabhängigen Bahnen. Das ist der eigentliche Fortschritt. Was in jedem einzelnen Durchgang wiederkehrt, ist nicht ein fehlerhafter Fix, sondern **ein Satz, der weiter reicht als seine Messung**: „überlebt einen frischen Klon" (BUG-40), „höchstens eine Stunde" (BUG-62), „lässt sich nicht mehr umgehen" (BUG-63), „steckt im Browser-Bundle" (BUG-64). Viermal in einem Bericht, dreimal davon in Sätzen, die als Beleg gemeint waren. **Die Zahlen in diesem Projekt sind verlässlich; die Sätze daneben sind es noch nicht.** Wer hier weiterarbeitet, sollte jede Reichweiten-Aussage wie eine Behauptung behandeln, die eine eigene Messung braucht — nicht wie eine Zusammenfassung der Messung, die daneben steht.
