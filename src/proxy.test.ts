@@ -79,6 +79,50 @@ describe('proxy — Sitzungsprüfung', () => {
     expect(response.headers.get('location')).toBe('http://localhost:3000/login')
   })
 
+  // BUG-9 (spec.md EC-7): Next.js kodiert das `redirect()` einer Server Action
+  // in-band (Status 200 plus `x-action-redirect`), gerade damit der Browser
+  // keiner 307 auf eine Anmeldeseite folgt. Eine gewöhnliche Weiterleitung auf
+  // einen Action-POST behandelt der Action-Handler deshalb als Protokollbruch,
+  // und der Client wirft „An unexpected response was received from the server".
+  //
+  // Die Folge war, dass der `unauthenticated`-Zweig der Actions **unerreichbar**
+  // war: Wem mitten in der Runde die Sitzung ablief, der sah einen Ergebnis-
+  // Screen, der Erfolg vortäuschte, und landete nie auf /login. Die Action prüft
+  // selbst — `server-actions.guard.test.ts` hält fest, dass das so bleibt.
+  it('BUG-9: ein Server-Action-POST ohne Sitzung wird durchgelassen, statt umgeleitet zu werden', async () => {
+    getUser.mockResolvedValue({ data: { user: null } })
+
+    const request = new NextRequest(new URL('http://localhost:3000/'), {
+      method: 'POST',
+      headers: { 'next-action': '4095d024abcdef' },
+    })
+    const response = await proxy(request)
+
+    expect(response.headers.get('location')).toBeNull()
+    expect(response.status).not.toBe(307)
+  })
+
+  it('BUG-9: ein gewöhnlicher POST ohne Action-Kennzeichen wird weiterhin umgeleitet', async () => {
+    getUser.mockResolvedValue({ data: { user: null } })
+
+    const request = new NextRequest(new URL('http://localhost:3000/'), { method: 'POST' })
+    const response = await proxy(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('http://localhost:3000/login')
+  })
+
+  it('BUG-9: ein GET mit gefälschtem Action-Kennzeichen wird weiterhin umgeleitet', async () => {
+    getUser.mockResolvedValue({ data: { user: null } })
+
+    const request = new NextRequest(new URL('http://localhost:3000/'), {
+      headers: { 'next-action': 'gefaelscht' },
+    })
+    const response = await proxy(request)
+
+    expect(response.status).toBe(307)
+  })
+
   it('AC-4: eine gültige Sitzung auf /login wird auf die Startseite geschickt', async () => {
     getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } })
 

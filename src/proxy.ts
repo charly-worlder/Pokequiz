@@ -54,7 +54,31 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  if (!user && !isPublicPath(pathname)) {
+  /**
+   * BUG-9 (PROJ-2/qa-report.md, spec.md EC-7): A Server Action must not be
+   * answered with an HTTP redirect.
+   *
+   * Next.js encodes a Server Action's own `redirect()` **in-band** — status 200
+   * plus an `x-action-redirect` header — precisely so the browser does not
+   * follow a 307 to a sign-in page. Its action handler therefore treats an
+   * ordinary redirect that comes back as HTML as a protocol violation, and the
+   * client throws „An unexpected response was received from the server".
+   *
+   * The visible damage was that the action's own `unauthenticated` branch had
+   * become **unreachable**: the player whose session expired mid-round saw a
+   * result screen that pretended everything was fine, and never landed on
+   * /login. The branch existed and was unit-tested — the proxy simply never let
+   * it run.
+   *
+   * Letting the action through is the framework's intended shape, not a hole:
+   * Next's own guidance is that "any Server Actions called from components must
+   * perform their own authorization checks". Every action here does, and the
+   * database enforces the same rules a second time through RLS.
+   * `server-actions.guard.test.ts` keeps that from silently ceasing to be true.
+   */
+  const isServerAction = request.method === 'POST' && request.headers.has('next-action')
+
+  if (!user && !isPublicPath(pathname) && !isServerAction) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
