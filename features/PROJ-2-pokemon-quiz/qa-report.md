@@ -1561,3 +1561,142 @@ Kernabläufe einzeln bestätigt: Registrierung, Anmeldung, Abmeldung (5 Zyklen s
 - **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
 
 > **Die Lehre aus diesem Nachlauf.** Der Fix ist richtig und belegt — und er hat, wie jede Verschärfung einer Drosselung, jemanden getroffen, der nicht gemeint war. Bemerkenswert ist nicht, dass es passiert ist, sondern **dass es im Design bereits stand und trotzdem niemandem auffiel**: Der Preis war benannt, aber nicht beziffert. „Hinter einer geteilten Adresse zählen die Fehlversuche des einen weiter" liest sich harmlos; „fünf Anmeldungen pro Minute für alle Nutzer eines Schulanschlusses zusammen" liest sich anders. Eine Grenze ohne Zahl ist eine Grenze, die niemand prüft.
+
+---
+
+## QA-Nachlauf — 2026-09-05, nach dem Fix für BUG-54 (Erstattung auf dem IP-Zähler)
+
+**Getestet:** 2026-09-05 · **App-URL:** `http://localhost:3000` · **Commit:** `b846111` · **Tester:** QA Engineer (AI)
+
+Zwei Bahnen mit getrennten Bereichen, beide ohne Kenntnis der Sitzung, in der gebaut wurde. Bahn B3: den Erstattungs-Mechanismus angreifen. Bahn C3: den NAT-Fall gegenmessen und Regression fahren.
+
+### Das Ergebnis vorweg
+
+- **BUG-54 ist geschlossen** — mit Zahlen gegengemessen, nicht abgeleitet.
+- **BUG-39 bleibt geschlossen** — über 20 Angriffszyklen erneut bestätigt.
+- **Der Erstattungs-Mechanismus hält gegen sechs Angriffswinkel** — kein Guthaben aufbaubar, keine Erstattung von außen auslösbar, Gleichzeitigkeit intakt.
+- **Zwei neue Medium-Befunde**, beide *nicht* Rückfälle: BUG-55 (der NAT-Fall **mit Tippfehlern**, den die Zusage nicht abdeckt) und BUG-56 (die Zählertabelle wächst unbegrenzt und speichert E-Mail-Adressen unbefristet).
+- Regression ohne Befund: 166/166, Lint grün, Build grün, E2E **zweimal hintereinander** je 33/33.
+- **Production Ready: NEIN** — PROJ-2 bleibt **In Review**.
+
+### BUG-54 — geschlossen, mit Zahlen
+
+| Messung | Vorher | Jetzt |
+|---|---|---|
+| **Acht verschiedene Spieler**, richtiges Passwort, **eine** Adresse | 5 von 8 kamen hinein | **8 von 8** (2497 ms) |
+| Anmelden/Abmelden im Zyklus, eine Adresse | ab dem 6. abgewiesen | **25 von 25**, keine einzige Abweisung |
+| Vier Tippfehler, dann richtig | kam hinein | kommt hinein |
+| Fünf Tippfehler, dann richtig | abgewiesen | abgewiesen — Grenze unverändert, heilt nach 63 s aus |
+
+25 Zyklen liegen über **beiden** Limits (IP 5/60 s, Konto 20/900 s). Dass sie durchlaufen, belegt beides zusammen: Der Konto-Zähler wird bei Erfolg geleert, der IP-Zähler erstattet.
+
+**Und die Bremse ist noch da — dreimal gegengemessen:**
+
+- Direkt nach den acht Erfolgen, gleiche Adresse, gleiches Fenster: Fehlversuche 1–5 kommen bis zur Passwortprüfung, **der sechste wird abgewiesen**.
+- Direkt nach den 25 Zyklen: identisch.
+- **Gegenprobe auf BUG-39:** 20 Runden „eigener erfolgreicher Login, dann ein Rateversuch gegen ein fremdes Konto" von einer Adresse → **exakt 5 Rateversuche kamen durch**; ab Runde 6 sind eigener Login *und* Rateversuch gesperrt. Der eigene Login bringt **keinen** zusätzlichen Rateversuch.
+
+Vorbedingung nicht angenommen, sondern geprüft: Registrierungs- und Login-Zähler sind getrennt — 5 Registrierungen von einer Adresse, dann der 6. abgewiesen, und **direkt danach im selben Fenster 5 von 5 Logins erfolgreich**.
+
+### Der Angriff auf die Erstattung (Bahn B3) — sechs Winkel, kein Durchkommen
+
+| Angriff | Ergebnis | Beleg |
+|---|---|---|
+| **Guthaben aufbauen** — mehr erstatten als hochgezählt | **nein** — 10 erfolgreiche Logins auf leerem Zähler → Zähler bleibt 0, nie negativ | `greatest(attempts - 1, 0)`, `0004:48` |
+| **Zähler unter 0 parken** über einen Fensterwechsel | **nein** — zwei Timing-Strategien, 4 Adressen, nie unter den echten Fehlversuchsstand | Messreihe 192.0.2.240/80/81/90/91 |
+| **Zusätzliche Rateversuche** durch eigene Logins | **nein** — 30 Zyklen Erfolg→Fehlversuch in *einem* Fenster: genau **5** Fehlversuche durch | seriell und im Straddle gemessen |
+| **Erstattung von außen auslösen** | **nein** — `anon` und `authenticated` bekommen `permission denied`; über die REST-API mit dem Browser-Schlüssel **HTTP 401 / 42501** | Grants: `service_role = true`, sonst `false` |
+| **Erstattung auf Register/Reset** | **nein** — `login:ip` bleibt unverändert nach erfolgreicher Registrierung *und* nach erfolgreichem Reset; 8 Registrierungen von einer Adresse → ab der 6. abgewiesen, kein Refund | `settleSuccessfulLogin` nimmt keinen `scope` |
+| **Gleichzeitigkeit beschädigt** | **nein** — 40 parallele Anfragen (20 Fehlversuche + 20 Erfolge): nur 3 Fehlversuche und 2 Erfolge durch, kein „alle sehen 0"-Durchbruch | Zählen+Prüfen bleibt atomar in `0003` |
+
+Bahn B3 hat außerdem ausdrücklich geprüft, ob die Begründung wieder weiter reicht als der Code — das Muster, das hier viermal aufgetreten ist (BUG-20, BUG-32, BUG-40, und der Preis in BUG-39/54). Urteil: **„Die Begründung ist diesmal nicht zu breit"** — die textliche Zusage deckt sich mit dem gemessenen Verhalten.
+
+Eine theoretische ±1-Mikrorace bleibt benannt: `refund_auth_attempt` prüft das Fenster nicht, eine Erstattung könnte nach einem Fensterwechsel einen echten Fehlversuch „vergessen". Über mehrere Timing-Strategien und vier Adressen **nicht in einen zusätzlichen Rateversuch umwandelbar** — die Erstattung ist auf −1 je Erfolg begrenzt, und für jeden Erfolg wurde vorher ein Slot verbraucht. Kein Befund, aber im Bericht, damit es niemand neu entdecken muss.
+
+### BUG-55: Der NAT-Fall **mit Tippfehlern** — 4 von 8 kommen hinein
+
+- **Severity: Medium** · PROJ-1 AC-8 · **kein Rückfall in BUG-54**
+- Acht verschiedene Spieler hinter **einer** geteilten Adresse, jeder vertippt sich **einmal** und gibt dann das richtige Passwort ein:
+
+```
+Spieler 1–4: Tippfehler → falsch, danach richtig → angemeldet
+Spieler 5:   Tippfehler → falsch, danach richtig → ABGEWIESEN
+Spieler 6–8: schon der Tippfehler → ABGEWIESEN, danach ebenso
+ERGEBNIS: 4 von 8 kamen hinein.
+```
+
+- **Warum das kein Rückfall ist:** Die Zusage „ein geglückter Login erstattet seinen eigenen Versuch" hält — die Messungen oben belegen sie. Dies ist der **Rest, den die Zusage nicht abdeckt**: Fehlversuche werden weiterhin pro Adresse gezählt, und **fünf Tippfehler pro Minute gelten für den ganzen Schulanschluss zusammen**. Ab dem fünften ist die Verbindung für alle dicht — auch für die, die richtig tippen.
+- **Warum es trotzdem zählt:** Genau die Zielgruppe, die der BUG-54-Nachtrag als Grund nennt — Familien- und Schulanschlüsse, CGNAT, Kinder laut PRD —, vertippt sich. Ein Haushalt ohne Tippfehler ist die optimistische Annahme; der Nachtrag misst nur diesen Fall.
+- **Das ist dieselbe Lücke wie beim letzten Mal, eine Ebene tiefer.** In `design.md` steht im selben Abschnitt der Satz „Eine Grenze ohne Zahl ist eine Grenze, die niemand prüft" — und der Fall mit Tippfehlern ist dort nirgends beziffert.
+- **Richtungen** (nicht umgesetzt, `/qa` baut nicht): den IP-Grenzwert anheben und dafür den Konto-Zähler enger stellen; oder Fehlversuche pro Adresse **und Konto** kombiniert bewerten, statt die Adresse allein zu bestrafen. Beides berührt die Abwägung aus `design.md` und gehört entschieden, nicht beiläufig geändert.
+
+### BUG-56: Die Zählertabelle wächst unbegrenzt — und speichert E-Mail-Adressen unbefristet
+
+- **Severity: Medium** · trifft `docs/privacy.md` und PROJ-4
+- `public.auth_throttle`: **1433 Zeilen**, älteste vom selben Tag 08:46. **Nichts löscht abgelaufene Fenster.** `clear_auth_attempts` wird ausschließlich für den Konto-Schlüssel nach erfolgreichem Login gerufen; einen Aufräum-Job, Cron oder TTL gibt es weder in `supabase/` noch in `src/`.
+- **Ein zugesagter Mechanismus ohne Code:** Der Index `auth_throttle_window_idx` trägt in `0003_auth_throttle.sql:23-24` den Kommentar **„Für das Aufräumen alter Fenster"** — das Aufräumen, für das er da ist, existiert nicht. Dasselbe Muster wie BUG-36, nur in der Datenbank.
+- **Die datenschutzrechtliche Hälfte wiegt schwerer als die Größe.** Der Schlüssel lautet `login:account:<e-mail-adresse>`. Die Tabelle ist damit ein **unbefristeter Speicher der Adressen aller, die sich je vertippt haben** — in einem Projekt mit `law: gdpr`, dessen Datenmodell ausdrücklich festhält, die E-Mail bleibe beim Auth-System. Und die Kontolöschung aus PROJ-4 würde diese Zeilen nicht mitnehmen: Sie hängen an keinem Fremdschlüssel.
+- Der Speicherbedarf allein wäre unkritisch; die Aufbewahrung ist es nicht.
+
+### BUG-57: Ein bekanntes Konto lässt sich mit 20 Anfragen je 15 Minuten aussperren
+
+- **Severity: Low** · **bewusste Entscheidung, jetzt beziffert**
+- Gemessen: 20 Fehlversuche gegen **ein** Konto von **20 verschiedenen** Adressen — alle 20 kommen durch, keiner gedrosselt. Danach der rechtmäßige Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse: **abgewiesen**, 15 Minuten lang.
+- Kein neuer Fehler: `design.md` benennt den Preis („ein hartnäckiger Angreifer kann ein bekanntes Konto weiterhin phasenweise blockieren"). Neu ist die Zahl — **20 Anfragen pro 15 Minuten genügen**, um jemanden dauerhaft draußen zu halten, und das kostet einen Angreifer praktisch nichts.
+- Gehört in dieselbe Entscheidung wie BUG-55: Beide hängen an der Verteilung der Grenzwerte zwischen IP- und Konto-Zähler.
+
+### BUG-58: Fehlerhaft geformte Action-Daten ergeben HTTP 500 statt einer sauberen Absage
+
+- **Severity: Low**
+- Ein `Next-Action`-Aufruf ohne das erwartete Argumentgerüst antwortet gelegentlich mit **HTTP 500 „Connection closed."** statt der sauberen Fehlerantwort. Aus dem Browser vermutlich nicht auslösbar — der Client serialisiert korrekt —, nur beim manuellen Nachbau des Protokolls gesehen.
+- Notiert, weil frühere Läufe dieses Projekts „Eingabevalidierung ohne einen einzigen 500er" ausdrücklich als bestandene Prüfung geführt haben. Diese Aussage gilt für die Feldinhalte, nicht für das Transportformat.
+
+### Regression (Bahn C3) — ohne Befund
+
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` | **166/166 grün**, 17 Dateien, 3,72 s |
+| `npm run lint` | grün, Exit 0 |
+| `npm run build` | grün, Next.js 16.3.3, 5 Routen + Proxy |
+| `npx playwright test` — **Lauf 1** | **33/33 grün**, 50,8 s, kein Retry |
+| `npx playwright test` — **Lauf 2**, unmittelbar danach | **33/33 grün**, 49,5 s |
+| `npx vitest run src/lib/auth/throttle.test.ts` (Bahn B3, unabhängig) | 13/13 grün |
+
+Kernabläufe abgedeckt und **zweimal** gefahren: Registrierung, Anmeldung, Abmeldung, Zugangsschutz, Passwort-Reset über den echten Mail-Link inklusive Zweitgerät, gespielte Quiz-Runde bis zum gespeicherten Ergebnis. Unabhängig gegengeprüft: `GET /` ohne Sitzung → 307 auf `/login`; in der Datenbank stehen 421 `runs`-Zeilen mit frischem Zeitstempel — die Runden der E2E-Läufe sind wirklich persistiert.
+
+**Migration `0004`:** lokal angewandt (`supabase migration list` zeigt alle vier), `refund_auth_attempt` vorhanden, Rechte korrekt (`service_role` ja, `anon`/`authenticated` nein). Die Migrationskette wurde in einer **frischen Wegwerf-Datenbank** der Reihe nach eingespielt — alle vier ohne Fehler.
+
+### Keine neuen Unit-Tests in diesem Lauf — mit Begründung
+
+Step 6 verlangt, isolierte Logik zu prüfen und zu testen. Ich habe das getan und **nichts Ungedecktes gefunden**: Der Erstattungspfad ist in `src/lib/auth/throttle.test.ts` positiv *und* negativ festgehalten (genau eine Erstattung; der IP-Schlüssel darf nie im Löschaufruf auftauchen), das Szenario in drei zusammengehörigen Playwright-Tests. Die Untergrenze `greatest(…, 0)` ist SQL und wurde von Bahn B3 empirisch gegen die laufende Datenbank geprüft.
+
+**Für BUG-55 habe ich bewusst keinen Test geschrieben:** Er würde das heutige, unerwünschte Verhalten festschreiben, bevor entschieden ist, wie die Grenzwerte verteilt werden. Ein Test, der einen offenen Befund zementiert, macht die spätere Korrektur teurer statt sicherer.
+
+### Not Verified In This Run
+
+- [!] **`supabase db reset`** — nicht ausgeführt, weil zerstörend (1125 `profiles`, 421 `runs`, dazu der Mailpit-Zustand, auf dem die Reset-Journey aufsetzt). Ersatzweise die Kette in einer Wegwerf-Datenbank durchgespielt; ein echter Reset samt Supabase-Seed und Rollen-Setup steht aus
+- [!] **Die Playwright-Rot-Proben selbst ausgeführt von Bahn B3** — kein Browser in ihrem Lauf; sie hat den inhaltlichen Kern stattdessen unabhängig über HTTP und die Datenbank nachgemessen. Ausgeführt wurden sie von Bahn C3, zweimal, in drei Engines
+- [!] **Verhalten gegen das gehostete Projekt** — alle Zahlen stammen vom lokalen Stack
+- [!] **Ob `x-forwarded-for` in Produktion trägt** — die gesamte NAT-Messung setzt den Header selbst, was lokal geht, weil kein Reverse Proxy davorsteht. Ob der Host clientseitige Werte verwirft, entscheidet, ob der IP-Zähler überhaupt etwas wert ist (dieselbe Hausaufgabe wie BUG-18 und BUG-53)
+- [!] **Visuelle Regression und responsives Rendern** — keine Baselines; die E2E-Suite prüft Verhalten, nicht Aussehen
+- [!] **Features mit Status „Deployed"** — es gibt keine; ersatzweise die Kernabläufe von PROJ-1 und PROJ-2
+- [!] **Sauberkeit der Messumgebung:** Beide Bahnen liefen gleichzeitig gegen **dieselbe** App und Datenbank. Bahn C3 hat fremde Zählerzeilen bemerkt und darauf mit disjunkten Adressbereichen reagiert; ihre Zahlen sind davon unberührt. Für die beiden E2E-Läufe lässt sich eine Überschneidung nicht ausschließen — beide waren vollständig grün, ein falsch-grüner Effekt ist hier aber nicht konstruierbar, weil Kontention nur zu *mehr* Abweisungen führen würde
+
+### Weiterhin offen, unverändert
+
+- **BUG-40, BUG-41** (Hook-Lücken) — **auf Wunsch des Nutzers zurückgestellt**, Begründung: geringes Risiko, solange nur eine Person am Repository arbeitet. Das ist eine tragfähige Einordnung, solange sie stimmt; ändert sich das, ändert sich die Bewertung
+- **BUG-11, BUG-12, BUG-18, BUG-42 bis BUG-53** — unverändert
+- **Zwei offene `[user]`-Aufgaben auf dem Zugangsdaten-Pfad** (T4, T18) — vom Skill als **High** geführt, erst nach dem ersten Deploy bzw. mit eigenem SMTP setzbar. Der lokale Spiegel der Passwort-Mindestlänge ist gesetzt und bestätigt
+- **PROJ-1 `spec.md` beschreibt weiterhin eine andere Drosselung als der Code** — AC-8 nennt Supabases eingebaute Regel und hält fest, es gebe „keine eigene kontobezogene Drosselung". Gebaut ist das Gegenteil. Der Vertrag, den `/deploy` liest, beschreibt nicht mehr die Realität; gehört in ein `/refine PROJ-1` (in INDEX als BUG-21 geführt)
+
+### Verdikt
+
+- **BUG-54: geschlossen** — 8 von 8 und 25 von 25 gegengemessen, die Bremse dreimal gegengeprüft
+- **BUG-39: bleibt geschlossen** — 20 Angriffszyklen, exakt 5 Rateversuche
+- **Der Erstattungs-Mechanismus: hält** — sechs Angriffswinkel, kein Durchkommen, keine neuen Befunde aus der Angriffsbahn
+- **Bugs:** 4 neu — **2 Medium** (BUG-55, BUG-56), **2 Low** (BUG-57, BUG-58) · keiner davon ein Rückfall
+- **Security:** 6 Prüfungen mit Beleg bestanden · 0 mit Befund in der Angriffsbahn · 2 NOT VERIFIED (Produktions-Proxy, gehostetes Projekt)
+- **Regression:** ohne Befund — 166/166, Lint, Build, E2E 2× 33/33
+- **Production Ready: NEIN** · **PROJ-2 bleibt In Review**
+
+> **Was dieser Durchgang zeigt.** Der Fix ist gut und hält auch dem gezielten Angriff stand — das ist das erste Mal in dieser Serie, dass eine Angriffsbahn mit „keine neuen Befunde" zurückkommt. Und trotzdem steht wieder ein Befund an derselben Stelle: BUG-55 ist nicht der Fehler, der behoben wurde, sondern **der Fall daneben, den die Messung nicht abgedeckt hat**. Bei BUG-39 war es der geteilte Anschluss, bei BUG-54 der Anschluss mit Tippfehlern. Die Lehre ist nicht „schlechter fixen", sondern: Wer eine Grenze verschiebt, muss sie für die **unbequemste realistische Nutzung** durchrechnen, nicht für die glatte. Beim IP-Zähler ist die unbequeme Nutzung ein Schulanschluss am Montagmorgen.
