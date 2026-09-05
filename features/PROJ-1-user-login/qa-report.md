@@ -1094,3 +1094,190 @@ Der Nutzer hat die Einstellung im Dashboard gesetzt; hier ist die Messung, die b
 **Rückstandsfrei:** Die Registrierung wurde abgewiesen, es entstand **kein Konto** im gehosteten Projekt. Für den Fall, dass die Regel *nicht* gegriffen hätte, war ein Aufräumschritt vorbereitet (Konto über die Admin-API wieder entfernen, mit Gegenprobe) — er wurde nicht gebraucht.
 
 Damit ist die letzte offene `[user]`-Aufgabe auf einem Zugangsdaten-Pfad geschlossen. **T18 bleibt offen** und ist weiterhin nicht setzbar, solange kein eigener SMTP-Dienst konfiguriert ist.
+
+---
+
+## QA-Nachlauf — 2026-09-05 (später), Gegenprüfung von BUG-66 und BUG-68
+
+**Anlass:** Die Fixes zu BUG-66, BUG-68 und BUG-69 wurden in derselben Sitzung geschrieben, in der sie zuvor gefunden worden waren. Dieser Lauf holt die unabhängige Bestätigung nach — und prüft die neue Angriffsfläche, die dabei entstanden ist.
+
+**App URL:** `http://localhost:3000` · **Tester:** drei `qa-engineer`-Sub-Agenten mit disjunktem Scope und sauberem Kontext, Zusammenführung durch den einen Owner.
+
+Den Lanes wurde ausdrücklich gesagt, den Nachtrag im vorherigen Berichtsteil als **unbestätigte Behauptung** zu behandeln, nicht als Beleg — und die Gegenrichtung von BUG-68 selbst zu provozieren, ohne zu erfahren, wie der Fix gebaut ist.
+
+### Ergebnis in einem Satz
+
+**Alle 17 Acceptance Criteria und alle 10 Edge Cases bestanden.** BUG-66 ist bestätigt behoben, **BUG-68 nur teilweise** — und der Fix selbst hat drei neue Befunde erzeugt. Dazu ein neuer High außerhalb des Fix-Bereichs.
+
+### Acceptance Criteria — alle bestanden
+
+AC-1 bis AC-8, AC-10 bis AC-18 gegen die laufende App gemessen (Server Actions über das Flight-Protokoll, Zählerstände gegen die DB, Mails über Mailpit). Hervorzuheben:
+
+- **AC-16** — 22 Fehlversuche gegen **ein** Konto von 22 verschiedenen Adressen: erste Abweisung exakt bei Versuch 21. Leerung nach Erfolg belegt (19 Fehlversuche → 1 Login → 6 weitere kamen durch)
+- **AC-17** — Reset 3 durch, ab dem 4. abgewiesen. Lane 2 musste dafür unbekannte Adressen nehmen, weil bei einer existierenden Adresse **Supabases eigenes `email_sent = 2/h`** schon beim 2. Versuch griff — eine saubere Unterscheidung, die den Messwert erst gültig macht
+- **AC-18** — von Lane 2 **zur Laufzeit** ausgelöst: ein überlanger `x-forwarded-for` sprengt den Index, die Anmeldung wird abgelehnt statt durchgelassen. Richtung stimmt; die Art, wie sie sich auslösen lässt, ist allerdings selbst ein Befund (BUG-72)
+- **EC-1** — echter Wettlauf mit 6 gleichzeitigen Registrierungen in drei Schreibweisen: genau **1** Gewinner, 5 Feldfehler, genau 1 Zeile in `profiles` **und** in `auth.users` — kein halb angelegtes Konto. Garantie im Code bestätigt (`0001_profiles.sql:13` Unique-Index auf `lower()`, Trigger in derselben Transaktion)
+
+**EC-8 und EC-9 halten ihre Vertragszahlen exakt** (8/8 ohne Tippfehler, 4/8 mit, 20 durch und der 21. abgewiesen) — in zwei Lanes unabhängig reproduziert.
+
+**EC-10 — Verhalten bestätigt, Zahlen im Vertrag zu eng.** Beide Lanes messen die Zeitdifferenz in derselben Richtung und Größenordnung, aber mit anderen Absolutwerten: Lane 1 misst 133/84 ms (**49 ms**), Lane 2 misst 241/176 ms (**65 ms**). Der Vertrag nennt 176/102 ms und „rund 74 ms". **Kein Defekt, sondern ein Formulierungsfehler in EC-10:** Eine Momentaufnahme wurde als feste Eigenschaft geschrieben. Die Zahl ist maschinen- und lastabhängig; EC-10 sollte „rund 50–75 ms" sagen und den Messaufbau nennen.
+
+### BUG-66 — bestätigt behoben
+
+Vollständig über den echten Reset-Link durchgespielt (Konto → Reset anfordern → Mail aus Mailpit → `/auth/confirm` mit frischem Client → neues Passwort = altes):
+
+```
+{"fieldErrors":{"password":"Das neue Passwort muss sich vom bisherigen unterscheiden."}}
+```
+
+Keine Störungsmeldung, Feldfehler am richtigen Feld, Recovery-Sitzung danach weiter nutzbar. Belegt in `error-mapping.ts:118-124` und `reset-password-form.tsx:43-47,67`.
+
+### BUG-68 — nur teilweise behoben
+
+Die Richtung „doppelter Trainername → Feldfehler" hält, auch unter echter Gleichzeitigkeit (EC-1). **Aber:**
+
+**(a) Die Richtung, um die es ging, ist end-to-end nicht belegt.** Der Browser-Beleg im vorherigen Nachtrag zeigt nur die Richtung, die schon *vor* dem Fix richtig war. Für „500 bei freiem Namen → Störungsmeldung" existiert allein ein Unit-Test auf eine reine Funktion, die die entscheidende Antwort als **Argument** bekommt. Der Code, der dieses Argument erzeugt, ist ungetestet. **Die Formulierung „✅ behoben, belegt" im vorherigen Abschnitt überzeichnet den Beleg** — das ist hiermit korrigiert.
+
+**(b) In genau diesem ungetesteten Code steckt ein Rest des Defekts** — siehe BUG-74.
+
+### Security-Audit
+
+**31 Prüfungen belegt · 8 `[!] NOT VERIFIED` · 5 neue Befunde.**
+
+Sauber geblieben: Authentifizierungs-Umgehung, RLS für anon **und** für ein fremdes angemeldetes Konto, Input-Injection (mit Persistenz-Gegenprobe: 0 Zeilen verletzen das Format), Zugangsdaten in der URL, sensible Daten in Antworten, Session-Cookie.
+
+**Geheimnisse im Bundle: kein Treffer, mit belastbarer Kontrolle.** Produktions-Build in einer Kopie, dazu die 22 tatsächlich ausgelieferten Chunks (5,4 MB). Zwei Positivkontrollen **gefunden**, eine eigens gesetzte Negativkontrolle **nicht** — und `createAdminClient`, `isTrainerNameTaken`, alle vier Drossel-Funktionen, `SUPABASE_SERVICE_ROLE_KEY`, `service_role`: je 0 Treffer. Ein Dev-Chunk enthält die Meldungstexte aus `error-mapping.ts`; im Produktions-Bundle sind sie weggeschüttelt. **Kein Befund.**
+
+**Die neue Service-Role-Abfrage als Angriffsfläche — Urteil:** kein Orakel (nur ein Boolean, das AC-2 ohnehin preisgibt), und die **Drosselung ist unbeschädigt**: Gezählt wird nachweislich **vor** der Abfrage (`actions.ts:47` vor `:68`), belegt nicht nur im Code, sondern an der Laufzeit — abgewiesene Versuche antworten ~115 ms schneller, weil Signup und Abfrage dort gar nicht laufen. Auch über eine matcher-ausgenommene Route (`/x.png`) greift die Sperre ab dem 6. Versuch. **Aber sie taugt als Verstärker** — BUG-74.
+
+### Bugs
+
+#### BUG-71: `/auth/confirm` prüft ein Credential ohne jede App-Drosselung
+**Severity: High** · betrifft AC-11, AC-12, EC-7
+
+`src/app/auth/confirm/route.ts:57-77` ruft `verifyOtp` auf und enthält **keinen** `registerAttempt`-Aufruf — anders als alle drei Server Actions (`actions.ts:47`, `:92`, `:136`). Gemessen: **40 ungültige Token-Einlösungen von einer Verbindung, 40× 307, null abgewiesen.**
+
+**Warum das trotz hoher Token-Entropie ein High ist — und der Grund ist nicht das Erraten.** Der Weg ist ein ungebremster Kanal zum Auth-Dienst. Supabase begrenzt `token_verifications` auf 30 je 5 Minuten (`config.toml:222`), und dieses Limit sieht wegen der Server-Action-Architektur für **alle** Spieler dieselbe Server-IP (BUG-21). Ein Angreifer kann das gemeinsame Kontingent also erschöpfen und damit **jeden legitimen Passwort-Reset blockieren** — und der Reset ist laut PRD der einzige Weg zurück ins Konto. Lokal löste das Limit nicht aus (dasselbe Muster wie beim historischen AC-8-Problem), gegen das gehostete Projekt ist es zu messen.
+
+**Repro:** 40× `GET /auth/confirm?token_hash=<beliebig>&type=recovery` von einer Verbindung — keine Abweisung.
+
+#### BUG-72: Der rohe `x-forwarded-for` wird ungeprüft zum Datenbank-Primärschlüssel
+**Severity: Medium** · betrifft AC-8, AC-18
+
+`src/lib/auth/throttle.ts:60-66` übernimmt den Headerwert ohne Längen- oder Formatprüfung; `0003_auth_throttle.sql:15` ist `key text primary key`. Gemessen: ein Schlüssel mit **4009 Zeichen** in der Tabelle. Oberhalb der ~8-KB-Indexgrenze bricht das Einfügen ab und erzwingt einen **vom Client per Kopfzeile auslösbaren, unbehandelten HTTP 500** auf dem Anmeldepfad. Im Dev-Modus enthält die Antwort Fehlertext und absolute Dateipfade (in Produktion ersetzt Next das durch einen Digest — an der Live-URL zu bestätigen).
+
+Die Richtung ist korrekt (AC-18: abgelehnt statt durchgelassen), aber ein Fehlerpfad, den ein Fremder auf Zuruf auslöst, gehört behandelt.
+
+#### BUG-73: `auth_throttle` wächst unter Angreiferkontrolle unbegrenzt
+**Severity: Medium** · betrifft AC-8, AC-18
+
+Jeder unterschiedliche Headerwert erzeugt eine neue Zeile — **auch wenn der Versuch abgewiesen wird** (`throttle.ts:103-109`, „Beide werden immer gezählt"). Gemessen, 30 Login-Versuche mit je 1500 Zeichen Zufallswert gegen **eine** Adresse: **+30 Zeilen, +81 920 Bytes**, davon 10 abgewiesene — und trotzdem eingefügt.
+
+`prune_auth_throttle` (`0005`) räumt nur Fenster **älter als eine Stunde** und höchstens 50 Zeilen je Aufruf; der stehende Bestand einer Angriffsstunde ist damit unbegrenzt. Auf einem 500-MB-Free-Tier relevant. Der *beliebige* Wert hängt an BUG-61 — die **Kardinalität** bleibt aber auch danach, weil ein einzelnes IPv6-/64 praktisch unbegrenzt echte Adressen liefert.
+
+> **BUG-72 und BUG-73 haben dieselbe Wurzel** — der Headerwert geht ungeprüft weiter — und eine gemeinsame Behebung (Länge begrenzen, Format prüfen, sonst auf einen Sammelschlüssel abbilden).
+
+#### BUG-74: `.ilike()` in der neuen Trainername-Nachfrage — falsche Aussage und Full Scan
+**Severity: Medium** · betrifft AC-2, EC-1 · **Defekt im Fix zu BUG-68**
+
+`src/lib/auth/trainer-name.ts:31-36` fragt mit `.ilike('trainer_name', trainerName)`. `_` ist ein **erlaubtes** Trainername-Zeichen (`validation/auth.ts:7`) **und** ein LIKE-Platzhalter für genau ein Zeichen. Die App-Prüfung weicht damit von der Wahrheitsquelle ab, die der Trigger benutzt (`0001_profiles.sql:39`: `lower(...) = lower(...)`).
+
+**Von zwei Lanes unabhängig belegt**, über zwei verschiedene Wege:
+
+```
+select count(*) from profiles where lower(trainer_name)=lower('QaPro_e1');  -> 0   (Name ist FREI)
+GET /rest/v1/profiles?select=id&trainer_name=ilike.QaPro_e1&limit=1         -> [{"id":"d120…"}]  (App: „vergeben")
+GET /rest/v1/profiles?trainer_name=ilike.QaOutage_robe                      -> [{"trainer_name":"QaOutageProbe"}]
+```
+
+**Zwei Wirkungen:**
+
+1. **Der Rest von BUG-68.** Bei einer echten Störung während der Registrierung liest ein Nutzer, dessen Wunschname einen Unterstrich enthält, wieder „Dieser Trainername ist bereits vergeben." — genau die Fehlklasse, die der Fix beseitigen sollte, nur enger.
+2. **Ein Verstärker.** `ilike` kann den Funktionsindex `profiles_trainer_name_lower_key` nicht benutzen. Gemessen: `Seq Scan`, 0,72 ms gegen 0,03 ms beim Index-Scan — **Faktor ~23 bei 1340 Zeilen, linear wachsend**. 25 Registrierungen mit vergebenem Namen erzeugten **+22 Full Scans und +29 467 gelesene Zeilen** — und legten **kein einziges Konto an**, hinterlassen also keine Spur und brauchen kein Aufräumen.
+
+Korrekt wäre ein Vergleich ohne Musterzeichen — Escaping von `_`, oder besser eine Abfrage, die denselben Funktionsindex trifft wie der Trigger.
+
+#### BUG-75: Die Verdrahtung beider Fixes hat keinen Wächter
+**Severity: Medium**
+
+Lane 3 hat nicht nur die Wächter mutiert, sondern auch den Code, der sie benutzt:
+
+| Mutation | Ergebnis |
+|---|---|
+| BUG-68-Guard in `error-mapping.ts` entfernt | **rot** (1 Test) |
+| BUG-66-Guard in `error-mapping.ts` entfernt | **rot** (1 Test) |
+| `isTrainerNameTaken` in `actions.ts:68` umgangen (`… : false` → `false`) | **171/171 grün** |
+| `mapUpdatePasswordError` in `actions.ts:198` nicht mehr aufgerufen | **171/171 grün** |
+
+Man könnte AC-2 vollständig totlegen — jeder vergebene Trainername würde als „Die Verbindung ist fehlgeschlagen" gemeldet — und die Suite bliebe grün. Dazu: `src/lib/auth/trainer-name.ts` ist die **einzige** Datei unter `src/lib/auth/` ohne Testdatei daneben, obwohl sie die einzige Stelle außerhalb der Drosselung ist, die den Service-Role-Schlüssel benutzt. Ihr Fehlerpfad (`catch → false`) ist nirgends abgesichert.
+
+Der Rot-Nachweis im vorherigen Nachtrag war korrekt, aber **eine Ebene zu tief angesetzt**: Er belegte, dass die Funktionen richtig entscheiden, nicht dass die Actions sie benutzen.
+
+#### BUG-76: Der Reset-Pfad hat keine eigene Konto-Grenze
+**Severity: Low** · betrifft AC-17
+
+`throttle.ts:105` nimmt für **jeden** Scope `LIMITS.credentialsPerAccount` (20/15 min). Für den Reset heißt das: bis zu 20 Mails je 15 Minuten an eine Opferadresse, sobald Adressen rotierbar sind (BUG-61) — rund 80 pro Stunde, jede eine Einheit des SMTP-Kontingents. AC-17 nennt nur die Verbindungsgrenze; die Konto-Seite steht in keinem Kriterium. Lokal nicht bis zur Grenze messbar, weil Supabases `email_sent = 2/h` vorher greift.
+
+#### BUG-77: Der `origin`-Header fließt ungeprüft in `redirectTo`
+**Severity: Low** · betrifft AC-10, AC-11, EC-7
+
+`actions.ts:147-163` nimmt `headerList.get('origin') ?? NEXT_PUBLIC_SITE_URL` ohne eigene Prüfung. **Lokal folgenlos** — nachgemessen mit `Origin: https://evil.example`: Der Mail-Link zeigt weiterhin auf `localhost:3000`, weil die eigene Vorlage `{{ .SiteURL }}` benutzt und die Redirect-Allowlist eng steht.
+
+**Scharf wird es genau dann, wenn beides zutrifft, was in Produktion offen ist:** Vorlage nicht gesetzt (**T18**, Deploy-Blocker) → Supabase nimmt die Standardvorlage mit `{{ .ConfirmationURL }}`, gebaut aus `redirect_to`; **und** die Redirect-Allowlist des gehosteten Projekts steht weit. Dann zeigt der Reset-Link eines Opfers auf eine fremde Domain.
+
+#### BUG-78: Ein Test verspricht im Namen mehr, als er bewacht
+**Severity: Low**
+
+„lässt die Nachfrage den 429 nicht überstimmen — Drosselung bleibt Drosselung" (`error-mapping.test.ts`) bleibt grün, wenn man die 429-Prüfung **unter** den 500-Zweig verschiebt. Rot wird er erst, wenn der 429-Zweig ganz verschwindet — die Reihenfolge, die sein Name behauptet, bewacht er nicht.
+
+#### Unverändert offen aus den Vorläufen
+- **BUG-67** (Low) — Sperrmeldung nennt immer „von dieser Verbindung", auch wenn der **Konto**-Zähler auslöst. In beiden Lanes erneut beobachtet
+- **BUG-70** (Low) — breite GRANTs auf `auth_throttle`; weiterhin wirkungslos, weil RLS ohne Policy alles sperrt (in diesem Lauf erneut belegt)
+- **BUG-61**, **BUG-12**, **BUG-18** — Deploy-Blocker, mit ihren Zahlen bestätigt (25 Konten in 10,1 s; keine Security-Header; `X-Forwarded-Host` lässt die Action laufen)
+
+### `[user]`-Aufgaben
+
+- [x] **T4** — abgehakt; lokal gegengeprüft (`config.toml:199`). Die gehostete Einstellung wurde in diesem Lauf nicht erneut gemessen (die Messung vom selben Tag steht weiter oben)
+- [ ] **T18** — offen, auf dem Passwort-Reset-Pfad. Nach der Skill-Regel ein **High**. Bereits als Deploy-Blocker in `features/INDEX.md` geführt und **nicht setzbar**, solange kein eigener SMTP-Dienst existiert. Lokal funktioniert EC-7 mit der Vorlage `supabase/templates/recovery.html` nachweislich. **BUG-77 hängt daran**
+
+### Regression und automatisierte Tests
+
+| Prüfung | Ergebnis |
+|---|---|
+| **Test** | ✅ 17 Dateien, **171/171** |
+| **Lint** | ✅ **73 Dateien, 0 Errors, 0 Warnings** (Dateizahl aus dem JSON-Report gezählt) |
+| **Build** | ✅ Exit 0 in einer Kopie, plus `tsc --noEmit` **im echten Projekt** über 115 Dateien inkl. `tests/` |
+| **E2E** | ✅ **33/33** in Chromium, Firefox, Mobile Safari — Browser waren vorhanden, **nichts nachinstalliert** |
+
+**0 Regressionen an PROJ-2** (einziges `Approved`-Feature; kein Feature steht auf `Deployed`). Schema, beide Trigger, alle Policies und Constraints unversehrt; Funktions-GRANTs nur `postgres` + `service_role`. **Aufräum-Mechanik aktiv nachgewiesen:** künstlich auf 2 Stunden gealterte Zeile eingefügt → nach einem Zählvorgang verschwunden.
+
+**Der Projektbaum ist unverändert** (`git status --porcelain` leer); alle Mutationen liefen in einer Kopie außerhalb des Projekts.
+
+### Unit-Tests aus diesem Lauf
+
+**Keine geschrieben — mit Begründung, nicht aus Versäumnis.** Die identifizierte Lücke (BUG-75) sitzt an Code, der in diesem Lauf als defekt befunden wurde (BUG-74). Ein Test gegen den jetzigen Stand würde entweder das `ilike`-Verhalten als richtig festschreiben oder als roter Test liegen bleiben — beides schlechter als eine benannte Lücke. **Die Tests gehören in denselben `/build`-Durchgang, der BUG-74 behebt**, und dann auf die Verdrahtung, nicht nur auf die reine Funktion.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser, responsive Darstellung (375/768/1440 px), DevTools-Prüfungen** — kein Browser-Engine. Betrifft die *sichtbare* Darstellung von AC-13, AC-14, AC-15 und den AuthCard-Umschalter
+- [!] **Visuelle Regression an geteilten Komponenten** — kein Bildvergleich vorhanden
+- [!] **AC-13 „ohne dass die Seite neu lädt"** und **AC-3 „Link zum Login"** — clientseitiges Verhalten
+- [!] **AC-15 optische Platzierung** — Markup und Chunk-Inhalt belegt, gerendertes Layout nicht
+- [!] **EC-6 echter Netzwerkausfall** — nicht provozierbar, ohne den Stack für die parallelen Lanes lahmzulegen
+- [!] **BUG-68 Gegenrichtung zur Laufzeit** — verlangt einen 500 ohne Namenskollision, also einen DDL-Eingriff in die Test-Datenbank; von der Berechtigungsprüfung der Umgebung blockiert. Belegt sind nur Codeebene und Unit-Test
+- [!] **Rate Limiting auf gewöhnlichen Endpunkten** — **nicht implementiert (für MVP optional)**, gemessen: 60× `GET /login` ohne Drosselung. Kein Pass
+- [!] **Security-Header, BUG-61-Schließbedingung, T18, Redirect-/Site-URL des gehosteten Projekts** — nur gegen die Live-URL bzw. das Dashboard prüfbar. Damit auch die tatsächliche Ausnutzbarkeit von BUG-77
+- [!] **Supabases `token_verifications`-Kontingent** (der Kern von BUG-71) — 40 direkte Aufrufe lösten lokal kein 429 aus, dasselbe Muster wie beim historischen AC-8-Problem. Gegen das gehostete Projekt zu messen
+- [!] **Mail-Bombing über den Reset-Konto-Zähler bis zur Grenze** — lokal durch `email_sent = 2/h` abgeschnitten; nur der Code-Beleg liegt vor
+
+### Verdikt
+
+**NOT READY.** Kein Critical. **Ein High: BUG-71.** Dazu 4 Medium (BUG-72, BUG-73, BUG-74, BUG-75) und 3 Low (BUG-76, BUG-77, BUG-78), plus die weiterhin offenen BUG-67 und BUG-70.
+
+**Was dieser Lauf positiv festgestellt hat:** Der Vertrag wird eingehalten — alle 17 AC und alle 10 EC bestanden, EC-1 unter echter Gleichzeitigkeit, EC-8/EC-9 mit exakt den zugesagten Zahlen. BUG-66 ist bestätigt behoben. Die Drosselung ist durch den Eingriff **nicht** beschädigt worden, und der Service-Role-Schlüssel erreicht den Browser nicht — beides mit belastbaren Kontrollen geprüft.
+
+**Was offen bleibt:** BUG-71 ist neu und unabhängig vom Fix. BUG-74 und BUG-75 sind Defekte **im Fix selbst** und in seiner Absicherung; BUG-72 und BUG-73 lagen schon vorher im Drosselungspfad und sind erst jetzt aufgefallen.
+
+**Drei Dinge gehören außerdem in den Vertrag statt in einen Bugreport:** die Zahlen in **EC-10** sind maschinenabhängig und zu eng formuliert; die **Konto-Grenze des Reset-Pfads** (BUG-76) steht in keinem Kriterium; und ob `/auth/confirm` gedrosselt sein muss, ist eine Frage an AC-11/AC-12, die der Vertrag nicht beantwortet.
+
+`features/INDEX.md` bleibt bei **In Review**.
