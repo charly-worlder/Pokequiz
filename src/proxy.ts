@@ -74,7 +74,13 @@ export async function proxy(request: NextRequest) {
    * Next's own guidance is that "any Server Actions called from components must
    * perform their own authorization checks". Every action here does, and the
    * database enforces the same rules a second time through RLS.
-   * `server-actions.guard.test.ts` keeps that from silently ceasing to be true.
+   *
+   * `server-actions.guard.test.ts` catches an action written without any session
+   * check at all. It does **not** judge whether a check that is there actually
+   * works — that is code-review territory, and design.md says so plainly. This
+   * comment used to claim the guard kept the whole property "from silently
+   * ceasing to be true"; it does not, and leaning on that claim is how one stops
+   * looking.
    */
   /**
    * BUG-21: the exception is as narrow as the reason for it.

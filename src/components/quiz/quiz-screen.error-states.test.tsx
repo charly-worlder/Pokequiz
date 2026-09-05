@@ -338,6 +338,33 @@ describe('QuizScreen — Fehlerpfade', () => {
     ).not.toBeInTheDocument()
   })
 
+  // BUG-33: `answer` plant `advance` aus dem Render **vor** `setStreak`. Das
+  // eingefangene `fetchQuestion` hielt `streak` in seiner Closure, der Zweig
+  // „Pool leer" speicherte deshalb eine richtige Antwort zu wenig — dauerhaft,
+  // und für die Rangliste von PROJ-3 relevant.
+  it('EC-2 / BUG-33: „Pool leer" nach einer richtigen Antwort speichert Serie 1, nicht 0', async () => {
+    // Erste Frage kommt, danach ist der Pool erschöpft — genau die Lage aus EC-2.
+    getNextQuestion.mockResolvedValueOnce({ status: 'ok', question: question(1) })
+    getNextQuestion.mockResolvedValue({ status: 'pool-empty' })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() => expect(images().length).toBeGreaterThan(0))
+    loadImages()
+    await waitFor(() => expect(screen.getByText('Name1')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name1' }))
+
+    await waitFor(() => expect(saveRun).toHaveBeenCalledTimes(1))
+    // Vor dem Fix stand hier 0, während der Bildschirm „1 richtige Antworten" zeigte.
+    expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 1 })
+
+    // Und die Gewinner-Meldung bleibt aus: eine richtige Antwort ist nicht der Pool.
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
+    expect(screen.queryByText('Alle Pokémon geschafft')).not.toBeInTheDocument()
+  })
+
   // BUG-13 (Medium): Die Verwurfsgrenze griff nur, wenn der Spieler wartete.
   // Fiel die Bildquelle aus, während er noch antwortete, zog das Vorladen
   // endlos nach — je vier Namensabfragen an die PokeAPI, ohne Backoff.

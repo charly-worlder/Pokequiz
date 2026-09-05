@@ -9,10 +9,19 @@ import ts from 'typescript'
  *
  * **Wozu das Ganze.** Jede aus einer `'use server'`-Datei exportierte Funktion —
  * und jede Funktion mit einem `'use server'` im eigenen Rumpf — ist ein
- * öffentlicher HTTP-Endpunkt. Seit BUG-9 leitet der Proxy Action-POSTs bewusst
- * nicht mehr um, weil Next.js eine HTTP-Weiterleitung darauf als Protokollbruch
- * behandelt; die Sitzungsprüfung sitzt deshalb in der Action selbst. Damit das
- * nicht bei der fünften Action still verfällt, erzwingt der Wächter es.
+ * öffentlicher HTTP-Endpunkt. Seit BUG-9 leitet der Proxy Action-POSTs auf der
+ * Quiz-Route bewusst nicht mehr um, weil Next.js eine HTTP-Weiterleitung darauf
+ * als Protokollbruch behandelt; die Sitzungsprüfung sitzt deshalb in der Action
+ * selbst.
+ *
+ * **Dieser Wächter beantwortet genau eine Frage:** „Gibt es eine Server Action,
+ * an die beim Schreiben niemand gedacht hat?" Er prüft, ob im Rumpf ein Aufruf
+ * namens `getUser` steht — **nicht**, ob die Sitzung wirksam geprüft wird. Eine
+ * Attrappe kommt durch: ein Aufruf in einem toten Zweig, ein nie ausgeführter
+ * Callback, ein eigener lokaler `getUser`. Das ist eine bewusste, dokumentierte
+ * Grenze und kein Versehen — `design.md` → „Was der Wächter über die Server
+ * Actions leistet — und was nicht" führt sie samt Messung auf. **Ob eine
+ * vorhandene Prüfung taugt, entscheidet das Code-Review**, nicht diese Datei.
  *
  * **Überarbeitet am 2026-09-05 nach BUG-20.** Die erste Fassung versprach genau
  * diese Zusicherung und hielt sie nicht — ein QA-Verifizierer fand fünf

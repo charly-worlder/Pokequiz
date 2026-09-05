@@ -281,16 +281,44 @@ Es war also **Kontention im Messaufbau**, kein Produktfehler. Bestätigt durch d
 
 ---
 
-## Notiz zum Wächter über die Server Actions (2026-09-04)
+## Was der Wächter über die Server Actions leistet — und was nicht (Stand 2026-09-05)
 
-Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke *darin* (Action) geworden. Das ist das vom Framework vorgesehene Muster — und es hat eine offensichtliche Schwäche: Es hält nur, solange **jede** Action daran denkt. Vier Actions einmal von Hand nachzusehen ist keine Zusicherung, sondern eine Momentaufnahme; die fünfte schreibt jemand in sechs Wochen und liest diesen Absatz dabei nicht.
+Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke *darin* (Action) gewandert. Das ist das vom Framework vorgesehene Muster, es hat aber eine offensichtliche Schwäche: Es hält nur, solange jede Action daran denkt. `src/lib/actions/server-actions.guard.ts` ist der Versuch, das maschinell abzusichern.
 
-`src/lib/actions/server-actions.guard.test.ts` schließt das. Er durchsucht `src/` nach Dateien, deren erste Anweisung `'use server'` ist, liest über den **TypeScript-AST** (nicht per Regex) jede exportierte Funktion heraus und verlangt für jede eine von zwei Antworten: eine Sitzungsprüfung im Rumpf, oder ein Eintrag in `PUBLIC_ACTIONS` **mit Begründung**. Eine neue, ungeschützte Action macht `npm test` rot und nennt sich beim Namen samt Pfad.
+**Dieser Abschnitt ist zweimal umgeschrieben worden, weil er zweimal mehr versprochen hat, als der Code hielt** (BUG-20, dann BUG-32). Deshalb steht hier jetzt die Grenze zuerst.
 
-Drei Entwurfsentscheidungen daran sind bewusst:
+### Was er zuverlässig leistet
 
-- **Die Liste ist keine Erlaubnisliste, sondern eine Begründungspflicht.** Wer einträgt, schreibt den Grund dazu, und der Test prüft, dass der Grund nicht leer ist. Vier Einträge stehen dort — Registrierung, Anmeldung, „Passwort vergessen" und Abmelden —, alle mit dem Satz, warum sie ohne Sitzung erreichbar sein *müssen*.
-- **Ein eigener Test stellt sicher, dass der Sucher überhaupt etwas findet.** Ohne ihn wäre ein umbenannter Ordner oder eine geänderte Schreibweise ein still grüner Test, der nichts mehr prüft — die gefährlichste Sorte.
-- **Kein ESLint-Regelwerk.** Eine eigene Regel hätte dasselbe geleistet, aber ein lokales Plugin, Flat-Config-Verdrahtung und eine zweite Stelle gebraucht, an der die Begründungen leben. Der Test läuft in `npm test`, also in der Prüfung, die dieses Projekt ohnehin vor jedem Commit fährt.
+- **Er findet jede Server Action.** Ein QA-Verifizierer hat am 2026-09-05 alle in `node_modules/next/dist/docs/` dokumentierten Formen durchprobiert — Datei-Direktive, Inline-`'use server'` im Funktionsrumpf, Pfeilfunktion, Objekt-Methode, anonymer Default-Export, Currying, `export { inner as doThing }`, HOF-Umhüllung, `async function*`, `'use client'` davor. **Keine wurde übersehen.**
+- **Was er nicht analysieren kann, lässt er nicht durch.** Re-Exporte und destrukturierte Exporte fallen als „nicht analysierbar" durch, statt stillschweigend übersprungen zu werden.
+- **Er kann nicht still grün werden.** Der Gegenzeuge verlangt, dass jede Datei, die `use server` erwähnt, mindestens eine Action liefert, und hält Mindestzahlen für Actions und Dateien. Bricht die Erkennung, wird der Test rot statt leer — das war die Lücke, an der die erste Fassung scheiterte.
 
-Rot geprüft: Eine absichtlich ungeschützte `leakEverythingAction` in `run-actions.ts` ließ ihn fallen, mit Name, Pfad und Handlungsanweisung in der Meldung.
+### Was er ausdrücklich **nicht** leistet
+
+**Er prüft, ob ein Aufruf namens `getUser` im Rumpf steht — nicht, ob eine Sitzung wirksam geprüft wird.** Folgende Attrappen kommen durch, alle am 2026-09-05 gemessen:
+
+| Form | Urteil des Wächters |
+|---|---|
+| Eigene lokale `function getUser() { return { id: 'anyone' } }` | grün |
+| `if (false) { await supabase.auth.getUser() }` | grün |
+| Aufruf hinter einem Feld, das der Aufrufer nie setzt | grün |
+| Ein Callback mit dem Aufruf, der nie ausgeführt wird | grün |
+| `await supabase.auth.getUser()`, dessen Ergebnis niemand auswertet | grün |
+
+**Das bleibt so.** Ein Prüfer, der entscheidet, ob das Ergebnis eines Aufrufs den Ablauf tatsächlich steuert, ist eine Datenflussanalyse — er bräuchte Typinformationen, Erreichbarkeitsanalyse und eine Vorstellung davon, was „den Ablauf steuern" heißt. Der dritte Anlauf auf dieselbe Zusicherung würde denselben Fehler zum dritten Mal machen: einen Prüfer bauen, der etwas Schwächeres misst, als sein Name behauptet, und dem man deshalb zu Unrecht vertraut.
+
+**Weitere benannte Grenzen:**
+
+- **`PUBLIC_ACTIONS` befreit nach Namen, nicht nach Datei** (BUG-34). Eine neue Action, die irgendwo in `src/` `loginAction` heißt, ist automatisch befreit. Die „Begründungspflicht" ist eine Längenprüfung.
+- **Er sieht nur `.ts`/`.tsx` unterhalb `src/`.** Eine Action in `.js`/`.mjs` oder außerhalb wäre für Erkennung **und** Gegenzeugen gleichzeitig unsichtbar.
+- **Er läuft nur, wenn jemand ihn startet** (BUG-36). Die frühere Begründung an dieser Stelle — „läuft in `npm test`, also in der Prüfung, die vor jedem Commit ohnehin fährt" — war unbelegt: Es gibt kein `.husky/`, kein `.github/workflows/` und keinen Hook.
+
+### Was daraus folgt — die Aufgabenteilung
+
+**Der Wächter beantwortet eine Frage: „Gibt es eine Server Action, an die beim Schreiben niemand gedacht hat?"** Das ist die Frage, die im Alltag schiefgeht — eine neue Action, geschrieben unter Zeitdruck, ohne den Gedanken an die Sitzung. Dagegen hilft er zuverlässig, und dafür ist er gebaut.
+
+**Ob die vorhandene Prüfung etwas taugt, bleibt Sache des Code-Reviews.** Das ist keine Ausrede, sondern die ehrliche Grenze: Eine Attrappe wie `if (false) { getUser() }` entsteht nicht aus Vergesslichkeit, sondern nur absichtlich oder durch einen groben Fehler — und beides fällt einem Menschen auf, der den Diff liest. `.claude/rules/security.md` verlangt für Änderungen am Authentifizierungsfluss ohnehin ausdrückliche Zustimmung; genau dort sitzt diese Verantwortung.
+
+**Für den Review heißt das konkret:** Bei jeder neuen oder geänderten Server Action nicht prüfen, *ob* `getUser` vorkommt — das tut der Wächter —, sondern **ob sein Ergebnis den Ablauf beendet**, also ob auf einen fehlenden Nutzer wirklich ein früher Rücksprung folgt.
+
+**Und deshalb steht in `src/proxy.ts` kein Satz mehr, der sich auf den Wächter verlässt.** Der Kommentar dort behauptete, der Wächter halte die Sitzungsprüfung davon ab, „still zu verfallen". Das tut er nur für den Fall der vergessenen Action, nicht für den der unwirksamen Prüfung.

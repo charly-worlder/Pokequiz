@@ -59,6 +59,20 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   /** The stopped time, frozen into state so the result screen never reads a ref while rendering. */
   const [finalDurationMs, setFinalDurationMs] = useState(0)
 
+  /**
+   * Spiegelt `streak` **synchron** (BUG-33).
+   *
+   * `answer` plant `window.setTimeout(advance, …)` aus dem Render **vor**
+   * `setStreak(nextStreak)`. Das eingefangene `advance` hält das `fetchQuestion`
+   * desselben Renders, und dieses hielt `streak` in seiner Closure — der Zweig
+   * „Pool leer" speicherte deshalb eine richtige Antwort **zu wenig**, dauerhaft
+   * und ranglistenrelevant. Ein Ref, der neben `setStreak` gesetzt wird, ist zum
+   * Zeitpunkt des Timeouts bereits aktuell.
+   *
+   * Die Anzeige liest weiterhin den State — ein Ref löst kein Rendern aus.
+   */
+  const streakRef = useRef(0)
+
   const seenIdsRef = useRef<number[]>([])
   const discardsRef = useRef(0)
   const roundIdRef = useRef<string>('')
@@ -202,7 +216,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         // and its comment called this path „the honest place for it" — it was
         // not, and nobody looked twice.
         if (!hasCurrentRef.current) {
-          await finishRound(streak, streak >= POOL_SIZE)
+          await finishRound(streakRef.current, streakRef.current >= POOL_SIZE)
         }
         return
       }
@@ -228,7 +242,11 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     } finally {
       fetchingRef.current = false
     }
-  }, [bailToLogin, finishRound, pauseClock, streak])
+    // `streak` steht bewusst nicht in dieser Liste: Der einzige Lesezugriff läuft
+    // über `streakRef` (BUG-33). Das hält die Identität von `fetchQuestion` über
+    // eine ganze Runde stabil — und damit auch die von `advance`, das in einem
+    // Timeout eingefangen wird.
+  }, [bailToLogin, finishRound, pauseClock])
 
   /** The probe loaded the picture — promote the question (AC-10). */
   const onProbeOk = useCallback(() => {
@@ -298,6 +316,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     setStarting(true)
 
     seenIdsRef.current = []
+    streakRef.current = 0
     discardsRef.current = 0
     roundIdRef.current = crypto.randomUUID()
     accumulatedRef.current = 0
@@ -353,6 +372,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       }
 
       const nextStreak = streak + 1
+      streakRef.current = nextStreak
       setStreak(nextStreak)
 
       // spec.md EC-2 — every Pokémon in the pool answered correctly.

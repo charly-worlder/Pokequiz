@@ -82,7 +82,7 @@ describe('Server Actions — Sitzungsprüfung strukturell erzwungen', () => {
         `Die Server Action \`${action.name}\` (${where}) prüft die Sitzung nicht.\n` +
           `\n` +
           `Sie ist ein öffentlicher Endpunkt: Jeder kann sie mit beliebiger Nutzlast\n` +
-          `aufrufen, und der Proxy leitet Action-POSTs seit BUG-9 bewusst nicht mehr um.\n` +
+          `aufrufen, und auf der Quiz-Route greift der Proxy-Schutz seit BUG-9 nicht.\n` +
           `\n` +
           `Entweder ein \`await supabase.auth.getUser()\` an den Anfang — oder, wenn sie\n` +
           `wirklich ohne Sitzung erreichbar sein muss, ein Eintrag mit Begründung in\n` +

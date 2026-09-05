@@ -69,8 +69,8 @@
      Anfrageschleife. -->
 
 - [x] T13  „Nochmal spielen" startet unmittelbar eine neue Runde, statt auf den Startbildschirm zurückzuführen (BUG-10). Der Widerspruch lag im `design.md`, nicht nur im Code — der Übergang `beendet → bereit` wird dort zu `beendet → lädt` korrigiert  · files: src/components/quiz/quiz-screen.tsx, features/PROJ-2-pokemon-quiz/design.md  · → AC-9
-- [x] T14  Transport-Fänger für den Quiz-Pfad (BUG-7): den generischen Kern aus PROJ-1s `run-action.ts` nach `src/lib/actions/` ziehen, `runAuthAction` als Auth-Zuschnitt darauf setzen und `saveRun`, `getNextQuestion` und `repairImageUrl` hindurchführen. Ein abgerissener Aufruf erreicht damit die Fehler-UI aus EC-3, statt den Ergebnis-Screen auf „gespeichert" stehenzulassen  · files: src/lib/actions/run-action.ts, src/lib/auth/run-action.ts, src/components/quiz/quiz-screen.tsx  · → EC-3
-- [x] T15  Bildausfall beendet die Runde nicht mehr als Hänger (BUG-8) und zieht nicht mehr endlos nach (BUG-13): Eine unveränderte Reparaturadresse gilt nicht als Reparatur, sondern führt in den Verwurf aus EC-6; die Verwurfsgrenze aus EC-10 stoppt das Nachziehen auch beim Vorladen, nicht nur wenn der Spieler wartet  · files: src/components/quiz/quiz-screen.tsx  · → AC-31, EC-6, EC-10, EC-11
+- [x] T14  Transport-Fänger für den Quiz-Pfad (BUG-7): den generischen Kern aus PROJ-1s `run-action.ts` nach `src/lib/actions/` ziehen, `runAuthAction` als Auth-Zuschnitt darauf setzen und `saveRun` sowie `getNextQuestion` hindurchführen (`repairImageUrl` stand hier ebenfalls, bis T18 die Rückfallebene entfernte). Ein abgerissener Aufruf erreicht damit die Fehler-UI aus EC-3, statt den Ergebnis-Screen auf „gespeichert" stehenzulassen  · files: src/lib/actions/run-action.ts, src/lib/auth/run-action.ts, src/components/quiz/quiz-screen.tsx  · → EC-3
+- [x] T15  Bildausfall beendet die Runde nicht mehr als Hänger (BUG-8) und zieht nicht mehr endlos nach (BUG-13): ~~Eine unveränderte Reparaturadresse gilt nicht als Reparatur, sondern führt in den Verwurf aus EC-6~~ (**mit T18 gegenstandslos: Es gibt keine Reparaturadresse mehr**); die Verwurfsgrenze aus EC-10 stoppt das Nachziehen auch beim Vorladen, nicht nur wenn der Spieler wartet  · files: src/components/quiz/quiz-screen.tsx  · → AC-31, EC-6, EC-10, EC-11
 - [x] T16  Abnahmetests zu T13-T15, jeder einzeln gegen den wiederhergestellten Fehler rot geprüft  · files: src/components/quiz/quiz-screen.error-states.test.tsx, src/lib/actions/run-action.test.ts  · → AC-9, AC-31, EC-3, EC-6
 
 **Bewusst nicht Teil dieser Lieferung** (aus demselben QA-Lauf, vom Nutzer nicht beauftragt):
@@ -113,6 +113,16 @@
 - Mit 20 Sekunden Geduld blieben **4 rot**, und zwar an einer *anderen* Stelle: bei einer bereits offenen Frage. Das ist AC-2s 3-Sekunden-Budget, das unter 16-facher Last auf **einem** Dev-Server nicht zu halten ist. Auch der Mail-Ablauf von PROJ-1 wurde instabil.
 
 Es ist also **Kontention im Messaufbau, kein Produktfehler** — passend dazu trat derselbe Flake schon vor den Fixes auf (gegen `4709193` gemessen: ebenfalls 5 von 24 rot). Deshalb T20: Bei 4 Workern läuft `npm run test:e2e` reproduzierbar 24/24, dreimal in Folge bestätigt. Das deckt BUG-15 auch nicht zu — der hat mit T19 seinen eigenen, rot geprüften Abnahmetest auf Unit-Ebene.
+
+## Level 9 — Fixes aus dem QA-Lauf vom 2026-09-05 (zweiter)
+
+- [x] T30  Off-by-one auf dem Pfad „Pool leer" behoben (BUG-33): `answer` plant `advance` aus dem Render **vor** `setStreak`, das eingefangene `fetchQuestion` hielt die alte Serie in seiner Closure. Ein `streakRef` wird neben `setStreak` gesetzt und ist zum Zeitpunkt des Timeouts aktuell; `streak` fällt dadurch aus den Abhängigkeiten von `fetchQuestion`, dessen Identität über eine ganze Runde stabil bleibt — das war die eigentliche Ursache, nicht die eine Zeile  · files: src/components/quiz/quiz-screen.tsx, src/components/quiz/quiz-screen.error-states.test.tsx  · → EC-2, AC-11
+- [x] T31  Die Zusage über den Wächter auf das gestutzt, was er wirklich leistet (BUG-32, BUG-34, BUG-35, BUG-36 — **bewusst nicht durch Erweiterung**): `design.md` führt Können **und** Grenzen samt Messung auf, benennt die Aufgabenteilung mit dem Code-Review und sagt, worauf ein Review bei einer neuen Action konkret achten muss. Die Kommentare in `proxy.ts` und `server-actions.guard.ts`, die sich auf die zu große Zusage stützten, sind korrigiert — inklusive der Fehlermeldung, die ein Entwickler zu lesen bekommt  · files: features/PROJ-2-pokemon-quiz/design.md, src/proxy.ts, src/lib/actions/server-actions.guard.ts, src/lib/actions/server-actions.guard.test.ts  · → EC-7
+- [x] T32  Doku-Drift nachgezogen, die T29 ausgelassen hatte (BUG-38): T14 und T15 beschrieben `repairImageUrl` und den Reparaturzweig weiter im Präsens  · files: features/PROJ-2-pokemon-quiz/tasks.md  · → EC-11
+
+**Warum der Wächter nicht weiter aufgebohrt wird.** Ein Prüfer, der entscheidet, ob das Ergebnis von `getUser` den Ablauf tatsächlich steuert, wäre eine Datenflussanalyse. Der dritte Anlauf auf dieselbe Zusicherung würde denselben Fehler zum dritten Mal machen: einen Prüfer bauen, der etwas Schwächeres misst als sein Name behauptet — und dem man deshalb zu Unrecht vertraut. Entscheidung des Nutzers am 2026-09-05.
+
+**Offen und ausdrücklich benannt:** BUG-29, BUG-30 und BUG-31 (Zugangsdaten-Pfad, Proxy-Matcher, öffentliche Pfade) werden **zusammen** als Drosselung an den Credential-Actions gelöst — unabhängig vom Pfad. Entscheidung des Nutzers am 2026-09-05; der Mechanismus ist noch zu wählen.
 
 ## Backlog — bewusst offen
 
