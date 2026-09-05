@@ -1076,3 +1076,21 @@ Deshalb fragt `registerAction` jetzt nach, statt zu raten: Bei einem 500 wird di
 - **BUG-65** ist als **EC-10** in den Vertrag aufgenommen und in `design.md` begründet — ab jetzt erwartetes Verhalten, kein offener Befund
 - **T4** ist gesetzt, aber **nicht gegengemessen**. Die Prüfung wäre eine Registrierung mit 7 Zeichen gegen das gehostete Projekt, die abgelehnt werden muss
 - Die Deploy-Blocker **BUG-61**, **BUG-12** und **BUG-18** sind von diesem Durchgang unberührt
+
+### T4 — gegen das gehostete Projekt gegengemessen (2026-09-05)
+
+Der Nutzer hat die Einstellung im Dashboard gesetzt; hier ist die Messung, die belegt, dass sie greift.
+
+**Dreiteilig aufgebaut, damit ein negatives Ergebnis überhaupt deutbar gewesen wäre** — eine Probe, die nichts findet, könnte auch am falschen Ort suchen:
+
+| Schritt | Anfrage | Ergebnis |
+|---|---|---|
+| 1. Lokale Kontrolle | Registrierung, Passwort **7 Zeichen**, lokale Instanz (Regel dort gesetzt) | `HTTP 422 · weak_password · "Password should be at least 8 characters."` → die Probe **erkennt** eine gesetzte Regel |
+| 2. Lokale Positivkontrolle | Registrierung, Passwort **10 Zeichen** | `HTTP 200` → der Endpunkt funktioniert, die Abweisung lag an der Länge und nicht an etwas anderem |
+| 3. **Gehostetes Projekt** | Registrierung, Passwort **7 Zeichen** | `HTTP 422 · weak_password · "Password should be at least 8 characters."` |
+
+**Ergebnis: T4 ist im gehosteten Projekt wirksam.** Damit ist die zweite Ebene für AC-1 und AC-11 vorhanden — die App-seitige Zod-Prüfung war es ohnehin schon.
+
+**Rückstandsfrei:** Die Registrierung wurde abgewiesen, es entstand **kein Konto** im gehosteten Projekt. Für den Fall, dass die Regel *nicht* gegriffen hätte, war ein Aufräumschritt vorbereitet (Konto über die Admin-API wieder entfernen, mit Gegenprobe) — er wurde nicht gebraucht.
+
+Damit ist die letzte offene `[user]`-Aufgabe auf einem Zugangsdaten-Pfad geschlossen. **T18 bleibt offen** und ist weiterhin nicht setzbar, solange kein eigener SMTP-Dienst konfiguriert ist.
