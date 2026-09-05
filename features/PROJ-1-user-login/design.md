@@ -83,9 +83,13 @@ Registrieren (Server Action, öffentlich)
   (AC-13, EC-5)
 
 Einloggen (Server Action, öffentlich)
-- Ruft Supabase Auth direkt auf; die IP-basierte Drosselung (AC-8, EC-4) läuft vollständig in
-  Supabase, kein eigener Zähler in der Anwendung. Lokal ließ sich dieses Limit nicht auslösen
-  (siehe Technical Decisions) — vor Launch gegen das gehostete Projekt erneut prüfen
+- **Überholt seit BUG-29 (2026-09-05):** Der Absatz beschrieb bis dahin „kein eigener Zähler in der
+  Anwendung". Gebaut ist inzwischen das Gegenteil — ein eigener Fehlversuchszähler in der Datenbank,
+  5 Versuche je Minute und IP **plus** 20 je 15 Minuten und Konto, gezählt **vor** dem Auth-Aufruf.
+  Supabases eigenes Limit liegt als Untergrenze darunter. Die vollständige Beschreibung samt
+  Abwägungen steht in den Nachträgen am Ende dieses Dokuments (BUG-29, BUG-39, BUG-54, BUG-56).
+  **`spec.md` → AC-8 trägt die alte Beschreibung noch** — sie ist read-only und gehört über
+  `/refine PROJ-1` nachgezogen (in `features/INDEX.md` als BUG-21 geführt)
 - Erfolg: Sitzung wird gesetzt, Weiterleitung zu /
 - Abgelehnt, wenn: IP-Limit erreicht (AC-8, EC-4) · Zugangsdaten falsch oder E-Mail unbekannt — in
   beiden Fällen dieselbe Meldung (AC-7)
@@ -132,7 +136,7 @@ Routenschutz (Proxy `src/proxy.ts`, appweit)
 | Setting | Where | Value | Why | → AC |
 | --- | --- | --- | --- | --- |
 | Passwort-Mindestlänge | Supabase Dashboard → Authentication → Sign In / Providers → Email | Minimum password length: 8 | Erzwingt die zugesagte Mindestlänge serverseitig, nicht nur im Formular | AC-1, AC-11 |
-| Login-/Signup-Rate-Limit (`sign_in_sign_ups`) | Supabase Dashboard → Authentication → Rate Limits | Standardwert belassen (30 Versuche / 5 Minuten pro IP); nach dem ersten Deploy dort live gegen echte wiederholte Login-Versuche prüfen | Einziger Schutz gegen automatisiertes Durchprobieren — bewusst kein App-eigener Zähler (siehe Technical Decisions); lokal ließ sich das Limit nicht auslösen | AC-8, EC-4 |
+| Login-/Signup-Rate-Limit (`sign_in_sign_ups`) | Supabase Dashboard → Authentication → Rate Limits | Standardwert belassen (30 Versuche / 5 Minuten pro IP); nach dem ersten Deploy dort live prüfen | **Untergrenze, nicht der Schutz.** Seit BUG-29 gibt es einen App-eigenen Zähler (5/Minute pro IP, 20/15 Minuten pro Konto), der enger greift und auch das abdeckt, was Supabase nicht sieht. Diese Einstellung bleibt als zweite Ebene stehen | AC-8, EC-4 |
 | Leaked-Password-Schutz | Supabase Dashboard → Authentication → Attack Protection | Bewusst aus | Reaktiv statt präventiv (siehe Technical Decisions); zusätzlich ein Paid-Plan-Feature | — |
 | Lokaler Spiegel der Passwort-Mindestlänge | `supabase/config.toml` → `[auth]` | `minimum_password_length = 8` (bereits gesetzt) | Damit `/qa` und die lokale Entwicklung gegen dieselbe Regel laufen wie später produktiv | AC-1, AC-11 |
 | E-Mail-Vorlage „Reset Password" | Supabase Dashboard → Authentication → Email Templates → Reset Password | Link auf `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password` setzen (identisch zur lokalen Vorlage in `supabase/templates/recovery.html`) | Ohne diese Vorlage verschickt das gehostete Projekt weiter den Standard-Link mit `?code=`, und BUG-6 ist in Produktion zurück — der Reset funktioniert dann nur auf dem anfordernden Gerät | AC-11, EC-7 |
@@ -249,5 +253,37 @@ Der QA-Nachlauf zum BUG-39-Fix hat gemessen, was die Abwägung oben nur benannt 
 | Jetzt — Login erstattet seinen einen Versuch | grün | grün |
 
 Der Urzustand hätte also den BUG-54-Test bestanden, der Zwischenstand keinen von beiden. **Erst beide zusammen beschreiben, was gelten soll: Gezählt werden Fehlversuche, sonst nichts.**
+
+### Nachtrag 2026-09-05 — BUG-56: Aufbewahrung der Zählertabelle
+
+Der QA-Nachlauf fand `public.auth_throttle` mit **1433 Zeilen**, die älteste vom selben Tag morgens: **Nichts löschte je etwas.** Der Index `auth_throttle_window_idx` trägt seit `0003` den Kommentar „Für das Aufräumen alter Fenster" — das Aufräumen gab es nicht. Dasselbe Muster wie BUG-36, nur in der Datenbank: eine Zusage im Kommentar ohne Code dahinter.
+
+Schwerer als die Größe wiegt die Aufbewahrung: Der Konto-Schlüssel lautet `login:account:<e-mail-adresse>`. Die Tabelle war ein **unbefristeter Speicher der Adressen aller, die sich je vertippt haben** — und die Kontolöschung aus PROJ-4 hätte diese Zeilen nicht mitgenommen, weil sie an keinem Fremdschlüssel hängen.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Aufräumen läuft im Zählpfad mit, nicht in einem Zeitplan** — `register_auth_attempt` ruft am Ende `prune_auth_throttle()`, das bis zu 50 abgelaufene Zeilen entfernt | Wer zählt, räumt auch auf: Der Mechanismus kann nicht vergessen werden, weil er an dem Pfad hängt, der die Zeilen überhaupt erzeugt. Keine Erweiterung, keine Einstellung im Dashboard, kein neuer Deploy-Blocker | **`pg_cron`** — der Lehrbuchweg, verlangt aber eine Erweiterung, die im gehosteten Projekt eigens eingeschaltet werden muss: also eine weitere Aufgabe von Hand, die jemand vergisst. Genau daran ist BUG-36 gescheitert | **Die Aufbewahrung hängt am Verkehr.** Meldet sich wochenlang niemand an, bleiben alte Zeilen liegen — dann ruht allerdings auch die Anwendung. Für „ich will *jetzt* vergessen werden" wartet der Trigger unten nicht auf Verkehr. `pg_cron` bleibt der dokumentierte Ausbauweg, falls die Tabelle je unter Dauerlast steht | 2026-09-05 |
+| **Die Grenze ist 1 Stunde**, nicht das jeweilige Fenster | Sie liegt über dem längsten Fenster (Konto-Zähler, 15 Minuten). Eine ältere Zeile kann keine Entscheidung mehr beeinflussen: Der nächste Versuch auf denselben Schlüssel beginnt ohnehin bei 1 zu zählen | Exakt am jeweiligen Fenster löschen — bräuchte den Grenzwert in der Datenbank und ginge bei jeder Änderung in der Anwendung auseinander | Bis zu 45 Minuten Rest über das Sperrfenster hinaus. Für die Drosselung wirkungslos, für die Aufbewahrung der Preis der Einfachheit | 2026-09-05 |
+| **Konto-Schlüssel verschwinden sofort mit dem Konto** (Trigger `on_auth_user_deleted` auf `auth.users`) | Sonst überlebte die E-Mail-Adresse ihre eigene Kontolöschung. Als Trigger statt als Aufruf in PROJ-4, damit die Löschung nicht vergessen werden kann — dasselbe Muster wie der Signup-Trigger aus `0001` | Eine Funktion, die PROJ-4 aufruft — verlagert die Verantwortung in ein Feature, das es noch nicht gibt | Ein Trigger auf `auth.users` ist eine Abhängigkeit zu einem Schema, das Supabase besitzt; bei einem Umbau dort ist er mitzuprüfen | 2026-09-05 |
+| **Die IP-Schlüssel bleiben bei der Kontolöschung stehen** | Sie gehören einer Verbindung, keinem Konto. Sie mitzulöschen hieße: Wegwerf-Konto anlegen, löschen, Zähler frei — **BUG-39 in neuer Verkleidung** | Alles löschen, was zum Nutzer gehört „wirkt sauberer" | Eine IP-Zeile überlebt die Kontolöschung um höchstens eine Stunde. Sie enthält keine Kontobezüge, nur Adresse, Zeitpunkt und Anzahl | 2026-09-05 |
+
+**Gegen die laufende Datenbank belegt** (2026-09-05), nach demselben Muster wie die Messungen zu `0003`:
+
+- **Aufräumen wirkt und trifft nur Abgelaufenes:** Rückstand von **1258 Zeilen in 3 Runden** abgeräumt, danach 0 Zeilen älter als eine Stunde. Anschließend gezielt geprüft — von drei eingefügten Zeilen (3 h alt, 90 min alt, 10 min alt) wurden **genau die beiden alten** gelöscht, die frische blieb stehen.
+- **Der Trigger wirkt und ist eng:** Für ein Testkonto drei Konto-Schlüssel (`login:`, `register:`, `password-reset:`) plus ein IP-Schlüssel angelegt; nach `delete from auth.users` waren **alle drei Konto-Schlüssel weg und der IP-Schlüssel unverändert da**.
+
+**Was hier bewusst nicht existiert: ein automatischer Wächter.** Beide Mechanismen sind gemessen, nicht durch einen Test abgesichert. Ein Unit-Test mit gemocktem Client würde nur die Mock-Antwort bestätigen — dieselbe Begründung, die schon im Kopf von `throttle.test.ts` steht —, und für einen echten SQL-Test fehlt diesem Projekt der Rahmen. Wer den Trigger oder den Aufräum-Aufruf entfernt, merkt es also nicht am roten Test. **Das ist eine benannte Lücke, keine übersehene:** Ein SQL-Testrahmen wäre der Ausbauweg, wenn dieser Bereich noch einmal angefasst wird.
+
+### Bewusst akzeptierte Risiken der Drosselung (Stand 2026-09-05)
+
+Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.** Sie stehen hier, damit niemand sie später für ein Versehen hält und beiläufig „repariert" — jede Korrektur verschiebt die Abwägung zwischen IP- und Konto-Zähler und gehört entschieden, nicht nebenbei geändert.
+
+| Risiko | Die genaue Zahl | Warum akzeptiert |
+| --- | --- | --- |
+| **BUG-55 — geteilter Anschluss mit Tippfehlern** (Medium) | Acht Spieler hinter **einer** Adresse, jeder vertippt sich **einmal** und gibt dann das richtige Passwort ein: **4 von 8 kommen hinein.** Ab dem **5. Fehlversuch pro Minute** ist die Verbindung für alle dicht, auch für die, die richtig tippen. Ohne Tippfehler kommen dagegen **8 von 8** hinein (gemessen), und **25 Anmelde-/Abmelde-Zyklen** laufen ohne eine einzige Abweisung | Das Fenster heilt nach 60 Sekunden von selbst aus, ein Workaround existiert (warten), und die Alternativen berühren alle den Schutz gegen Passwort-Spraying, für den der IP-Zähler die einzige Bremse ist. Der Grenzwert bleibt bis auf Weiteres, wie er ist |
+| **BUG-57 — Aussperren eines bekannten Kontos** (Low) | **20 Anfragen je 15 Minuten** genügen, um ein bekanntes Konto draußen zu halten. Gemessen: 20 Fehlversuche von 20 **verschiedenen** Adressen kommen alle durch; danach wird der rechtmäßige Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse abgewiesen | Der Preis war schon bei der Einführung des Konto-Zählers benannt („ein hartnäckiger Angreifer kann ein bekanntes Konto phasenweise blockieren"); neu ist nur die Zahl. Das Gegenmittel wäre ein CAPTCHA, das dieses Produkt bewusst nicht hat (`docs/PRD.md`: „ohne Erklärung sofort loslegen") |
+
+**Beide hängen an derselben Stellschraube** — wie die erlaubten Versuche zwischen IP- und Konto-Zähler verteilt sind. Wer eines davon angeht, muss beide zusammen neu rechnen, und zwar für die **unbequemste realistische Nutzung**: einen Schulanschluss am Montagmorgen, nicht einen Haushalt ohne Tippfehler. Dass genau dieser Unterschied zweimal übersehen wurde (BUG-54, dann BUG-55), ist der Grund, warum er hier ausgeschrieben steht.
+
 
 
