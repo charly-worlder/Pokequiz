@@ -10,6 +10,8 @@ import {
   RESET_CONFIRMATION_MESSAGE,
   NETWORK_ERROR_MESSAGE,
   SAME_PASSWORD_MESSAGE,
+  THROTTLED_ACCOUNT_MESSAGE,
+  throttleMessage,
 } from './error-mapping'
 
 // Kurzschreibweisen für die beiden Antworten auf „war der Name vergeben?" —
@@ -95,6 +97,27 @@ describe('fieldErrorsFromZod', () => {
  * ab, dass die Trennung AC-7 nicht bricht — falsches Passwort und unbekannte
  * Adresse müssen weiterhin ununterscheidbar bleiben.
  */
+describe('throttleMessage — Ursache statt Pauschale (BUG-67)', () => {
+  it('nennt bei einer Konto-Sperre die Adresse, nicht die Verbindung', () => {
+    expect(throttleMessage('account')).toBe(THROTTLED_ACCOUNT_MESSAGE)
+    expect(throttleMessage('account')).not.toContain('Verbindung')
+  })
+
+  it('nennt bei einer Verbindungs-Sperre weiterhin die Verbindung', () => {
+    expect(throttleMessage('connection')).toBe(THROTTLED_MESSAGE)
+  })
+
+  it('fällt ohne bekannte Ursache auf die Verbindungs-Meldung zurück', () => {
+    expect(throttleMessage(null)).toBe(THROTTLED_MESSAGE)
+  })
+
+  it('verrät in keiner der beiden Meldungen etwas über die Existenz eines Kontos', () => {
+    for (const m of [THROTTLED_MESSAGE, THROTTLED_ACCOUNT_MESSAGE]) {
+      expect(m).not.toMatch(/existiert|registriert|unbekannt|kein Konto/i)
+    }
+  })
+})
+
 describe('mapRegisterError — Ausfall vs. vergebener Trainername (BUG-68)', () => {
   /**
    * Der Trigger wirft `trainer_name_taken`, aber GoTrue ersetzt den Text durch

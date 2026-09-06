@@ -17,7 +17,7 @@ import {
   mapRegisterError,
   mapUpdatePasswordError,
   NETWORK_ERROR_MESSAGE,
-  THROTTLED_MESSAGE,
+  throttleMessage,
   INVALID_RESET_LINK_MESSAGE,
   type ActionState,
 } from '@/lib/auth/error-mapping'
@@ -44,8 +44,9 @@ export async function registerAction(
   // BUG-29: gezählt wird **hier**, nicht im Proxy. Eine Server Action ist an
   // keine Route gebunden — eine Schranke am Pfad ließe sich über `/privacy` oder
   // ein beliebiges `*.png` umgehen (BUG-30, BUG-31).
-  if (!(await registerAttempt('register', email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
+  const registerThrottle = await registerAttempt('register', email)
+  if (!registerThrottle.allowed) {
+    return { error: throttleMessage(registerThrottle.blockedBy) }
   }
 
   let supabase
@@ -89,8 +90,9 @@ export async function loginAction(
 
   // BUG-29: siehe registerAction. Der Zähler läuft vor dem Auth-Aufruf, damit
   // ein Rateversuch gar nicht erst nach oben durchgereicht wird.
-  if (!(await registerAttempt('login', parsed.data.email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
+  const loginThrottle = await registerAttempt('login', parsed.data.email)
+  if (!loginThrottle.allowed) {
+    return { error: throttleMessage(loginThrottle.blockedBy) }
   }
 
   let supabase
@@ -133,8 +135,9 @@ export async function requestPasswordResetAction(
 
   // BUG-29: eigener, engerer Grenzwert (3 pro 5 Minuten). Der Reset verschickt
   // E-Mail, ist also nicht nur ein Rate-, sondern auch ein Belästigungsvektor.
-  if (!(await registerAttempt('password-reset', parsed.data.email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
+  const resetThrottle = await registerAttempt('password-reset', parsed.data.email)
+  if (!resetThrottle.allowed) {
+    return { error: throttleMessage(resetThrottle.blockedBy) }
   }
 
   let supabase

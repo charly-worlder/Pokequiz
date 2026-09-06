@@ -351,9 +351,28 @@ Die ersten beiden Zeilen sind die, die vorher **grün** geblieben wären.
 
 **AC-19 gemessen:** 7 Anfragen für dieselbe Adresse von 7 **verschiedenen** Verbindungen — 5 durch, ab der 6. abgewiesen.
 
-#### ⚠️ Offene Abweichung: AC-19 verlangt eine Meldung, die der Code nicht gibt
+#### ✅ Aufgelöst am 2026-09-06 — die AC wurde korrigiert, nicht der Code
 
-AC-19 sagt, die Abweisung erfolge „mit derselben Meldung wie in AC-10, die nichts über die Existenz des Kontos verrät". Gebaut ist etwas anderes: `requestPasswordResetAction` gibt bei jeder Abweisung `THROTTLED_MESSAGE` zurück („Zu viele Versuche von dieser Verbindung…"). **Das wurde nicht stillschweigend angepasst** — `spec.md` ist während `/build` unveränderlich, und die Entscheidung gehört dem Nutzer.
+Der Nutzer hat entschieden: **AC-19 wird korrigiert, der Code bleibt.** Die Spec sagt jetzt, dass die Abweisung die Drosselungsmeldung zeigt und die **Adresse** als Grund nennt. Der Abschnitt darunter bleibt als Begründung stehen.
+
+**Gleich mitentschieden wurde BUG-67**, weil beides an derselben Stelle hängt: Sobald die Meldung sagen soll, *welche* Grenze griff, braucht `registerAttempt` einen Rückgabewert, der das verrät.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **`registerAttempt` meldet, welcher Zähler abgewiesen hat** (`blockedBy: 'connection' \| 'account' \| null`), und die Actions wählen danach die Meldung | Die alte Pauschale „von dieser Verbindung" war beim Konto-Zähler nachweislich falsch: Der rechtmäßige Besitzer kommt dort von einer **unbelasteten** Verbindung und probierte den nächstliegenden Workaround (anderes WLAN), der nichts half. **Der Einwand, das könnte Kontoexistenz verraten, ist gemessen widerlegt** — der Zähler zählt auch Adressen ohne Konto, eine frei erfundene Adresse wird nach der 5. Reset-Anfrage genauso abgewiesen | Die Meldung ganz neutral halten („zu viele Versuche") — nimmt dem Nutzer die einzige verwertbare Information · Die Unterscheidung nur im Log führen — hilft dem Nutzer nicht, der vor dem Formular sitzt | Ein zusätzliches Feld im Rückgabewert und eine zweite Meldung. **Beide Zähler laufen unverändert immer**, die Reihenfolge der Prüfung ändert sich nicht — nur die Auskunft danach | 2026-09-06 |
+| **Sperren beide zugleich, wird die Adresse genannt** | Ihr Fenster ist das längere (15 Minuten beim Login, eine Stunde beim Reset, gegen 60 Sekunden bei der Verbindung). „Warte eine Minute" wäre dann ein falscher Rat, und der Nutzer käme nach einer Minute erneut gegen dieselbe Wand | Die Verbindung nennen, weil sie häufiger ist — optimiert für den häufigen Fall auf Kosten des ärgerlichen | Ein Nutzer, den *beide* Grenzen treffen, erfährt nichts von der Verbindungs-Sperre. Sie heilt aber innerhalb der Konto-Sperre ohnehin aus | 2026-09-06 |
+| **Die Adress-Meldung nennt keine Wartezeit** | Es gibt zwei verschiedene (15 Minuten beim Login, eine Stunde beim Reset), und eine falsche Zahl ist schlechter als keine | „Bitte in einigen Minuten" für beide — beim Reset schlicht unwahr | Der Nutzer erfährt nicht, wie lange. Er erfährt aber, **woran** es liegt, und das war der Kern des Befunds | 2026-09-06 |
+
+**Gegen die laufende App belegt** (2026-09-06), beide Zweige über den Reset-Pfad:
+
+- **Konto-Zähler sperrt:** 6 Anfragen für dieselbe Adresse von 6 **verschiedenen** Verbindungen → die 6. nennt die **Adresse**, nicht die Verbindung, obwohl die anfragende Verbindung unbelastet ist
+- **Verbindungs-Zähler sperrt:** 4 Anfragen von **einer** Verbindung für verschiedene Adressen → die 4. nennt die **Verbindung**
+
+**Rot-Nachweis über neun Mutationen**, die vier neuen und die fünf aus dem Vorlauf — alle werden erkannt, auch die subtilste (M9: nur der Vorrang bei doppelter Sperre gedreht, erkannt von genau einem Test). Die Mutation „Login ignoriert die gemeldete Ursache" wird ebenfalls rot: Die Verdrahtungs-Ebene ist seit BUG-75 mit abgesichert.
+
+#### Die ursprüngliche Abweichung und warum sie so aufgelöst wurde
+
+AC-19 sagte zunächst, die Abweisung erfolge „mit derselben Meldung wie in AC-10, die nichts über die Existenz des Kontos verrät". Gebaut war etwas anderes: `requestPasswordResetAction` gibt bei jeder Abweisung die Drosselungsmeldung zurück. **Das wurde nicht stillschweigend angepasst** — `spec.md` ist während `/build` unveränderlich, und die Entscheidung gehörte dem Nutzer. Er hat sie am 2026-09-06 getroffen; die drei Gründe darunter waren die Vorlage.
 
 Drei Gründe sprechen dafür, **die AC zu korrigieren statt den Code**:
 

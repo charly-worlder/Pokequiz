@@ -37,12 +37,22 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('server-only', () => ({}))
 
-import { registerAction, updatePasswordAction } from './actions'
-import { NETWORK_ERROR_MESSAGE, SAME_PASSWORD_MESSAGE } from './error-mapping'
+import {
+  registerAction,
+  updatePasswordAction,
+  loginAction,
+  requestPasswordResetAction,
+} from './actions'
+import {
+  NETWORK_ERROR_MESSAGE,
+  SAME_PASSWORD_MESSAGE,
+  THROTTLED_MESSAGE,
+  THROTTLED_ACCOUNT_MESSAGE,
+} from './error-mapping'
 
 beforeEach(() => {
   vi.clearAllMocks()
-  registerAttempt.mockResolvedValue({ allowed: true })
+  registerAttempt.mockResolvedValue({ allowed: true, blockedBy: null })
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
 })
 
@@ -108,13 +118,60 @@ describe('registerAction — fragt bei einem 500 wirklich nach (BUG-68, BUG-75)'
   })
 
   it('zählt vor dem Registrieren und bricht bei Abweisung ab (AC-8)', async () => {
-    registerAttempt.mockResolvedValue({ allowed: false })
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'connection' })
 
     const result = await registerAction({}, registerForm())
 
     expect(signUp).not.toHaveBeenCalled()
     expect(isTrainerNameTaken).not.toHaveBeenCalled()
     expect(result.error).toBeDefined()
+  })
+})
+
+describe('Die Sperrmeldung folgt der Ursache (BUG-67, BUG-75)', () => {
+  function loginForm() {
+    const fd = new FormData()
+    fd.set('email', 'ash@example.com')
+    fd.set('password', 'LangGenug1')
+    return fd
+  }
+
+  function resetForm() {
+    const fd = new FormData()
+    fd.set('email', 'ash@example.com')
+    return fd
+  }
+
+  it('zeigt beim Login die Adress-Meldung, wenn der Konto-Zähler sperrte', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'account' })
+
+    const result = await loginAction({}, loginForm())
+
+    expect(result.error).toBe(THROTTLED_ACCOUNT_MESSAGE)
+  })
+
+  it('zeigt beim Login weiterhin die Verbindungs-Meldung, wenn die IP sperrte', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'connection' })
+
+    const result = await loginAction({}, loginForm())
+
+    expect(result.error).toBe(THROTTLED_MESSAGE)
+  })
+
+  it('zeigt beim Passwort-Reset die Adress-Meldung, wenn der Konto-Zähler sperrte (AC-19)', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'account' })
+
+    const result = await requestPasswordResetAction({}, resetForm())
+
+    expect(result.error).toBe(THROTTLED_ACCOUNT_MESSAGE)
+  })
+
+  it('zeigt bei der Registrierung die Adress-Meldung, wenn der Konto-Zähler sperrte', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'account' })
+
+    const result = await registerAction({}, registerForm())
+
+    expect(result.error).toBe(THROTTLED_ACCOUNT_MESSAGE)
   })
 })
 

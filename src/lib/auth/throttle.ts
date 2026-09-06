@@ -134,26 +134,34 @@ function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
   }
 }
 
+/** Welcher der beiden Zähler abgewiesen hat — für die Meldung an den Nutzer. */
+export type ThrottleBlock = 'connection' | 'account' | null
+
 /**
- * Zählt einen Versuch auf beiden Zählern und meldet, ob er erlaubt bleibt.
+ * Zählt einen Versuch auf beiden Zählern und meldet, ob er erlaubt bleibt — und
+ * bei einer Abweisung, **welcher** Zähler sie ausgelöst hat (BUG-67).
  *
  * **Beide werden immer gezählt**, auch wenn der erste schon abgelehnt hat: Sonst
  * könnte ein Angreifer den Konto-Zähler leer halten, indem er den IP-Zähler
  * absichtlich überlaufen lässt.
+ *
+ * **Sperren beide, gewinnt das Konto.** Sein Fenster ist das längere (15 Minuten
+ * beim Login, eine Stunde beim Reset, gegen 60 Sekunden bei der Verbindung) —
+ * „warte eine Minute" wäre dann ein falscher Rat.
  */
 export async function registerAttempt(
   scope: ThrottleScope,
   email: string | null
-): Promise<{ allowed: boolean }> {
+): Promise<{ allowed: boolean; blockedBy: ThrottleBlock }> {
   const { ip: ipLimit, account: accountLimit } = limitsFor(scope)
 
-  const checks = [count(`${scope}:ip:${await clientIp()}`, ipLimit)]
-  if (email) {
-    checks.push(count(accountKey(scope, email), accountLimit))
-  }
+  const [ipAllowed, accountAllowed] = await Promise.all([
+    count(`${scope}:ip:${await clientIp()}`, ipLimit),
+    email ? count(accountKey(scope, email), accountLimit) : Promise.resolve(true),
+  ])
 
-  const results = await Promise.all(checks)
-  return { allowed: results.every(Boolean) }
+  const blockedBy: ThrottleBlock = !accountAllowed ? 'account' : !ipAllowed ? 'connection' : null
+  return { allowed: ipAllowed && accountAllowed, blockedBy }
 }
 
 /**

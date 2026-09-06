@@ -115,6 +115,65 @@ describe('registerAttempt', () => {
   })
 })
 
+describe('Welcher Zähler abgewiesen hat (BUG-67, EC-4)', () => {
+  /** Lässt genau die Schlüssel scheitern, auf die `trifft` zutrifft. */
+  const sperre = (trifft: (key: string) => boolean) =>
+    rpc.mockImplementation((fn: string, args: { p_key: string }) =>
+      Promise.resolve({ data: fn === 'register_auth_attempt' ? !trifft(args.p_key) : true, error: null })
+    )
+
+  it('nennt die Verbindung, wenn nur der IP-Zähler sperrt', async () => {
+    sperre((k) => k.includes(':ip:'))
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(false)
+    expect(r.blockedBy).toBe('connection')
+  })
+
+  /**
+   * Der eigentliche Befund aus BUG-67: Hier kommt der rechtmäßige Besitzer von
+   * einer **unbelasteten** Verbindung und wurde trotzdem auf sie verwiesen.
+   */
+  it('nennt die Adresse, wenn nur der Konto-Zähler sperrt', async () => {
+    sperre((k) => k.includes(':account:'))
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(false)
+    expect(r.blockedBy).toBe('account')
+  })
+
+  it('nennt bei doppelter Sperre die Adresse — ihr Fenster ist das längere', async () => {
+    sperre(() => true)
+
+    expect((await registerAttempt('login', 'a@b.de')).blockedBy).toBe('account')
+  })
+
+  it('meldet ohne Sperre keine Ursache', async () => {
+    sperre(() => false)
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(true)
+    expect(r.blockedBy).toBeNull()
+  })
+
+  it('kann ohne Adresse nur die Verbindung nennen (AC-20)', async () => {
+    sperre(() => true)
+
+    expect((await registerAttempt('token-confirm', null)).blockedBy).toBe('connection')
+  })
+
+  it('zählt beide weiter, auch wenn schon einer sperrt', async () => {
+    sperre((k) => k.includes(':ip:'))
+
+    await registerAttempt('login', 'a@b.de')
+
+    expect(keysUsed()).toEqual(['login:account:a@b.de', 'login:ip:1.2.3.4'])
+  })
+})
+
 describe('Grenzwerte je Vorgang (AC-19, AC-20)', () => {
   /**
    * Bis BUG-76 nahm `registerAttempt` für **jeden** Vorgang

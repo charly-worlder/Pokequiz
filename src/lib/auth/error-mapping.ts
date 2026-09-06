@@ -26,6 +26,27 @@ export function fieldErrorsFromZod(issues: { path: PropertyKey[]; message: strin
 export const WRONG_CREDENTIALS_MESSAGE = 'E-Mail-Adresse oder Passwort ist falsch.'
 export const THROTTLED_MESSAGE =
   'Zu viele Versuche von dieser Verbindung. Bitte in ein paar Minuten erneut versuchen.'
+// BUG-67: Die Meldung oben nennt die Verbindung — und lag damit immer dann
+// falsch, wenn der **Konto**-Zähler abgewiesen hatte: Der rechtmäßige Besitzer
+// kommt in diesem Fall von einer völlig unbelasteten Verbindung und probierte
+// den nächstliegenden Workaround (anderes WLAN), der nichts half.
+//
+// Diese Meldung nennt keine Wartezeit, weil es zwei verschiedene gibt (Login
+// 15 Minuten, Reset eine Stunde) und eine falsche Zahl schlechter ist als keine.
+export const THROTTLED_ACCOUNT_MESSAGE =
+  'Zu viele Versuche für diese E-Mail-Adresse. Bitte später erneut versuchen.'
+
+/**
+ * Wählt die Sperrmeldung nach der Ursache (spec.md AC-16, AC-19, EC-4).
+ *
+ * Dass die Adress-Meldung nichts über die Existenz eines Kontos verrät, trägt
+ * nicht ihr Wortlaut, sondern der Zähler: Er zählt **jede** Adresse, auch eine
+ * ohne Konto. Gemessen am 2026-09-06 — eine frei erfundene Adresse wird nach der
+ * 5. Reset-Anfrage genauso abgewiesen wie eine echte.
+ */
+export function throttleMessage(blockedBy: 'connection' | 'account' | null): string {
+  return blockedBy === 'account' ? THROTTLED_ACCOUNT_MESSAGE : THROTTLED_MESSAGE
+}
 export const NETWORK_ERROR_MESSAGE = 'Die Verbindung ist fehlgeschlagen. Bitte erneut versuchen.'
 export const RESET_CONFIRMATION_MESSAGE =
   'Falls diese Adresse registriert ist, wurde ein Link zum Zurücksetzen verschickt.'
