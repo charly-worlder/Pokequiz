@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { AuthErrorLike } from './error-mapping'
 import {
   mapRegisterError,
   mapLoginError,
-  mapPasswordResetRequestError,
   mapUpdatePasswordError,
   fieldErrorsFromZod,
   THROTTLED_MESSAGE,
@@ -66,40 +64,21 @@ describe('mapLoginError', () => {
   })
 })
 
-describe('mapPasswordResetRequestError — eine Antwort für alle Fälle (AC-10, EC-3, BUG-79)', () => {
-  /**
-   * Supabases 429 (`over_email_send_rate_limit`) tritt **nur** auf, wenn wirklich
-   * eine Mail hinausginge — also nur bei einem existierenden Konto. Solange er
-   * nach außen sichtbar war, genügten zwei Anfragen, um eine beliebige Adresse
-   * zuzuordnen (gemessen 30/30). Deshalb darf **kein** Fehler diese Antwort
-   * verändern, auch kein anderer.
-   */
-  it('antwortet ohne Fehler mit der Bestätigung', () => {
-    expect(mapPasswordResetRequestError(null).message).toBe(RESET_CONFIRMATION_MESSAGE)
-  })
-
-  it('antwortet auf einen 429 mit derselben Bestätigung — kein Existenz-Orakel', () => {
-    const result = mapPasswordResetRequestError({ status: 429 })
-
-    expect(result.message).toBe(RESET_CONFIRMATION_MESSAGE)
-    expect(result.error).toBeUndefined()
-  })
-
-  it('ist für jede Fehlerform ununterscheidbar', () => {
-    const faelle: (AuthErrorLike | null)[] = [
-      null,
-      { status: 429 },
-      { status: 429, code: 'over_email_send_rate_limit' },
-      { status: 422 },
-      { status: 500 },
-      {},
-    ]
-
-    const antworten = faelle.map((f) => JSON.stringify(mapPasswordResetRequestError(f)))
-
-    expect(new Set(antworten).size).toBe(1)
-  })
-})
+/**
+ * Die Antwort auf eine Reset-Anfrage wird **nicht mehr hier** geprüft.
+ *
+ * Bis zum 2026-09-06 standen an dieser Stelle drei Tests auf
+ * `mapPasswordResetRequestError`, und sie waren grün, während die HTTP-Antwort
+ * die Kontoexistenz weiterhin verriet (BUG-87): über die `Set-Cookie`-Kopfzeile,
+ * die `@supabase/ssr` im Fehlerfall in dieselbe Antwort schrieb. Der Rückgabewert
+ * einer Funktion ist eben nicht die Antwort.
+ *
+ * Die Zusage liegt jetzt in `src/lib/auth/reset-response.ts` und wird zweistufig
+ * bewacht: `reset-response.test.ts` prüft, dass dort kein Cookie geschrieben und
+ * kein Fehler durchgelassen wird, und `tests/PROJ-1-reset-response.spec.ts`
+ * vergleicht die **ausgehende Antwort** — Status und alle Cookie-Kopfzeilen —
+ * zwischen existierender und erfundener Adresse.
+ */
 
 describe('fieldErrorsFromZod', () => {
   it('keeps only the first issue per field', () => {

@@ -427,6 +427,33 @@ Die Ursache im Testcode, belegt: `actions.test.ts:20` legt einen Spion `settleSu
 
 **Wer diese Lücke schließt, fängt bei M14 an:** Es ist die einzige der drei, die eine Sicherheitszusage betrifft, und die billigste — ein Test, der `getUser` auf `null` kippt und `INVALID_RESET_LINK_MESSAGE` erwartet.
 
+### Nachtrag 2026-09-06 (spät) — BUG-87: die ganze Antwort normalisiert, nicht ein Kanal
+
+**Was der erste Anlauf falsch verstanden hat.** Der Fix zu BUG-79 vereinheitlichte den *Rückgabewert* von `mapPasswordResetRequestError`, und zwei Tests bewachten ihn. Die **HTTP-Antwort** blieb unterscheidbar: Bei Supabases 429 — der nur auftritt, wenn tatsächlich eine Mail hinausginge, also nur bei einem existierenden Konto — löscht `@supabase/ssr` die PKCE-`code-verifier`-Cookies, und dieser Schreibvorgang lief über den Cookie-Adapter in dieselbe Antwort. Gemessen: **30 von 30 Adressen korrekt, 4,13 pro Sekunde**, schneller als das Orakel, das der Fix beseitigen sollte.
+
+Die Lehre in einem Satz: **Der Rückgabewert einer Funktion ist nicht die Antwort.** Eine HTTP-Antwort kann auf drei Wegen verraten, was intern geschah — Rückgabewert, geworfener Fehler (→ Status-Code) und Cookies. Ein Fix, der einen davon schließt, sieht vollständig aus und ist es nicht.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Die Antwort dieses Pfades entsteht an genau einer Stelle** (`src/lib/auth/reset-response.ts`), die alle drei Kanäle schließt | Punktuell am Cookie-Adapter oder am 429 anzusetzen hätte denselben Fehler wiederholt: eine Stelle reparieren und die Antwort ungeprüft lassen. Eine Funktion mit einem Ausgang, deren Zusage „für jeden internen Ausgang dieselbe Antwort" lautet, ist als Ganzes prüfbar — und der Wächter kann an der ausgehenden Antwort ansetzen statt an ihr | Den 429 vor `@supabase/ssr` abfangen — schließt einen Kanal, nicht die Klasse · Den Cookie-Adapter global entschärfen — bricht Login und Sitzungsauffrischung, die Cookies **brauchen** | **Ein echter Ausfall des Mailversands sieht für den Nutzer aus wie ein Erfolg.** Auf diesem Pfad unvermeidlich: Jede Unterscheidbarkeit ist zugleich ein Existenz-Orakel, weil ein Versand nur für existierende Konten überhaupt versucht wird. Die App-eigene Drosselung meldet sich davor und ist gefahrlos, weil sie **jede** Adresse zählt | 2026-09-06 |
+| **Der antwortneutrale Client verwirft Cookie-Schreibvorgänge** (`createResponseNeutralClient`), statt sie zu filtern | Filtern hieße, jeden künftigen Cookie-Namen von `@supabase/ssr` zu kennen. Verwerfen ist auf diesem Pfad nachweislich folgenlos: Die Mail-Vorlage zeigt auf `/auth/confirm` mit `{{ .TokenHash }}`, `verifyOtp` löst serverseitig ein, und der `code_verifier` wird in dieser App **nirgends gelesen** — das war gerade der Zweck des BUG-6-Fixes | Nur die `code-verifier`-Cookies unterdrücken — bricht beim nächsten Namenswechsel der Bibliothek still | Lesen bleibt erlaubt (verändert die Antwort nicht). Wer diesen Client je auf einem Pfad einsetzt, der eine Sitzung schreiben muss, bekommt stillen Sitzungsverlust — deshalb steht der Zweck im Namen und nicht nur im Kommentar | 2026-09-06 |
+| **`mapPasswordResetRequestError` wurde ersatzlos entfernt**, samt ihrer beiden grünen Tests | Eine getestete Funktion, die das Versprechen nur halb einlöst, ist schlechter als keine: Sie erzeugt Zuversicht, wo keine hingehört — genau das ist zwischen dem BUG-79-Fix und dem QA-Lauf passiert. Sie war nach dem Umbau ohnehin ohne Aufrufer, und ein bewachter Toter ist die Einladung, ihn wieder zu benutzen | Als deprecated stehen lassen | Die zwei Tests fallen weg. Ersetzt werden sie durch sechs in `reset-response.test.ts` **und** den Wächter an der Antwort — mehr Deckung, an der richtigen Ebene | 2026-09-06 |
+
+#### Der Wächter setzt an der ausgehenden Antwort an
+
+`tests/PROJ-1-reset-response.spec.ts` vergleicht **Status, Antwortrumpf und alle `Set-Cookie`-Kopfzeilen** zwischen einer existierenden und einer erfundenen Adresse, je zwei Anfragen von einer Verbindung.
+
+**Zwei Dinge daran waren nötig, damit der Test überhaupt einer ist:**
+
+1. **Die Anfrage wird abgefangen und wiederholt, statt zweimal geklickt.** Der Unterschied entsteht nur, wenn die zweite Anfrage innerhalb von Supabases `max_frequency` liegt (lokal 1 s). Zwei Formular-Absendungen über die Oberfläche brauchen länger — der Test wäre auch gegen den kaputten Stand grün gewesen.
+2. **Die abgefangenen Kopfzeilen werden von `x-forwarded-for` befreit.** Übernähme man sie unverändert, landeten alle Sonden auf **einem** Zählerschlüssel, und die Drosselung selbst würde zum Unterschied — der Test hätte gemessen, wie schnell er sein eigenes Limit erreicht. Beim ersten Lauf ist genau das passiert.
+
+**Rot-Nachweis geführt:** Mit dem regulären Client statt des antwortneutralen fällt der Test an der erwarteten Stelle („zweite Anfrage: Cookie-Kopfzeilen müssen gleich sein — hier hing BUG-87"), während der zweite Test derselben Datei grün bleibt. Er ist also spezifisch und nicht bloß empfindlich.
+
+**Und ein Gegentest gegen die naheliegende Selbsttäuschung:** Eine Antwort, die für alle Fälle gleich aussieht, wäre auch dann „identisch", wenn gar nichts mehr passierte. Der zweite Test lässt den Weg deshalb einmal ganz durchlaufen und prüft, dass die Mail wirklich im Postfach liegt.
+
+**EC-7 ist unbeschädigt:** Die vollständige E2E-Suite läuft grün (39 Tests), einschließlich des geräteübergreifenden Resets über den echten Mail-Link.
+
 ### Entscheidungen zum finalen QA-Lauf (2026-09-05)
 
 | Decision | Rationale | Alternative considered | Trade-off | Date |

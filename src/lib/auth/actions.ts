@@ -13,7 +13,6 @@ import {
 import {
   fieldErrorsFromZod,
   mapLoginError,
-  mapPasswordResetRequestError,
   mapRegisterError,
   mapUpdatePasswordError,
   NETWORK_ERROR_MESSAGE,
@@ -22,6 +21,7 @@ import {
   type ActionState,
 } from '@/lib/auth/error-mapping'
 import { isTrainerNameTaken } from '@/lib/auth/trainer-name'
+import { requestPasswordResetIdentically } from '@/lib/auth/reset-response'
 
 export type { ActionState }
 
@@ -140,13 +140,6 @@ export async function requestPasswordResetAction(
     return { error: throttleMessage(resetThrottle.blockedBy) }
   }
 
-  let supabase
-  try {
-    supabase = await createClient()
-  } catch {
-    return { error: NETWORK_ERROR_MESSAGE }
-  }
-
   const headerList = await headers()
   const origin = headerList.get('origin') ?? process.env.NEXT_PUBLIC_SITE_URL ?? ''
 
@@ -154,24 +147,15 @@ export async function requestPasswordResetAction(
   // /auth/confirm with {{ .TokenHash }} (supabase/templates/recovery.html), so
   // the token is redeemed server-side and works on any device (EC-7).
   //
-  // The comment that used to sit here claimed the recovery link "always"
-  // arrives with the tokens in the URL fragment and never as a server-readable
-  // ?code=. That was wrong — ?code= was what our own client actually produced,
-  // and the belief is what kept the reset tied to one browser (BUG-6, BUG-15).
-  //
   // redirectTo still names an allowed return target for Supabase's own
   // validation; the template does not interpolate it.
-  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${origin}/reset-password`,
-  })
-
-  // spec.md AC-10, EC-3 — dieselbe Bestätigung, was auch immer passiert ist.
   //
-  // Hier stand einmal, Supabase verrate auf diesem Endpunkt nichts über die
-  // Existenz der Adresse. Das war falsch: Sein 429 tritt nur auf, wenn eine Mail
-  // hinausginge (BUG-79). Die Zuordnung schluckt deshalb jeden Fehler; die
-  // Begründung steht bei `mapPasswordResetRequestError`.
-  return mapPasswordResetRequestError(error)
+  // Ab hier gibt es **einen** Ausgang: `requestPasswordResetIdentically` erzeugt
+  // eine Antwort, die für jeden internen Ausgang gleich aussieht — Rückgabewert,
+  // Status und Cookies. Die Begründung und der Preis stehen dort (BUG-87).
+  // Alles, was vor dieser Zeile antwortet (Validierung, Drosselung), darf und
+  // soll unterscheidbar sein: Es hängt nicht davon ab, ob ein Konto existiert.
+  return requestPasswordResetIdentically(parsed.data.email, `${origin}/reset-password`)
 }
 
 export async function updatePasswordAction(
