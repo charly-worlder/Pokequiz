@@ -1467,3 +1467,47 @@ Der Konto-Zähler ist eine geteilte Ressource. Wer zählt, wie viele Anfragen no
 **Drei Dinge gehören nach dem Fix in den Vertrag, nicht in einen Bugreport:** die neu zu rechnende Risikoakzeptanz in **EC-9**; die Frage, ob der vierte Abweisungsgrund (Mailkontingent des Anbieters) ein eigenes Kriterium braucht; und ob `profiles` spaltenbeschränkt gelesen werden soll (BUG-83), was PROJ-3 betrifft.
 
 `features/INDEX.md` bleibt bei **In Review**.
+
+---
+
+## Nachtrag — 2026-09-06: Ausgang der Befunde aus dem Lauf oben
+
+_Geschrieben vom Fix-Durchgang, **nicht** von einem QA-Lauf. Die Belege stehen unten, sie sind aber **nicht unabhängig verifiziert** — das holt der nächste `/qa`-Lauf nach._
+
+| Befund | Entscheidung | Stand |
+|---|---|---|
+| **BUG-79** Kontoexistenz-Orakel (High) | beheben | ✅ behoben, live gegengeprüft |
+| **BUG-80** falsche Ursache in der Meldung (Medium) | beheben | ✅ mit BUG-79 erledigt, gleiche Wurzel |
+| **BUG-81 / BUG-82** Test-Lücken | **umgestuft und akzeptiert** | dokumentiert, siehe unten |
+| **BUG-83 … BUG-86** (Low) | offen | unverändert |
+
+### BUG-79 / BUG-80 — behoben
+
+`mapPasswordResetRequestError` schluckt jetzt **jeden** Fehler; der 429-Zweig ist entfernt. Die Begründung samt der Umkehrung gegenüber AC-16/AC-19 steht in `design.md` → Nachtrag 2026-09-06.
+
+**Live gegengeprüft:** Der im QA-Lauf gemessene Angriff nachgestellt — je 2 Anfragen für 5 **echte** und 5 **erfundene** Adressen, jede von einer eigenen Verbindung. **Alle zehn Paare antworten identisch.** Rot-Nachweis: Mit wieder eingebautem 429-Zweig fallen genau die zwei neuen Wächter in `error-mapping.test.ts`, alle übrigen bleiben grün.
+
+**Vier Prüfungen:** Test **206/206** (vorher 205) · Lint 75 Dateien 0/0 · Build Exit 0 im echten Projektordner · E2E 33/33.
+
+### ⚠️ Neu gemessen, noch in keinem Kriterium: ein Zeitkanal auf dem Reset-Pfad
+
+Der **Melde**kanal ist zu, der **Zeit**kanal nicht. Direkt gegen `/auth/v1/recover` gemessen, je 12 frische Adressen:
+
+| | Median |
+|---|---|
+| Konto vorhanden | **41 ms** |
+| Adresse erfunden | **20 ms** |
+
+Rund **20 ms, Faktor 2** — bestehende Konten sind langsamer, weil tatsächlich eine Mail gebaut wird. Dieselbe Klasse wie **EC-10** am Login, nur auf dem Reset-Pfad, und bisher nirgends im Vertrag.
+
+**Ehrlich zur Messgrenze:** gemessen an der **Supabase-API**, nicht durch die Server Action hindurch. Die App legt auf beiden Wegen konstante Arbeit obendrauf, die absolute Differenz bleibt also — wie deutlich sie beim Angreifer ankommt, ist **nicht** gemessen. Gehört in den nächsten QA-Lauf, und die Bewertung anschließend in den Vertrag.
+
+### BUG-81 / BUG-82 — bewusst akzeptiert, mit benannter Rest-Lücke
+
+Auf Entscheidung des Nutzers vom 2026-09-06 nicht behoben. Begründung: Der Drosselungsmechanismus selbst ist gegen echte Angriffe verifiziert (BUG-29, BUG-39, BUG-54 und drei QA-Läufe) und hält; was fehlt, ist Regressionsschutz an einigen Aufrufstellen, kein aktiver Funktionsfehler.
+
+**Das trägt für M27 und M13** — beide werden von der E2E-Suite gefangen, nur langsamer.
+
+**Für drei Mutationen gibt es jedoch gar keinen automatischen Wächter:** **M31** (falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert), **M12** (`registerAction` zählt ohne E-Mail → Konto-Hälfte der Registrierungs-Drosselung tot) und **M14** (`updatePasswordAction` prüft die Recovery-Sitzung nicht mehr → **AC-12 gebrochen**, eine Sicherheitszusage). Dort ruht die Zusage allein auf Messungen, die einmal von Hand gemacht wurden.
+
+Die vollständige Aufteilung je Mutation, die Ursache im Testcode und der Vorschlag, wo man beim Schließen anfängt, stehen in `design.md`.

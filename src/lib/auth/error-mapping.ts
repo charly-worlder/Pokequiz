@@ -119,11 +119,32 @@ export function mapLoginError(error: AuthErrorLike): ActionState {
   return { error: NETWORK_ERROR_MESSAGE }
 }
 
-export function mapPasswordResetRequestError(error: AuthErrorLike | null): ActionState {
-  if (error && error.status === 429) {
-    return { error: THROTTLED_MESSAGE }
-  }
-
+// spec.md AC-10, EC-3 — die Antwort auf eine Reset-Anfrage ist **immer** dieselbe.
+//
+// BUG-79: Hier stand ein Zweig, der einen 429 von Supabase auf die
+// Drosselungsmeldung abbildete. Das war ein Kontoexistenz-Orakel, und zwar ein
+// vollständiges: Supabase antwortet auf `/auth/v1/recover` mit
+// `over_email_send_rate_limit` **nur dann, wenn tatsächlich eine Mail hinausginge**
+// — also nur bei einem existierenden Konto. Zu einer unbekannten Adresse wird nie
+// eine Mail versucht, also nie ein 429. Zwei Anfragen genügten, um eine beliebige
+// Adresse sicher zuzuordnen; im QA-Lauf vom 2026-09-06 gemessen: **30 von 30
+// korrekt, rund 2 Adressen pro Sekunde**. Gehostet ist das Fenster 60× breiter als
+// lokal (`max_frequency` 60 s statt 1 s).
+//
+// Deshalb wird hier **jeder** Fehler geschluckt. Das ist die Umkehrung der Regel,
+// die für die App-eigenen Zähler gilt (AC-16, AC-19): Die dürfen ihre Ursache
+// nennen, weil sie **jede** Adresse zählen, auch eine ohne Konto — ihre Meldung
+// hängt nicht davon ab, ob es das Konto gibt. Supabases 429 hängt genau davon ab.
+// Der Unterschied ist gemessen, nicht erwogen.
+//
+// Der Preis: Wer die eigene Anfrage zu schnell wiederholt, sieht die Bestätigung,
+// obwohl gerade keine Mail hinausging. Die App-eigene Drosselung greift davor und
+// sagt es ihm (AC-17: 3 pro Verbindung / 5 min, AC-19: 5 pro Adresse / Stunde) —
+// nur Supabases eigenes, engeres Zeitfenster bleibt stumm.
+//
+// Der Parameter bleibt in der Signatur: Er dokumentiert, dass hier ein Fehler
+// ankommen **kann** und bewusst nicht nach außen dringt.
+export function mapPasswordResetRequestError(_error: AuthErrorLike | null): ActionState {
   return { message: RESET_CONFIRMATION_MESSAGE }
 }
 

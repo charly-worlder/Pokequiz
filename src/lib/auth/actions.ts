@@ -165,8 +165,12 @@ export async function requestPasswordResetAction(
     redirectTo: `${origin}/reset-password`,
   })
 
-  // spec.md AC-10, EC-3: Supabase itself never reveals whether the address
-  // exists on this endpoint — the same confirmation covers both cases.
+  // spec.md AC-10, EC-3 — dieselbe Bestätigung, was auch immer passiert ist.
+  //
+  // Hier stand einmal, Supabase verrate auf diesem Endpunkt nichts über die
+  // Existenz der Adresse. Das war falsch: Sein 429 tritt nur auf, wenn eine Mail
+  // hinausginge (BUG-79). Die Zuordnung schluckt deshalb jeden Fehler; die
+  // Begründung steht bei `mapPasswordResetRequestError`.
   return mapPasswordResetRequestError(error)
 }
 

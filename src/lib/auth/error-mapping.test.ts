@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { AuthErrorLike } from './error-mapping'
 import {
   mapRegisterError,
   mapLoginError,
@@ -65,15 +66,38 @@ describe('mapLoginError', () => {
   })
 })
 
-describe('mapPasswordResetRequestError', () => {
-  // spec.md AC-10, EC-3: same confirmation whether or not the account exists —
-  // Supabase's endpoint itself never returns an error for an unknown address.
-  it('returns the confirmation message when there is no error', () => {
+describe('mapPasswordResetRequestError — eine Antwort für alle Fälle (AC-10, EC-3, BUG-79)', () => {
+  /**
+   * Supabases 429 (`over_email_send_rate_limit`) tritt **nur** auf, wenn wirklich
+   * eine Mail hinausginge — also nur bei einem existierenden Konto. Solange er
+   * nach außen sichtbar war, genügten zwei Anfragen, um eine beliebige Adresse
+   * zuzuordnen (gemessen 30/30). Deshalb darf **kein** Fehler diese Antwort
+   * verändern, auch kein anderer.
+   */
+  it('antwortet ohne Fehler mit der Bestätigung', () => {
     expect(mapPasswordResetRequestError(null).message).toBe(RESET_CONFIRMATION_MESSAGE)
   })
 
-  it('returns the throttled message on a 429', () => {
-    expect(mapPasswordResetRequestError({ status: 429 }).error).toBe(THROTTLED_MESSAGE)
+  it('antwortet auf einen 429 mit derselben Bestätigung — kein Existenz-Orakel', () => {
+    const result = mapPasswordResetRequestError({ status: 429 })
+
+    expect(result.message).toBe(RESET_CONFIRMATION_MESSAGE)
+    expect(result.error).toBeUndefined()
+  })
+
+  it('ist für jede Fehlerform ununterscheidbar', () => {
+    const faelle: (AuthErrorLike | null)[] = [
+      null,
+      { status: 429 },
+      { status: 429, code: 'over_email_send_rate_limit' },
+      { status: 422 },
+      { status: 500 },
+      {},
+    ]
+
+    const antworten = faelle.map((f) => JSON.stringify(mapPasswordResetRequestError(f)))
+
+    expect(new Set(antworten).size).toBe(1)
   })
 })
 

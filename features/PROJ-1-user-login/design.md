@@ -382,6 +382,51 @@ Drei Gründe sprechen dafür, **die AC zu korrigieren statt den Code**:
 
 Mitzudenken ist dabei **BUG-67** (offen, Low): Die Meldung nennt immer „von dieser Verbindung" und ist bei einer konto-bedingten Abweisung damit doppelt irreführend. Wer AC-19 anfasst, sollte beides zusammen entscheiden.
 
+### Nachtrag 2026-09-06 — BUG-79/BUG-80 behoben, BUG-81/BUG-82 bewusst akzeptiert
+
+#### Der Fix: Supabases 429 darf auf dem Reset-Pfad nichts mehr verändern
+
+`mapPasswordResetRequestError` bildete einen 429 auf die Drosselungsmeldung ab. Das war ein vollständiges Kontoexistenz-Orakel: Supabase antwortet auf `/auth/v1/recover` mit `over_email_send_rate_limit` **nur dann, wenn tatsächlich eine Mail hinausginge** — also nur bei einem existierenden Konto. Im QA-Lauf gemessen: **30 von 30 Adressen korrekt bestimmt, rund 2 Adressen pro Sekunde**, bei nachweislich unbelasteten App-Zählern.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Auf dem Reset-Pfad schluckt die Zuordnung jeden Fehler** — eine Antwort für alle Fälle | Es ist die **Umkehrung** der Regel, die seit BUG-67 für die App-eigenen Zähler gilt, und der Unterschied ist gemessen, nicht erwogen: Die eigenen Zähler zählen **jede** Adresse, auch eine ohne Konto — ihre Meldung hängt nicht von der Existenz ab und darf die Ursache nennen. Supabases 429 hängt genau davon ab | Nur den 429 mit `over_email_send_rate_limit` schlucken und andere 429 durchlassen — dieselbe Lücke mit mehr Code, denn jeder Fehler dieses Endpunkts entsteht erst, wenn ein Versand versucht wird · Die App-Grenze unter Supabases Mindestabstand drücken, damit der 429 unerreichbar wird — löst es nur, solange beide Werte zusammenpassen, und der eine steht in einem fremden Dashboard | **Wer die eigene Anfrage zu schnell wiederholt, sieht die Bestätigung, obwohl gerade keine Mail hinausging.** Die App-eigene Drosselung greift davor und sagt es ihm (AC-17, AC-19); stumm bleibt nur Supabases engeres Zeitfenster. Der Preis trifft den ehrlichen Nutzer selten und den Angreifer immer | 2026-09-06 |
+
+**Gegen die laufende App belegt** (2026-09-06): Der gemessene Angriff nachgestellt — je 2 Anfragen für 5 **echte** und 5 **erfundene** Adressen von je einer Verbindung. **Alle zehn Paare antworten identisch** („Falls diese Adresse registriert ist…"). Rot-Nachweis: Mit wieder eingebautem 429-Zweig fallen genau die zwei neuen Wächter in `error-mapping.test.ts`.
+
+#### ⚠️ Was der Fix **nicht** schließt: ein Zeitkanal auf dem Reset-Pfad
+
+Der **Melde**kanal ist zu, der **Zeit**kanal nicht. Direkt gegen `/auth/v1/recover` gemessen, je 12 frische Adressen:
+
+| | Median |
+| --- | --- |
+| Konto vorhanden | **41 ms** |
+| Adresse erfunden | **20 ms** |
+
+Rund **20 ms Unterschied, Faktor 2** — bestehende Konten sind langsamer, weil tatsächlich eine Mail gebaut wird. Das ist dieselbe Klasse wie **EC-10** am Login, nur auf dem Reset-Pfad und bisher in keinem Kriterium.
+
+**Ehrlich zur Messgrenze:** Gemessen wurde an der **Supabase-API**, nicht durch die Server Action hindurch. Die App legt auf beiden Wegen konstante Arbeit obendrauf (zwei Zähler-Aufrufe), die absolute Differenz bleibt also bestehen — wie deutlich sie beim Angreifer ankommt, ist **nicht** gemessen. Das gehört in den nächsten QA-Lauf, und die Bewertung in den Vertrag.
+
+#### Bewusst akzeptierte Test-Lücke (BUG-81, BUG-82)
+
+Auf Entscheidung des Nutzers vom 2026-09-06 **nicht behoben, sondern akzeptiert**. Die Begründung, und sie trägt für den größten Teil: Der Drosselungsmechanismus selbst ist gegen echte Angriffe verifiziert (die Messreihen zu BUG-29, BUG-39, BUG-54 und die drei QA-Läufe danach) und hält. Was fehlt, ist Regressionsschutz an einigen Aufrufstellen, kein aktiver Funktionsfehler.
+
+**Die Lücke ist aber nicht überall gleich groß, und das gehört benannt.** Lane 3 des QA-Laufs hat je Mutation ausgewiesen, was sie auffängt:
+
+| Mutation | `npm test` | E2E | Rest-Risiko |
+| --- | --- | --- | --- |
+| **M27** `settleSuccessfulLogin` läuft auch nach **fehlgeschlagenem** Login → beide Zähler bei jedem Rateversuch zurückgesetzt | nein | **ja** (`PROJ-1-throttle.spec.ts:96–105`) | gering — die Browser-Suite fängt es, nur langsamer |
+| **M13** `settleSuccessfulLogin` wird gar nicht aufgerufen | nein | **ja** (`:191–197`) | gering |
+| **M31** falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert | nein | **nein** | **kein automatischer Wächter** |
+| **M12** `registerAction` zählt mit `null` statt der E-Mail → Konto-Hälfte der Registrierungs-Drosselung tot | nein | **nein** | **kein automatischer Wächter** |
+| **M14** `updatePasswordAction` prüft die Recovery-Sitzung nicht mehr → **AC-12** gebrochen | nein | **nein** | **kein automatischer Wächter**, und es ist eine Sicherheitszusage |
+
+Für M27 und M13 trifft die Begründung des Nutzers vollständig zu. **Für M31, M12 und M14 gibt es überhaupt keinen automatischen Wächter** — dort ruht die Zusage allein auf den Messungen, die einmal von Hand gemacht wurden. Wer eine dieser drei Stellen umbaut, merkt es an keinem roten Test.
+
+Die Ursache im Testcode, belegt: `actions.test.ts:20` legt einen Spion `settleSuccessfulLogin` an und **prüft ihn nie**; `getUser` wird in `beforeEach` gesetzt und **nie auf `null` gekippt**; die Argumente von `registerAttempt` werden nirgends geprüft. Das ist genau die Hälfte, die der Kopf derselben Datei als ihren Existenzgrund nennt — umgesetzt für zwei von fünf Aufrufstellen.
+
+**Wer diese Lücke schließt, fängt bei M14 an:** Es ist die einzige der drei, die eine Sicherheitszusage betrifft, und die billigste — ein Test, der `getUser` auf `null` kippt und `INVALID_RESET_LINK_MESSAGE` erwartet.
+
 ### Entscheidungen zum finalen QA-Lauf (2026-09-05)
 
 | Decision | Rationale | Alternative considered | Trade-off | Date |
