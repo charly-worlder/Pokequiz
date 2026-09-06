@@ -1,5 +1,8 @@
 # PROJ-2 — Tech Design
 
+> ⚠️ **Veraltet seit dem 2026-09-06.** `/refine PROJ-2` hat die Runde auf **serverseitige Autorität** umgestellt: Der Server vergibt die Fragen, prüft jede Antwort, zählt die Serie und misst die Zeit; der Browser erfährt weder die Pokémon-Nummer noch die richtige Option (AC-32 bis AC-41 in `spec.md`). Alles unten, was den Rundenzustand im Browser hält, `correctIndex` ausliefert, `saveRun` ein fertiges Ergebnis übergibt oder die Bildadresse aus der Nummer bildet, beschreibt den **abgelösten** Entwurf. **Nicht danach bauen — erst `/architecture PROJ-2` neu entwerfen.**
+
+
 ## Component Structure
 
 ```

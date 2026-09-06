@@ -23,7 +23,7 @@
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
-| PROJ-2 | Pokémon-Quiz | Eine Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
+| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Planned | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
@@ -85,6 +85,6 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Falls die Test-Abdeckungslücke später doch geschlossen wird, ist BUG-101 der Anfang** — nicht BUG-102: Ein literaler Test je Grenzwert (wie er für zwei der sechs Limits bereits existiert) deckt vier Kriterien auf einmal ab und ist der billigste Schritt. Die Mutationen liegen mit genauem Diff und gemessenem Rot/Grün-Verhalten als fertiges Abnahmekriterium im `qa-report.md` → QA-Abschlusslauf 2026-09-06.
 
-**Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-3** (`Planned`) und danach PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
+**Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2** — zurück auf `Planned` seit dem 2026-09-06. Der `/architecture`-Anlauf zu PROJ-3 hat gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). `design.md`, `tasks.md` und der QA-Bericht von PROJ-2 sind damit veraltet. Reihenfolge: `/architecture PROJ-2` → `/tasks PROJ-2` → Feature-Branch → `/build`, danach erst PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
 
 ## Next Available ID: PROJ-5

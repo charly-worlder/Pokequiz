@@ -1,5 +1,8 @@
 # PROJ-2 Tasks
 
+> ⚠️ **Veraltet seit dem 2026-09-06.** `/refine PROJ-2` hat die Runde auf **serverseitige Autorität** umgestellt: Der Server vergibt die Fragen, prüft jede Antwort, zählt die Serie und misst die Zeit; der Browser erfährt weder die Pokémon-Nummer noch die richtige Option (AC-32 bis AC-41 in `spec.md`). Dieser Bauplan stammt aus dem abgelösten Entwurf und deckt die neuen Kriterien nicht ab. **Nicht danach bauen — erst `/architecture PROJ-2`, dann `/tasks PROJ-2` neu erzeugen.**
+
+
 > Erzeugt von `/tasks` aus `spec.md` + `design.md`. Dies ist der geordnete, nachvollziehbare Bauplan — die Brücke zwischen dem Vertrag (WAS) und dem Bau (WIE).
 > `[P]` = parallelisierbar: Die Dateien der Aufgabe sind disjunkt zu jeder anderen `[P]`-Aufgabe derselben Ebene, `/build` kann sie also in einen eigenen Subagenten geben.
 > Ebenen laufen **nacheinander** (jede ist eine Schranke). Aufgaben **innerhalb** einer Ebene laufen parallel, wo `[P]` steht. Jede Aufgabe verweist auf die AC-IDs aus `spec.md`, die sie erfüllt — das ist die Kette AC → Task → Test.
