@@ -2,6 +2,7 @@ import { type EmailOtpType } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
 
 import { createClient } from '@/lib/supabase/server'
+import { registerAttempt } from '@/lib/auth/throttle'
 
 // Redeems the emailed recovery link (spec.md AC-11, AC-12, EC-7).
 //
@@ -59,6 +60,30 @@ export async function GET(request: NextRequest) {
   const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type') as EmailOtpType | null
   const next = safeNext(searchParams.get('next'))
+
+  // spec.md AC-20 — gezählt wird, **bevor** der Token beim Auth-Dienst landet.
+  //
+  // Diese Route war die einzige Stelle der App, die ein Credential prüft und
+  // nicht zählt: Die Drosselung sitzt bewusst in den Server Actions, und eine
+  // Route ist keine Action. Gemessen im QA-Lauf vom 2026-09-05: 40 Einlösungen
+  // von einer Verbindung, null abgewiesen (BUG-71).
+  //
+  // Der Zweck ist ausdrücklich nicht, das Erraten des Tokens zu verhindern — der
+  // ist zu lang dafür. Der Zweck ist, dass niemand Supabases gemeinsames
+  // `token_verifications`-Kontingent leerlaufen lassen kann: Weil die App nur
+  // über Server Actions mit Supabase spricht, sieht dieses Limit für alle Spieler
+  // dieselbe Server-IP (BUG-21). Wer es erschöpft, sperrt den Passwort-Reset für
+  // alle — und der ist laut docs/PRD.md der einzige Weg zurück ins Konto.
+  //
+  // Keine E-Mail-Adresse: Die verrät der Token erst nach der Prüfung. Gezählt
+  // wird deshalb nur die Verbindung.
+  if (!(await registerAttempt('token-confirm', null)).allowed) {
+    // Bewusst der bestehende AC-12-Zustand statt einer eigenen Meldung: Wer den
+    // Link anklickt, sieht die Seite, die ihm einen neuen anbietet. Eine eigene
+    // „zu viele Versuche"-Meldung würde einem Angreifer bestätigen, dass er die
+    // Grenze getroffen hat, und einem echten Nutzer nichts nützen.
+    return redirectTo('/reset-password?error=1')
+  }
 
   if (token_hash && type) {
     const supabase = await createClient()

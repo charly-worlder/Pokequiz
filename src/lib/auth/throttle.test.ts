@@ -115,6 +115,105 @@ describe('registerAttempt', () => {
   })
 })
 
+describe('Welcher Zähler abgewiesen hat (BUG-67, EC-4)', () => {
+  /** Lässt genau die Schlüssel scheitern, auf die `trifft` zutrifft. */
+  const sperre = (trifft: (key: string) => boolean) =>
+    rpc.mockImplementation((fn: string, args: { p_key: string }) =>
+      Promise.resolve({ data: fn === 'register_auth_attempt' ? !trifft(args.p_key) : true, error: null })
+    )
+
+  it('nennt die Verbindung, wenn nur der IP-Zähler sperrt', async () => {
+    sperre((k) => k.includes(':ip:'))
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(false)
+    expect(r.blockedBy).toBe('connection')
+  })
+
+  /**
+   * Der eigentliche Befund aus BUG-67: Hier kommt der rechtmäßige Besitzer von
+   * einer **unbelasteten** Verbindung und wurde trotzdem auf sie verwiesen.
+   */
+  it('nennt die Adresse, wenn nur der Konto-Zähler sperrt', async () => {
+    sperre((k) => k.includes(':account:'))
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(false)
+    expect(r.blockedBy).toBe('account')
+  })
+
+  it('nennt bei doppelter Sperre die Adresse — ihr Fenster ist das längere', async () => {
+    sperre(() => true)
+
+    expect((await registerAttempt('login', 'a@b.de')).blockedBy).toBe('account')
+  })
+
+  it('meldet ohne Sperre keine Ursache', async () => {
+    sperre(() => false)
+
+    const r = await registerAttempt('login', 'a@b.de')
+
+    expect(r.allowed).toBe(true)
+    expect(r.blockedBy).toBeNull()
+  })
+
+  it('kann ohne Adresse nur die Verbindung nennen (AC-20)', async () => {
+    sperre(() => true)
+
+    expect((await registerAttempt('token-confirm', null)).blockedBy).toBe('connection')
+  })
+
+  it('zählt beide weiter, auch wenn schon einer sperrt', async () => {
+    sperre((k) => k.includes(':ip:'))
+
+    await registerAttempt('login', 'a@b.de')
+
+    expect(keysUsed()).toEqual(['login:account:a@b.de', 'login:ip:1.2.3.4'])
+  })
+})
+
+describe('Grenzwerte je Vorgang (AC-19, AC-20)', () => {
+  /**
+   * Bis BUG-76 nahm `registerAttempt` für **jeden** Vorgang
+   * `credentialsPerAccount`. Das war kein Entschluss, sondern der Login-Wert, der
+   * mitgalt — und beim Reset begrenzt derselbe Zähler etwas ganz anderes: Mails
+   * an eine fremde Adresse statt Raten am eigenen Konto.
+   */
+  it('nimmt für den Passwort-Reset die eigene, engere Konto-Grenze', async () => {
+    await registerAttempt('password-reset', 'a@b.de')
+
+    const accountCall = rpc.mock.calls.find((c) => c[1].p_key.includes(':account:'))
+    expect(accountCall?.[1].p_limit).toBe(LIMITS.passwordResetPerAccount.limit)
+    expect(accountCall?.[1].p_window_seconds).toBe(LIMITS.passwordResetPerAccount.windowSeconds)
+  })
+
+  it('nimmt für den Login weiterhin die weitere Konto-Grenze', async () => {
+    await registerAttempt('login', 'a@b.de')
+
+    const accountCall = rpc.mock.calls.find((c) => c[1].p_key.includes(':account:'))
+    expect(accountCall?.[1].p_limit).toBe(LIMITS.credentialsPerAccount.limit)
+  })
+
+  it('begrenzt den Reset am Konto enger als den Login', () => {
+    const proStunde = (l: { limit: number; windowSeconds: number }) =>
+      (l.limit * 3600) / l.windowSeconds
+
+    expect(proStunde(LIMITS.passwordResetPerAccount)).toBeLessThan(
+      proStunde(LIMITS.credentialsPerAccount)
+    )
+  })
+
+  it('zählt die Token-Einlösung mit eigenem Schlüssel und eigener Grenze (AC-20)', async () => {
+    await registerAttempt('token-confirm', null)
+
+    expect(keysUsed()).toEqual(['token-confirm:ip:1.2.3.4'])
+    expect(rpc.mock.calls[0][1].p_limit).toBe(LIMITS.tokenConfirmPerIp.limit)
+    expect(rpc.mock.calls[0][1].p_window_seconds).toBe(LIMITS.tokenConfirmPerIp.windowSeconds)
+  })
+})
+
 describe('settleSuccessfulLogin', () => {
   it('löscht den Konto-Zähler ganz', async () => {
     await settleSuccessfulLogin('Spieler@Example.COM')

@@ -191,6 +191,8 @@ Rund **25 ms mehr pro Navigation**, etwa +20 %. In Produktion liegt der Auth-Ser
 
 Eingebaut nach **BUG-29** aus dem QA-Lauf zu PROJ-2: 35 Fehlversuche gegen ein bestehendes Konto ergaben 35-mal dieselbe Antwort, ohne Sperre — und zwar über `POST /`, nicht über `/login`. Next.js bindet eine Server Action nicht an ihre Route, und der Proxy-Matcher nimmt Bild-Endungen aus; eine Schranke am Pfad war damit über `/privacy` oder ein beliebiges `*.png` umgehbar (BUG-30, BUG-31). **Die Drosselung sitzt deshalb in den Actions selbst.**
 
+**Wo das im Vertrag steht** (seit `/refine PROJ-1` am 2026-09-05 — vorher beschrieb `spec.md` an dieser Stelle noch Supabases eingebaute Regel): **AC-8** Verbindungs-Zähler samt Erstattung und der Bedingung, dass die IP überhaupt feststellbar ist · **AC-16** Konto-Zähler · **AC-17** Passwort-Reset, ohne Erstattung · **AC-18** Verweigern statt Durchlassen im Fehlerfall · **EC-4** Verhalten an der Grenze · **EC-8/EC-9** die bewusst akzeptierten Grenzen. Gebaut unter **T20–T23** in `tasks.md`.
+
 | Decision | Rationale | Alternative considered | Trade-off | Date |
 | --- | --- | --- | --- | --- |
 | **Zähler in Postgres statt Upstash Redis** | Das Stack-Pack nennt Upstash (`docs/stacks/framework-nextjs.md`). Dagegen sprach der Projektstand, nicht die Technik: Dieses Projekt hängt bereits an einem externen Dienst, der seit Tagen blockiert (SMTP, `docs/PRD.md`). Ein zweiter externer Blocker auf einem High-Befund wäre der falsche Tausch. Postgres ist da, funktioniert lokal und gehostet gleich und braucht kein neues Konto | Upstash Redis nach Stack-Pack; ein Zähler im Prozessspeicher | **Jeder Rateversuch schreibt in die Produktivdatenbank** — der Angreifer flutet genau das, was ihn bremsen soll. Bei dieser Größenordnung mit Index und schmaler Tabelle unkritisch, und Supabases eigenes Per-IP-Limit sitzt als Untergrenze davor. Upstash bleibt der dokumentierte Ausbauweg | 2026-09-05 |
@@ -278,12 +280,208 @@ Schwerer als die Größe wiegt die Aufbewahrung: Der Konto-Schlüssel lautet `lo
 
 Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.** Sie stehen hier, damit niemand sie später für ein Versehen hält und beiläufig „repariert" — jede Korrektur verschiebt die Abwägung zwischen IP- und Konto-Zähler und gehört entschieden, nicht nebenbei geändert.
 
+> **Seit dem 2026-09-05 stehen beide auch im Vertrag** — BUG-55 als **EC-8**, BUG-57 als **EC-9** in `spec.md` (nachgetragen durch `/refine PROJ-1`). Der Grund: Eine Grenze, die nur im Design steht, wird beim nächsten QA-Lauf erneut als frischer Befund gemeldet. Als Edge Case ist sie prüfbares Soll-Verhalten. Die Zahlen unten sind die Quelle, der Vertrag die Zusage — wer eine davon ändert, ändert beide.
+
 | Risiko | Die genaue Zahl | Warum akzeptiert |
 | --- | --- | --- |
 | **BUG-55 — geteilter Anschluss mit Tippfehlern** (Medium) | Acht Spieler hinter **einer** Adresse, jeder vertippt sich **einmal** und gibt dann das richtige Passwort ein: **4 von 8 kommen hinein.** Ab dem **5. Fehlversuch pro Minute** ist die Verbindung für alle dicht, auch für die, die richtig tippen. Ohne Tippfehler kommen dagegen **8 von 8** hinein (gemessen), und **25 Anmelde-/Abmelde-Zyklen** laufen ohne eine einzige Abweisung | Das Fenster heilt nach 60 Sekunden von selbst aus, ein Workaround existiert (warten), und die Alternativen berühren alle den Schutz gegen Passwort-Spraying, für den der IP-Zähler die einzige Bremse ist. Der Grenzwert bleibt bis auf Weiteres, wie er ist |
-| **BUG-57 — Aussperren eines bekannten Kontos** (Low) | **20 Anfragen je 15 Minuten** genügen, um ein bekanntes Konto draußen zu halten. Gemessen: 20 Fehlversuche von 20 **verschiedenen** Adressen kommen alle durch; danach wird der rechtmäßige Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse abgewiesen | Der Preis war schon bei der Einführung des Konto-Zählers benannt („ein hartnäckiger Angreifer kann ein bekanntes Konto phasenweise blockieren"); neu ist nur die Zahl. Das Gegenmittel wäre ein CAPTCHA, das dieses Produkt bewusst nicht hat (`docs/PRD.md`: „ohne Erklärung sofort loslegen") |
+| **BUG-57 — Aussperren eines bekannten Kontos** (~~Low~~ → **Medium** seit dem 2026-09-06, siehe Nachtrag unter dieser Tabelle) | **20 Anfragen je 15 Minuten** genügen, um ein bekanntes Konto draußen zu halten. Gemessen: 20 Fehlversuche von 20 **verschiedenen** Adressen kommen alle durch; danach wird der rechtmäßige Besitzer mit **richtigem** Passwort von einer unbelasteten 21. Adresse abgewiesen | **⚠️ Diese Begründung wurde am 2026-09-06 ersetzt — maßgeblich ist jetzt EC-9 in `spec.md`.** Sie lautete: *Der Preis war schon bei der Einführung des Konto-Zählers benannt (‚ein hartnäckiger Angreifer kann ein **bekanntes** Konto phasenweise blockieren'); neu ist nur die Zahl. Das Gegenmittel wäre ein CAPTCHA, das dieses Produkt bewusst nicht hat.* — Das Wort **bekannt** trug dabei die ganze Last, und BUG-79 hat gezeigt, dass Adressen zwei Anfragen lang deterministisch bestätigbar waren (gemessen 30/30). Der Befund ist behoben; die Begründung ruht seither auf dem, was messbar stimmt: Bestätigung nur noch statistisch (EC-10, EC-11), derselbe Zähler begrenzt Proben **und** Aussperren, die Sperre heilt nach 15 Minuten aus |
+
+> **Nachtrag 2026-09-06 — BUG-57 ist jetzt `Medium`, und die Begründung in der Zeile oben ist die zweite, die gefallen ist.** Der QA-Nachlauf hat beide tragenden Sätze widerlegt: Eine Adresse zu bestätigen ist **nicht statistisch, sondern deterministisch aus einer einzigen Anfrage** (Zeitkanal durch die Server Action, Blindtests **20/20** und **30/30**, ~10 Adressen/s; dazu ein zweiter, sofort ablesbarer Kanal über das Registrierungsformular, **30/30**). Und es sind **nicht dieselben Zähler**: Reset-Proben laufen auf `password-reset:account:` (5/Std), das Aussperren auf `login:account:` (20/15 min) — gemessen kostet das Sondieren **null** vom Aussperr-Budget. Maßgeblich ist ab jetzt **EC-9 in `spec.md`**; die dortige Fassung nennt außerdem den Punkt, den drei Anläufe umgangen haben: Kontoexistenz ist in diesem Produkt **per AC-3 bewusst öffentlich**, eine Begründung darf sich also nie wieder auf die Vertraulichkeit von Adressen stützen.
 
 **Beide hängen an derselben Stellschraube** — wie die erlaubten Versuche zwischen IP- und Konto-Zähler verteilt sind. Wer eines davon angeht, muss beide zusammen neu rechnen, und zwar für die **unbequemste realistische Nutzung**: einen Schulanschluss am Montagmorgen, nicht einen Haushalt ohne Tippfehler. Dass genau dieser Unterschied zweimal übersehen wurde (BUG-54, dann BUG-55), ist der Grund, warum er hier ausgeschrieben steht.
+
+### Nachtrag 2026-09-05 — die Fehlerzuordnung sagt jetzt, was wirklich schiefging (BUG-66, BUG-68)
+
+Der QA-Lauf gegen den überarbeiteten Vertrag fand zweimal dasselbe Muster, das schon BUG-9 und BUG-11 erzeugt hatte: **Ein Zustand, den der Nutzer selbst beheben kann, wurde ihm als Störung gemeldet — oder umgekehrt.**
+
+**Vorher gemessen, nicht vermutet** (2026-09-05, gegen die lokale Instanz mit demselben `supabase-js`, das die App benutzt):
+
+| Fall | Was bei der App ankommt |
+| --- | --- |
+| Doppelte E-Mail | `AuthApiError`, 422, `code: user_already_exists` |
+| Neues Passwort = altes | `AuthApiError`, 422, **`code: same_password`** |
+| Doppelter Trainername | `AuthRetryableFetchError`, 500, **`code: undefined`**, `"Database error saving new user"` |
+
+Die dritte Zeile ist der eigentliche Befund. Der Trigger aus `0001_profiles.sql` wirft ausdrücklich `trainer_name_taken` — **GoTrue reicht den Text nicht durch.** Ein echter Datenbankausfall während der Registrierung sieht am Fehlerobjekt identisch aus. Die bisherige Annahme im Kopfkommentar von `error-mapping.ts` („nichts anderes in diesem Fluss erzeugt einen 500, also ist der Status allein verlässlich") war damit widerlegt.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Bei einem 500 wird nachgefragt, statt geraten** — `registerAction` fragt die Datenbank, ob der Trainername wirklich existiert, und übergibt die Antwort an `mapRegisterError` (`src/lib/auth/trainer-name.ts`) | Der Status allein kann es nicht entscheiden, und die Folge des Ratens traf den Nutzer an der falschen Stelle: Bei einer Störung las er, sein Wunschname sei vergeben, und probierte einen zweiten und dritten. **EC-1 bleibt unangetastet** — in einem echten Wettlauf hat die gewinnende Transaktion committet, bevor nachgefragt wird, der Verlierer sieht also weiterhin den Feldfehler | Den Trigger einen unterscheidbaren Fehler werfen lassen — GoTrue überschreibt ihn, geht also nicht · Vorab prüfen statt hinterher — kostet jede Registrierung eine Abfrage und öffnet dasselbe Zeitfenster · Die Meldung unschärfer formulieren („möglicherweise vergeben") — verlagert die Unsicherheit auf den Nutzer | **Ein zusätzlicher Datenbank-Aufruf, aber nur auf dem Fehlerpfad** — der geglückte Weg kostet nichts. Die Abfrage läuft über den Admin-Client, weil `profiles` für `anon` nicht lesbar ist und die Registrierung noch keine Sitzung hat; sie erfährt ausschließlich, **ob** ein Name vergeben ist — genau die Auskunft, die AC-2 dem Nutzer ohnehin gibt. Scheitert die Nachfrage selbst, lautet die Antwort „nicht vergeben" und der Nutzer bekommt die Störungsmeldung — in dem Fall die zutreffende. **Der Service-Role-Schlüssel läuft damit an einer zweiten Stelle im Registrierungspfad; `.claude/rules/security.md` verlangt dafür eine ausdrückliche Zustimmung, und der Nutzer hat sie am 2026-09-05 erteilt.** Gegengeprüft mit Positivkontrolle, dass weder der Schlüssel noch das Literal `service_role` noch `isTrainerNameTaken` im ausgelieferten JavaScript landen | 2026-09-05 |
+| **`mapUpdatePasswordError` trennt `same_password` von einer echten Störung** | Dieselbe Trennung, die BUG-9 für den Login eingeführt hat: eine Störung nie als Nutzerfehler ausgeben und einen Nutzerfehler nie als Störung. Der Code ist eindeutig, die Meldung landet als Feldfehler am Passwort-Feld, wo das Formular sie ohnehin verteilt | Alles weiter auf die Netzwerkmeldung fallen lassen | Eine weitere Zuordnungsfunktion. Bewusst **nur** `same_password` behandelt: `weak_password` fängt Zod schon vorher ab, und jede weitere Sonderbehandlung wäre Vorrat ohne belegten Fall | 2026-09-05 |
+
+**Beide Fixes tragen einen Wächter, dessen Rot-Zustand nachgewiesen ist.** Mit den entfernten Prüfungen fallen genau zwei Tests in `error-mapping.test.ts` — „meldet einen 500 als Störung, wenn der Trainername gar nicht vergeben ist" und „meldet ein unverändertes Passwort am Passwort-Feld" —, alle übrigen bleiben grün. Die drei Tests der Gegenrichtung (AC-2/EC-1 halten, 429 schlägt die Nachfrage, echte Störung bleibt Störung) waren auch gegen den kaputten Stand grün: **erst zusammen** spannen sie die Zusage auf.
+
+### Bewusst akzeptiertes Risiko außerhalb der Drosselung (2026-09-05) — BUG-65
+
+Dieser Befund steht aus demselben Grund hier wie BUG-55 und BUG-57 weiter oben: gemessen, verstanden, absichtlich nicht behoben — und im Vertrag als **EC-10** festgehalten, damit ihn niemand für ein Versehen hält.
+
+| Risiko | Die genaue Zahl | Warum akzeptiert |
+| --- | --- | --- |
+| **BUG-65 — die Antwortzeit verrät die Kontoexistenz** (Medium) | Je 12 Anfragen mit frischer Adresse: falsches Passwort **Median 176 ms / Mittel 164 ms**, unbekannte Adresse **Median 102 ms / Mittel 98 ms** — konstant rund **74 ms** Unterschied, weil nur der bestehende Fall durch die Passwort-Prüfung läuft | Die Differenz entsteht in Supabases Auth-Dienst; die App ruft `signInWithPassword` auf und sieht die Zeit nicht, die dort vergeht. Die einzige App-seitige Gegenmaßnahme wäre, **jede** Anmeldung auf eine feste Mindestdauer zu strecken — der Preis wäre ein langsamerer Weg ins Spiel für alle, gegen einen Vorteil, den der Konto-Zähler (AC-16) ohnehin begrenzt. Der Wortlaut von AC-7 bleibt erfüllt: Die **Meldung** verrät nichts |
+
+### Nachtrag 2026-09-05 (nach dem QA-Nachlauf) — zwei Lücken, die der Vertrag nicht beantwortet hatte
+
+Der Nachlauf fand zwei Stellen, an denen nicht der Code vom Vertrag abwich, sondern **der Vertrag nichts sagte** — und an denen deshalb ein Standardwert galt, den nie jemand entschieden hatte.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Der Passwort-Reset bekommt eine eigene Konto-Grenze** (AC-19, 5/Stunde) statt der geerbten 20/15 min | `registerAttempt` nahm `credentialsPerAccount` für **jeden** Scope. Beim Login begrenzt dieser Zähler das Raten am eigenen Konto — beim Reset begrenzt er **Mails an eine fremde Adresse**. Gemessen im Nachlauf: bis zu ~80 Mails je Stunde an ein Opfer, sobald Adressen rotierbar sind (BUG-61), jede eine Einheit des SMTP-Kontingents, das laut `docs/PRD.md` ohnehin der Engpass des Projekts ist | Den Ist-Zustand als Kriterium festschreiben — hätte eine nie getroffene Entscheidung zur Zusage gemacht · Als akzeptiertes Risiko nach dem Muster von EC-8/EC-9 dokumentieren — passt hier nicht: Anders als dort gibt es eine billige Gegenmaßnahme, und das Opfer ist ein unbeteiligter Dritter | Wer die Reset-Mail nicht erhält und es hartnäckig versucht, ist nach 5 Anfragen für eine Stunde ausgesperrt — bei einem Weg, der laut PRD der **einzige** zurück ins Konto ist. Deshalb 5 und nicht 3: Zwei, drei Versuche sind der realistische ehrliche Fall, der fünfte ist schon Verzweiflung | 2026-09-05 |
+| **`/auth/confirm` wird gedrosselt** (AC-20, 10/15 min je Verbindung) | Die Route war die einzige Stelle, die ein Credential prüft und **nicht** zählt — die Drosselung sitzt bewusst „in den Actions", und diese Route ist keine Action. Gemessen: 40 Einlösungen, 0 abgewiesen. Der Angriffswert liegt nicht im Erraten des Tokens, sondern im **gemeinsamen** `token_verifications`-Kontingent des Auth-Dienstes, das wegen der Server-Action-Architektur für alle Spieler an derselben Server-IP hängt (BUG-21). Wer es leerläuft, sperrt jeden legitimen Reset | Nichts tun, weil der Token nicht erratbar ist — verwechselt den Angriff (das Ziel ist das Kontingent, nicht der Token) · Enger stellen (5/15 min) — trifft geteilte Anschlüsse an dem Weg, an dem eine Fehlsperre am teuersten ist | **Der Schutz hängt wie alle IP-Zähler an BUG-61.** Mit rotierenden Adressen bleibt er umgehbar; er nimmt den billigen Einzelquellen-Angriff weg, nicht den verteilten. Das ist dieselbe Grenze wie bei AC-8 und kein zusätzlicher Mangel | 2026-09-05 |
+
+**Warum EC-10 seine Zahlen verloren hat.** Der Vertrag nannte „Median 176 ms gegenüber 102 ms, rund 74 ms". Drei Messungen am selben Tag ergaben 74, 65 und 49 ms — je nachdem, wie viel der Server Action mitgemessen wurde und wie belastet die Maschine war. Eine feste Zahl hätte jeden künftigen QA-Lauf gezwungen, eine Abweichung zu melden, die keine ist; zugesagt ist jetzt, was tatsächlich stabil ist.
+
+### Nachtrag 2026-09-06 — AC-19 und AC-20 gebaut, BUG-74 und BUG-75 behoben
+
+**BUG-74 wurde nicht durch Escaping gelöst, sondern durch eine Datenbankfunktion.** `is_trainer_name_taken` (Migration `0006`) macht denselben Vergleich wie der Signup-Trigger — `lower(trainer_name) = lower(p_name)` — statt eines LIKE-Musters. Das behebt beide Hälften des Befunds auf einmal: die falsche Aussage bei Namen mit `_` **und** den Seq Scan, denn der Vergleich trifft den vorhandenen Funktionsindex.
+
+Gegen die laufende Datenbank belegt: Für den Namen `qa_egC54921` (existiert nicht, danebenliegend der echte `qaRegC54921`) sagte die alte `ilike`-Abfrage **true**, die Funktion sagt **false**; beim echten Namen sagt sie **true**. Dazu `Index Scan using profiles_trainer_name_lower_key`, 0,065 ms statt 0,72 ms, und `42501 permission denied` für `anon`.
+
+**BUG-75 ist die Lehre aus dem eigenen Rot-Nachweis.** Der vorige Durchgang hatte bewiesen, dass die Zuordnungs*funktionen* richtig entscheiden — nicht, dass die Actions sie benutzen. Diesmal wurde auf beiden Ebenen mutiert, und alle fünf Mutationen werden erkannt:
+
+| Mutation | Erkannt von |
+| --- | --- |
+| `isTrainerNameTaken` in `registerAction` umgangen | `actions.test.ts` (2 Tests) |
+| `mapUpdatePasswordError` nicht mehr aufgerufen | `actions.test.ts` (1 Test) |
+| `trainer-name.ts` zurück auf ein LIKE-Muster | `trainer-name.test.ts` (2 Tests) |
+| Drosselung aus `/auth/confirm` entfernt | `route.test.ts` (3 Tests) |
+| Reset erbt wieder die Login-Konto-Grenze | `throttle.test.ts` (1 Test) |
+
+Die ersten beiden Zeilen sind die, die vorher **grün** geblieben wären.
+
+**AC-20 wurde entscheidend belegt, nicht nur plausibel gemacht.** Die Abweisung sieht absichtlich aus wie ein abgelaufener Link — der Location-Header taugt deshalb nicht als Beleg. Gemessen wurde stattdessen mit einem **echten** Token aus dem Postfach: Über der Grenze wird er abgewiesen und setzt keine Sitzung; unmittelbar danach löst **derselbe** Token ihn von einer unbelasteten Verbindung erfolgreich ein. Damit kann nur die Drosselung ihn aufgehalten haben.
+
+**AC-19 gemessen:** 7 Anfragen für dieselbe Adresse von 7 **verschiedenen** Verbindungen — 5 durch, ab der 6. abgewiesen.
+
+#### ✅ Aufgelöst am 2026-09-06 — die AC wurde korrigiert, nicht der Code
+
+Der Nutzer hat entschieden: **AC-19 wird korrigiert, der Code bleibt.** Die Spec sagt jetzt, dass die Abweisung die Drosselungsmeldung zeigt und die **Adresse** als Grund nennt. Der Abschnitt darunter bleibt als Begründung stehen.
+
+**Gleich mitentschieden wurde BUG-67**, weil beides an derselben Stelle hängt: Sobald die Meldung sagen soll, *welche* Grenze griff, braucht `registerAttempt` einen Rückgabewert, der das verrät.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **`registerAttempt` meldet, welcher Zähler abgewiesen hat** (`blockedBy: 'connection' \| 'account' \| null`), und die Actions wählen danach die Meldung | Die alte Pauschale „von dieser Verbindung" war beim Konto-Zähler nachweislich falsch: Der rechtmäßige Besitzer kommt dort von einer **unbelasteten** Verbindung und probierte den nächstliegenden Workaround (anderes WLAN), der nichts half. **Der Einwand, das könnte Kontoexistenz verraten, ist gemessen widerlegt** — der Zähler zählt auch Adressen ohne Konto, eine frei erfundene Adresse wird nach der 5. Reset-Anfrage genauso abgewiesen | Die Meldung ganz neutral halten („zu viele Versuche") — nimmt dem Nutzer die einzige verwertbare Information · Die Unterscheidung nur im Log führen — hilft dem Nutzer nicht, der vor dem Formular sitzt | Ein zusätzliches Feld im Rückgabewert und eine zweite Meldung. **Beide Zähler laufen unverändert immer**, die Reihenfolge der Prüfung ändert sich nicht — nur die Auskunft danach | 2026-09-06 |
+| **Sperren beide zugleich, wird die Adresse genannt** | Ihr Fenster ist das längere (15 Minuten beim Login, eine Stunde beim Reset, gegen 60 Sekunden bei der Verbindung). „Warte eine Minute" wäre dann ein falscher Rat, und der Nutzer käme nach einer Minute erneut gegen dieselbe Wand | Die Verbindung nennen, weil sie häufiger ist — optimiert für den häufigen Fall auf Kosten des ärgerlichen | Ein Nutzer, den *beide* Grenzen treffen, erfährt nichts von der Verbindungs-Sperre. Sie heilt aber innerhalb der Konto-Sperre ohnehin aus | 2026-09-06 |
+| **Die Adress-Meldung nennt keine Wartezeit** | Es gibt zwei verschiedene (15 Minuten beim Login, eine Stunde beim Reset), und eine falsche Zahl ist schlechter als keine | „Bitte in einigen Minuten" für beide — beim Reset schlicht unwahr | Der Nutzer erfährt nicht, wie lange. Er erfährt aber, **woran** es liegt, und das war der Kern des Befunds | 2026-09-06 |
+
+**Gegen die laufende App belegt** (2026-09-06), beide Zweige über den Reset-Pfad:
+
+- **Konto-Zähler sperrt:** 6 Anfragen für dieselbe Adresse von 6 **verschiedenen** Verbindungen → die 6. nennt die **Adresse**, nicht die Verbindung, obwohl die anfragende Verbindung unbelastet ist
+- **Verbindungs-Zähler sperrt:** 4 Anfragen von **einer** Verbindung für verschiedene Adressen → die 4. nennt die **Verbindung**
+
+**Rot-Nachweis über neun Mutationen**, die vier neuen und die fünf aus dem Vorlauf — alle werden erkannt, auch die subtilste (M9: nur der Vorrang bei doppelter Sperre gedreht, erkannt von genau einem Test). Die Mutation „Login ignoriert die gemeldete Ursache" wird ebenfalls rot: Die Verdrahtungs-Ebene ist seit BUG-75 mit abgesichert.
+
+#### Die ursprüngliche Abweichung und warum sie so aufgelöst wurde
+
+AC-19 sagte zunächst, die Abweisung erfolge „mit derselben Meldung wie in AC-10, die nichts über die Existenz des Kontos verrät". Gebaut war etwas anderes: `requestPasswordResetAction` gibt bei jeder Abweisung die Drosselungsmeldung zurück. **Das wurde nicht stillschweigend angepasst** — `spec.md` ist während `/build` unveränderlich, und die Entscheidung gehörte dem Nutzer. Er hat sie am 2026-09-06 getroffen; die drei Gründe darunter waren die Vorlage.
+
+Drei Gründe sprechen dafür, **die AC zu korrigieren statt den Code**:
+
+1. **Die Sorge, die meine Formulierung trug, greift hier nicht.** Der Konto-Zähler zählt **jede** Adresse, ob es ein Konto gibt oder nicht. „Zu viele Versuche" verrät deshalb nichts über die Existenz eines Kontos — der Grund für die Gleichmacherei in AC-10 fehlt.
+2. **Die AC-10-Meldung wäre hier eine Lüge an den ehrlichen Nutzer.** „Falls diese Adresse registriert ist, wurde ein Link verschickt" zu zeigen, obwohl gerade nichts verschickt wurde, lässt jemanden auf eine Mail warten, die nie kommt — auf dem einzigen Weg zurück ins Konto.
+3. **Umsetzbar wäre es nur mit einem Umbau der Drosselung.** `registerAttempt` gibt bewusst **einen** Boolean zurück und zählt beide Zähler; welcher von beiden abgewiesen hat, weiß der Aufrufer nicht. Die AC-10-Meldung nur für den Konto-Fall zu zeigen, verlangte diese Unterscheidung — und damit eine Änderung an der Stelle, deren Einfachheit bisher ihr Schutz war.
+
+Mitzudenken ist dabei **BUG-67** (offen, Low): Die Meldung nennt immer „von dieser Verbindung" und ist bei einer konto-bedingten Abweisung damit doppelt irreführend. Wer AC-19 anfasst, sollte beides zusammen entscheiden.
+
+### Nachtrag 2026-09-06 — BUG-79/BUG-80 behoben, BUG-81/BUG-82 bewusst akzeptiert
+
+#### Der Fix: Supabases 429 darf auf dem Reset-Pfad nichts mehr verändern
+
+`mapPasswordResetRequestError` bildete einen 429 auf die Drosselungsmeldung ab. Das war ein vollständiges Kontoexistenz-Orakel: Supabase antwortet auf `/auth/v1/recover` mit `over_email_send_rate_limit` **nur dann, wenn tatsächlich eine Mail hinausginge** — also nur bei einem existierenden Konto. Im QA-Lauf gemessen: **30 von 30 Adressen korrekt bestimmt, rund 2 Adressen pro Sekunde**, bei nachweislich unbelasteten App-Zählern.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Auf dem Reset-Pfad schluckt die Zuordnung jeden Fehler** — eine Antwort für alle Fälle | Es ist die **Umkehrung** der Regel, die seit BUG-67 für die App-eigenen Zähler gilt, und der Unterschied ist gemessen, nicht erwogen: Die eigenen Zähler zählen **jede** Adresse, auch eine ohne Konto — ihre Meldung hängt nicht von der Existenz ab und darf die Ursache nennen. Supabases 429 hängt genau davon ab | Nur den 429 mit `over_email_send_rate_limit` schlucken und andere 429 durchlassen — dieselbe Lücke mit mehr Code, denn jeder Fehler dieses Endpunkts entsteht erst, wenn ein Versand versucht wird · Die App-Grenze unter Supabases Mindestabstand drücken, damit der 429 unerreichbar wird — löst es nur, solange beide Werte zusammenpassen, und der eine steht in einem fremden Dashboard | **Wer die eigene Anfrage zu schnell wiederholt, sieht die Bestätigung, obwohl gerade keine Mail hinausging.** Die App-eigene Drosselung greift davor und sagt es ihm (AC-17, AC-19); stumm bleibt nur Supabases engeres Zeitfenster. Der Preis trifft den ehrlichen Nutzer selten und den Angreifer immer | 2026-09-06 |
+
+**Gegen die laufende App belegt** (2026-09-06): Der gemessene Angriff nachgestellt — je 2 Anfragen für 5 **echte** und 5 **erfundene** Adressen von je einer Verbindung. **Alle zehn Paare antworten identisch** („Falls diese Adresse registriert ist…"). Rot-Nachweis: Mit wieder eingebautem 429-Zweig fallen genau die zwei neuen Wächter in `error-mapping.test.ts`.
+
+#### ⚠️ Was der Fix **nicht** schließt: ein Zeitkanal auf dem Reset-Pfad
+
+Der **Melde**kanal ist zu, der **Zeit**kanal nicht. Direkt gegen `/auth/v1/recover` gemessen, je 12 frische Adressen:
+
+| | Median |
+| --- | --- |
+| Konto vorhanden | **41 ms** |
+| Adresse erfunden | **20 ms** |
+
+Rund **20 ms Unterschied, Faktor 2** — bestehende Konten sind langsamer, weil tatsächlich eine Mail gebaut wird. Das ist dieselbe Klasse wie **EC-10** am Login, nur auf dem Reset-Pfad und bisher in keinem Kriterium.
+
+**Ehrlich zur Messgrenze:** Gemessen wurde an der **Supabase-API**, nicht durch die Server Action hindurch. Die App legt auf beiden Wegen konstante Arbeit obendrauf (zwei Zähler-Aufrufe), die absolute Differenz bleibt also bestehen — wie deutlich sie beim Angreifer ankommt, ist **nicht** gemessen. Das gehört in den nächsten QA-Lauf, und die Bewertung in den Vertrag.
+
+#### Bewusst akzeptierte Test-Lücke (BUG-81, BUG-82)
+
+Auf Entscheidung des Nutzers vom 2026-09-06 **nicht behoben, sondern akzeptiert**. Die Begründung, und sie trägt für den größten Teil: Der Drosselungsmechanismus selbst ist gegen echte Angriffe verifiziert (die Messreihen zu BUG-29, BUG-39, BUG-54 und die drei QA-Läufe danach) und hält. Was fehlt, ist Regressionsschutz an einigen Aufrufstellen, kein aktiver Funktionsfehler.
+
+**Die Lücke ist aber nicht überall gleich groß, und das gehört benannt.** Lane 3 des QA-Laufs hat je Mutation ausgewiesen, was sie auffängt:
+
+| Mutation | `npm test` | E2E | Rest-Risiko |
+| --- | --- | --- | --- |
+| **M27** `settleSuccessfulLogin` läuft auch nach **fehlgeschlagenem** Login → beide Zähler bei jedem Rateversuch zurückgesetzt | nein | **ja** (`PROJ-1-throttle.spec.ts:96–105`) | gering — die Browser-Suite fängt es, nur langsamer |
+| **M13** `settleSuccessfulLogin` wird gar nicht aufgerufen | nein | **ja** (`:191–197`) | gering |
+| **M31** falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert | nein | **nein** | **kein automatischer Wächter** |
+| **M12** `registerAction` zählt mit `null` statt der E-Mail → Konto-Hälfte der Registrierungs-Drosselung tot | nein | **nein** | **kein automatischer Wächter** |
+| **M14** `updatePasswordAction` prüft die Recovery-Sitzung nicht mehr → **AC-12** gebrochen | nein | **nein** | **kein automatischer Wächter**, und es ist eine Sicherheitszusage |
+
+Für M27 und M13 trifft die Begründung des Nutzers vollständig zu. **Für M31, M12 und M14 gibt es überhaupt keinen automatischen Wächter** — dort ruht die Zusage allein auf den Messungen, die einmal von Hand gemacht wurden. Wer eine dieser drei Stellen umbaut, merkt es an keinem roten Test.
+
+Die Ursache im Testcode, belegt: `actions.test.ts:20` legt einen Spion `settleSuccessfulLogin` an und **prüft ihn nie**; `getUser` wird in `beforeEach` gesetzt und **nie auf `null` gekippt**; die Argumente von `registerAttempt` werden nirgends geprüft. Das ist genau die Hälfte, die der Kopf derselben Datei als ihren Existenzgrund nennt — umgesetzt für zwei von fünf Aufrufstellen.
+
+**Wer diese Lücke schließt, fängt bei M14 an:** Es ist die einzige der drei, die eine Sicherheitszusage betrifft, und die billigste — ein Test, der `getUser` auf `null` kippt und `INVALID_RESET_LINK_MESSAGE` erwartet.
+
+
+#### Fortschreibung 2026-09-06 (spät) — die akzeptierte Test-Lücke nach dem BUG-91/93-Build
+
+Auf Entscheidung des Nutzers vom 2026-09-06 werden **BUG-101 und BUG-102 nicht als eigener `/build`-Durchgang behandelt**, sondern als weitere dokumentierte Punkte **derselben** akzeptierten Lücke wie BUG-81/82. Die Begründung von damals gilt unverändert: Die Schutzmechanismen selbst sind gegen echte Angriffe verifiziert und halten; was fehlt, ist Regressionsschutz an Aufrufstellen und an Zahlen — **kein aktiver Funktionsfehler**.
+
+**Zwei der drei damals ungeschützten Mutationen sind inzwischen geschlossen.** Die Lücke ist nicht nur gewachsen, sie hat sich an den Stellen geschlossen, die als die teuersten benannt waren:
+
+| Damals ungeschützt | Stand 2026-09-06 (spät) |
+| --- | --- |
+| **M14** `updatePasswordAction` prüft die Recovery-Sitzung nicht mehr — *„die einzige der drei, die eine Sicherheitszusage betrifft"* | ✅ **geschlossen.** Der BUG-91/93-Build bewacht sie auf **beiden** Ebenen: Entscheidung (`hasRecoverySession` gibt immer `true`) und Verdrahtung (die Action fragt nicht mehr) werden je rot |
+| **M12** `registerAction` zählt mit `null` statt der E-Mail | ✅ **geschlossen.** Der neue Wächter prüft die **Argumente** von `registerAttempt` auf allen drei Pfaden |
+| **M31** falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert | ⚠️ **weiterhin kein automatischer Wächter** |
+
+**Neu hinzugekommen, und dieselbe Klasse:**
+
+| Befund | Was ungeschützt bleibt | Rest-Risiko |
+| --- | --- | --- |
+| **BUG-101** | Die **Zahlen** von `credentialsPerAccount` (AC-16, 20/15 min), `passwordResetPerAccount` (AC-19, 5/Std), `tokenConfirmPerIp` (AC-20, 10/15 min) und `passwordUpdatePerIp` (10/15 min). Die vorhandenen Tests sind **tautologisch** — sie vergleichen den Code gegen sich selbst und bewachen, welches Limit-Objekt gezogen wird, nicht welcher Wert darin steht. Gemessen: 5→19, 20→2000, 10→10000 laufen grün durch beide Suiten; erst grobe Ausreißer (5→500) werden rot | **Eine stille Aufweichung der Konto-Bremse fiele nicht auf.** Der Mechanismus selbst ist mehrfach gegen echte Angriffe gemessen — was fehlt, ist der Schutz gegen einen künftigen Umbau |
+| **BUG-102** | Für **beide** als High geführten Fixes gibt es je nur **einen** Wächter, und zwar spiegelbildlich: BUG-91 hält allein `src/lib/auth/actions.test.ts` (die E2E-Suite bleibt grün), BUG-87 hält allein `tests/PROJ-1-reset-response.spec.ts` (`npm test` bleibt 218/218 grün) | Keine zweite, unabhängige Bestätigung. Fällt eine der beiden Dateien weg oder wird ihr Mock angepasst, ist die Zusage ungeprüft |
+| **BUG-92** (erweitert) | Der BUG-87-Wächter ist zur Hälfte **zeitfenster-abhängig**: Mit 1500 ms zwischen den Sonden gingen alle drei *vergleichenden* Zusicherungen grün auf kaputtem Code. Rot wurde nur die *absolute* Cookie-Zusicherung — die den Status- und Rumpf-Kanal nicht abdeckt | Der Test prüft nicht, ob der 429 überhaupt eintrat; **er kann nicht merken, dass er gerade nichts mehr misst.** Lokal ist `max_frequency` 1 s, gehostet 60 s — das lokale CI-Signal ist das dünne |
+| **BUG-103** | Der Fehlerzweig von `getClaims()` in `recovery-session.ts` | Der ausgelieferte Code ist korrekt fail-closed, aber eine Umkehrung der Richtung würde grün ausgeliefert |
+| **BUG-104** | Die Recovery-Prüfung in `src/app/reset-password/page.tsx` | Sicherheitsgrenze bleibt die Server Action; der Verlust wäre eine Sackgasse in der Oberfläche, kein Loch |
+
+**Wer diese Lücke später schließt, fängt bei BUG-101 an** — nicht bei BUG-102. Die Zahlen sind der billigste Fix (ein literaler Test je Grenzwert, wie er für `credentialsPerIp` und `passwordResetPerIp` in `throttle.test.ts:44-45` bereits existiert) und decken vier Kriterien auf einmal ab. BUG-102 ist teurer, weil es eine zweite Testebene je Fix verlangt.
+
+**Die Mutationen liegen als fertiges Abnahmekriterium** im `qa-report.md` → QA-Abschlusslauf vom 2026-09-06, jeweils mit dem genauen Diff und dem gemessenen Rot/Grün-Verhalten beider Suiten.
+
+### Nachtrag 2026-09-06 (spät) — BUG-87: die ganze Antwort normalisiert, nicht ein Kanal
+
+**Was der erste Anlauf falsch verstanden hat.** Der Fix zu BUG-79 vereinheitlichte den *Rückgabewert* von `mapPasswordResetRequestError`, und zwei Tests bewachten ihn. Die **HTTP-Antwort** blieb unterscheidbar: Bei Supabases 429 — der nur auftritt, wenn tatsächlich eine Mail hinausginge, also nur bei einem existierenden Konto — löscht `@supabase/ssr` die PKCE-`code-verifier`-Cookies, und dieser Schreibvorgang lief über den Cookie-Adapter in dieselbe Antwort. Gemessen: **30 von 30 Adressen korrekt, 4,13 pro Sekunde**, schneller als das Orakel, das der Fix beseitigen sollte.
+
+Die Lehre in einem Satz: **Der Rückgabewert einer Funktion ist nicht die Antwort.** Eine HTTP-Antwort kann auf drei Wegen verraten, was intern geschah — Rückgabewert, geworfener Fehler (→ Status-Code) und Cookies. Ein Fix, der einen davon schließt, sieht vollständig aus und ist es nicht.
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Die Antwort dieses Pfades entsteht an genau einer Stelle** (`src/lib/auth/reset-response.ts`), die alle drei Kanäle schließt | Punktuell am Cookie-Adapter oder am 429 anzusetzen hätte denselben Fehler wiederholt: eine Stelle reparieren und die Antwort ungeprüft lassen. Eine Funktion mit einem Ausgang, deren Zusage „für jeden internen Ausgang dieselbe Antwort" lautet, ist als Ganzes prüfbar — und der Wächter kann an der ausgehenden Antwort ansetzen statt an ihr | Den 429 vor `@supabase/ssr` abfangen — schließt einen Kanal, nicht die Klasse · Den Cookie-Adapter global entschärfen — bricht Login und Sitzungsauffrischung, die Cookies **brauchen** | **Ein echter Ausfall des Mailversands sieht für den Nutzer aus wie ein Erfolg.** Auf diesem Pfad unvermeidlich: Jede Unterscheidbarkeit ist zugleich ein Existenz-Orakel, weil ein Versand nur für existierende Konten überhaupt versucht wird. Die App-eigene Drosselung meldet sich davor und ist gefahrlos, weil sie **jede** Adresse zählt | 2026-09-06 |
+| **Der antwortneutrale Client verwirft Cookie-Schreibvorgänge** (`createResponseNeutralClient`), statt sie zu filtern | Filtern hieße, jeden künftigen Cookie-Namen von `@supabase/ssr` zu kennen. Verwerfen ist auf diesem Pfad nachweislich folgenlos: Die Mail-Vorlage zeigt auf `/auth/confirm` mit `{{ .TokenHash }}`, `verifyOtp` löst serverseitig ein, und der `code_verifier` wird in dieser App **nirgends gelesen** — das war gerade der Zweck des BUG-6-Fixes | Nur die `code-verifier`-Cookies unterdrücken — bricht beim nächsten Namenswechsel der Bibliothek still | Lesen bleibt erlaubt (verändert die Antwort nicht). Wer diesen Client je auf einem Pfad einsetzt, der eine Sitzung schreiben muss, bekommt stillen Sitzungsverlust — deshalb steht der Zweck im Namen und nicht nur im Kommentar | 2026-09-06 |
+| **`mapPasswordResetRequestError` wurde ersatzlos entfernt**, samt ihrer beiden grünen Tests | Eine getestete Funktion, die das Versprechen nur halb einlöst, ist schlechter als keine: Sie erzeugt Zuversicht, wo keine hingehört — genau das ist zwischen dem BUG-79-Fix und dem QA-Lauf passiert. Sie war nach dem Umbau ohnehin ohne Aufrufer, und ein bewachter Toter ist die Einladung, ihn wieder zu benutzen | Als deprecated stehen lassen | Die zwei Tests fallen weg. Ersetzt werden sie durch sechs in `reset-response.test.ts` **und** den Wächter an der Antwort — mehr Deckung, an der richtigen Ebene | 2026-09-06 |
+
+#### Der Wächter setzt an der ausgehenden Antwort an
+
+`tests/PROJ-1-reset-response.spec.ts` vergleicht **Status, Antwortrumpf und alle `Set-Cookie`-Kopfzeilen** zwischen einer existierenden und einer erfundenen Adresse, je zwei Anfragen von einer Verbindung.
+
+**Zwei Dinge daran waren nötig, damit der Test überhaupt einer ist:**
+
+1. **Die Anfrage wird abgefangen und wiederholt, statt zweimal geklickt.** Der Unterschied entsteht nur, wenn die zweite Anfrage innerhalb von Supabases `max_frequency` liegt (lokal 1 s). Zwei Formular-Absendungen über die Oberfläche brauchen länger — der Test wäre auch gegen den kaputten Stand grün gewesen.
+2. **Die abgefangenen Kopfzeilen werden von `x-forwarded-for` befreit.** Übernähme man sie unverändert, landeten alle Sonden auf **einem** Zählerschlüssel, und die Drosselung selbst würde zum Unterschied — der Test hätte gemessen, wie schnell er sein eigenes Limit erreicht. Beim ersten Lauf ist genau das passiert.
+
+**Rot-Nachweis geführt:** Mit dem regulären Client statt des antwortneutralen fällt der Test an der erwarteten Stelle („zweite Anfrage: Cookie-Kopfzeilen müssen gleich sein — hier hing BUG-87"), während der zweite Test derselben Datei grün bleibt. Er ist also spezifisch und nicht bloß empfindlich.
+
+**Und ein Gegentest gegen die naheliegende Selbsttäuschung:** Eine Antwort, die für alle Fälle gleich aussieht, wäre auch dann „identisch", wenn gar nichts mehr passierte. Der zweite Test lässt den Weg deshalb einmal ganz durchlaufen und prüft, dass die Mail wirklich im Postfach liegt.
+
+**EC-7 ist unbeschädigt:** Die vollständige E2E-Suite läuft grün (39 Tests), einschließlich des geräteübergreifenden Resets über den echten Mail-Link.
 
 ### Entscheidungen zum finalen QA-Lauf (2026-09-05)
 
@@ -297,3 +495,57 @@ Diese beiden Befunde sind **gemessen, verstanden und absichtlich nicht behoben.*
 
 
 
+
+### Nachtrag 2026-09-06 (zweiter Build des Tages) — BUG-91 und BUG-93
+
+Zwei Befunde aus dem QA-Nachlauf, gemeinsam gebaut, weil sie dieselbe Wurzel haben: **eine Zusage, die nur im Design stand, und ein Test-Netz, das die Verdrahtung nicht abdeckte.**
+
+#### BUG-91 — `updatePasswordAction` verlangt jetzt eine echte Recovery-Sitzung und zählt
+
+Die Zeile „Neues Passwort setzen … **nur mit gültiger Recovery-Sitzung**" steht seit dem 2026-08-31 in Behaviors & Access. Im Code stand davon nichts: Geprüft wurde `getUser()`, also nur *ob* jemand angemeldet ist, nicht *wie*. Dazu war es der einzige Zugangsdaten-Pfad ohne Zähler.
+
+**Woran eine Recovery-Sitzung erkennbar ist — gemessen, nicht angenommen.** Gegen die lokale Instanz mit demselben `supabase-js`, das die App benutzt:
+
+| Weg | `amr` im JWT |
+| --- | --- |
+| `signInWithPassword` | `[{ method: 'password' }]` |
+| `verifyOtp({ type: 'recovery' })` | `[{ method: 'otp' }]` |
+
+Der Anspruch steht **im signierten Token**. Ein selbstgesetztes Merker-Cookie wäre die naheliegende Alternative gewesen und ausgerechnet auf dem **geteilten Gerät** manipulierbar — also genau dort, wogegen dieser Schutz gerichtet ist. Gelesen wird er über `supabase.auth.getClaims()` (`src/lib/auth/recovery-session.ts`).
+
+**Die Grenze, ausgeschrieben:** `otp` deckt bei Supabase auch Magic Link und E-Mail-OTP ab. Diese App hat beides nicht — `spec.md` kennt ausschließlich Passwort-Login (AC-4) und Passwort-Reset (AC-10 ff.). Käme je einer dieser Wege dazu, trägt `otp` allein nicht mehr und die Prüfung muss enger werden. Das steht auch im Kopf von `recovery-session.ts`, damit es beim Einbau eines Magic Links auffällt.
+
+**Zwei Ebenen, eine Grenze.** Die Sicherheitsgrenze ist und bleibt die Server Action. `src/app/reset-password/page.tsx` prüft dasselbe zusätzlich, damit ein gewöhnlich Angemeldeter nicht ein Formular sieht, das nur noch scheitern kann — das ist Bedienbarkeit, kein zweiter Schutz.
+
+**Laufzeit-Nachweis** (echte Server Action, echte Sitzung, echte Datenbank; die Angriffsanfrage ist die abgefangene Anfrage eines legitimen Resets, wiederholt mit dem Cookie-Glas einer gewöhnlichen Login-Sitzung):
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Seite `/reset-password` mit gewöhnlicher Login-Sitzung | Formular **nicht** sichtbar, zeigt „ungültig oder abgelaufen" |
+| Legitimer Reset über den Mail-Link (AC-11) | funktioniert unverändert, neues Passwort gilt |
+| **Angriff: `updatePasswordAction` mit Login-Sitzung** | **abgewiesen** (`INVALID_RESET_LINK_MESSAGE`); Angriffspasswort gilt **nicht**, das vorherige gilt **weiter** |
+| Drosselung, 15 Aufrufe von einer Verbindung | **8 abgewiesen** — vorher 0 von 12 |
+
+**Die Meldung ist bewusst dieselbe wie bei AC-12** („Dieser Link ist ungültig oder abgelaufen"). Wer ohne gültigen Reset-Link hier ankommt, bekommt damit genau die richtige Abhilfe angeboten — „Neuen Link anfordern" —, statt einer neuen Fehlerklasse, die im Vertrag nicht steht.
+
+#### BUG-93 — die Verdrahtung der Drosselung hat jetzt Wächter
+
+`throttle.test.ts` ruft `registerAttempt` direkt mit dem richtigen Scope auf und kann deshalb nicht sehen, **womit** die Actions sie rufen. Der QA-Nachlauf hat das mit drei Mutationen belegt, die beide Suiten überlebten. Die neuen Wächter in `actions.test.ts` prüfen nicht mehr, *ob* der Zähler funktioniert, sondern **womit er gerufen wird und wann**.
+
+**Rot-Nachweis — jede Mutation eingebaut, Suite gefahren, Originalstand wiederhergestellt:**
+
+| Mutation | Wirkung | Suite |
+| --- | --- | --- |
+| **M1** `registerAttempt('password-reset', null)` | Konto-Hälfte von AC-19 tot | 🔴 rot |
+| **M2** Scope `'login'` statt `'password-reset'` | AC-17 und AC-19 zugleich auf Login-Grenzwerten | 🔴 rot |
+| **M3** Zähl-Block hinter den Versand verschoben | zählt weiter, verhindert nichts — der Zweck von AC-17/AC-19 | 🔴 rot |
+| **M14a** `hasRecoverySession` gibt immer `true` | BUG-91 zurück, in der Funktion | 🔴 rot |
+| **M14b** die Action fragt gar nicht mehr | BUG-91 zurück, in der **Verdrahtung** (N23-Klasse) | 🔴 rot |
+| **M15** Drosselung aus `updatePasswordAction` entfernt | AC-18 auf diesem Pfad tot | 🔴 rot |
+
+**M14a und M14b sind bewusst getrennt.** Genau diese Trennung — die Funktion entscheidet richtig, aber niemand prüft, ob die Action sie fragt — hat BUG-75, BUG-87 und BUG-91 erzeugt. Ein Wächter nur auf der Funktion hätte M14b durchgelassen.
+
+#### Was dabei offen bleibt
+
+- **Die Grenzwerte des neuen Scopes stehen nicht im Vertrag.** `passwordUpdatePerIp` ist 10 je 15 Minuten, dieselbe Zahl wie beim Einlösen (AC-20). AC-18 nennt keine Zahlen, und `spec.md` ist während `/build` read-only. Die Zahl ist in `throttle.ts` begründet und durch `M15` bewacht — aber sie ist eine **Entscheidung ohne Kriterium**, genau die Klasse, die im Vorlauf als N22/N31 auffiel. Gehört per `/refine` in AC-18 nachgetragen.
+- **Kein E2E-Test für den Angriffspfad.** Der Laufzeit-Nachweis oben lief als einmaliges Skript, nicht als dauerhafter Wächter. Die Unit-Ebene deckt beide Mutationsklassen ab; ein Browser-Test dafür gehört zu `/e2e-tests`, nicht hierher.

@@ -13,13 +13,16 @@ import {
 import {
   fieldErrorsFromZod,
   mapLoginError,
-  mapPasswordResetRequestError,
   mapRegisterError,
+  mapUpdatePasswordError,
   NETWORK_ERROR_MESSAGE,
-  THROTTLED_MESSAGE,
+  throttleMessage,
   INVALID_RESET_LINK_MESSAGE,
   type ActionState,
 } from '@/lib/auth/error-mapping'
+import { isTrainerNameTaken } from '@/lib/auth/trainer-name'
+import { requestPasswordResetIdentically } from '@/lib/auth/reset-response'
+import { hasRecoverySession } from '@/lib/auth/recovery-session'
 
 export type { ActionState }
 
@@ -42,8 +45,9 @@ export async function registerAction(
   // BUG-29: gezählt wird **hier**, nicht im Proxy. Eine Server Action ist an
   // keine Route gebunden — eine Schranke am Pfad ließe sich über `/privacy` oder
   // ein beliebiges `*.png` umgehen (BUG-30, BUG-31).
-  if (!(await registerAttempt('register', email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
+  const registerThrottle = await registerAttempt('register', email)
+  if (!registerThrottle.allowed) {
+    return { error: throttleMessage(registerThrottle.blockedBy) }
   }
 
   let supabase
@@ -60,7 +64,13 @@ export async function registerAction(
   })
 
   if (error) {
-    return mapRegisterError(error)
+    // BUG-68: Ein 500 heißt hier entweder „Trainername vergeben" (Trigger) oder
+    // „Datenbank gerade kaputt" — GoTrue liefert für beides denselben Text. Also
+    // wird nachgefragt, statt geraten. Nur auf dem Fehlerpfad, nur bei 500.
+    const trainerNameTaken =
+      error.status === 500 ? await isTrainerNameTaken(trainerName) : false
+
+    return mapRegisterError(error, { trainerNameTaken })
   }
 
   redirect('/')
@@ -81,8 +91,9 @@ export async function loginAction(
 
   // BUG-29: siehe registerAction. Der Zähler läuft vor dem Auth-Aufruf, damit
   // ein Rateversuch gar nicht erst nach oben durchgereicht wird.
-  if (!(await registerAttempt('login', parsed.data.email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
+  const loginThrottle = await registerAttempt('login', parsed.data.email)
+  if (!loginThrottle.allowed) {
+    return { error: throttleMessage(loginThrottle.blockedBy) }
   }
 
   let supabase
@@ -125,15 +136,9 @@ export async function requestPasswordResetAction(
 
   // BUG-29: eigener, engerer Grenzwert (3 pro 5 Minuten). Der Reset verschickt
   // E-Mail, ist also nicht nur ein Rate-, sondern auch ein Belästigungsvektor.
-  if (!(await registerAttempt('password-reset', parsed.data.email)).allowed) {
-    return { error: THROTTLED_MESSAGE }
-  }
-
-  let supabase
-  try {
-    supabase = await createClient()
-  } catch {
-    return { error: NETWORK_ERROR_MESSAGE }
+  const resetThrottle = await registerAttempt('password-reset', parsed.data.email)
+  if (!resetThrottle.allowed) {
+    return { error: throttleMessage(resetThrottle.blockedBy) }
   }
 
   const headerList = await headers()
@@ -143,20 +148,15 @@ export async function requestPasswordResetAction(
   // /auth/confirm with {{ .TokenHash }} (supabase/templates/recovery.html), so
   // the token is redeemed server-side and works on any device (EC-7).
   //
-  // The comment that used to sit here claimed the recovery link "always"
-  // arrives with the tokens in the URL fragment and never as a server-readable
-  // ?code=. That was wrong — ?code= was what our own client actually produced,
-  // and the belief is what kept the reset tied to one browser (BUG-6, BUG-15).
-  //
   // redirectTo still names an allowed return target for Supabase's own
   // validation; the template does not interpolate it.
-  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${origin}/reset-password`,
-  })
-
-  // spec.md AC-10, EC-3: Supabase itself never reveals whether the address
-  // exists on this endpoint — the same confirmation covers both cases.
-  return mapPasswordResetRequestError(error)
+  //
+  // Ab hier gibt es **einen** Ausgang: `requestPasswordResetIdentically` erzeugt
+  // eine Antwort, die für jeden internen Ausgang gleich aussieht — Rückgabewert,
+  // Status und Cookies. Die Begründung und der Preis stehen dort (BUG-87).
+  // Alles, was vor dieser Zeile antwortet (Validierung, Drosselung), darf und
+  // soll unterscheidbar sein: Es hängt nicht davon ab, ob ein Konto existiert.
+  return requestPasswordResetIdentically(parsed.data.email, `${origin}/reset-password`)
 }
 
 export async function updatePasswordAction(
@@ -167,6 +167,17 @@ export async function updatePasswordAction(
 
   if (!parsed.success) {
     return { fieldErrors: fieldErrorsFromZod(parsed.error.issues) }
+  }
+
+  // BUG-91: gezählt wird **vor** jedem Supabase-Aufruf, wie auf allen anderen
+  // Zugangsdaten-Pfaden. Diese Action war die einzige ohne Zähler (gemessen:
+  // 12 Aufrufe von einer Verbindung, null abgewiesen), obwohl jeder Aufruf ein
+  // `getUser()` und ein `updateUser()` gegen das gemeinsame Kontingent des
+  // Auth-Dienstes auslöst (BUG-21). Ohne E-Mail-Adresse, weil die erst nach der
+  // Sitzungsprüfung feststeht — und die soll hinter der Drosselung liegen.
+  const updateThrottle = await registerAttempt('password-update', null)
+  if (!updateThrottle.allowed) {
+    return { error: throttleMessage(updateThrottle.blockedBy) }
   }
 
   let supabase
@@ -184,10 +195,36 @@ export async function updatePasswordAction(
     return { error: INVALID_RESET_LINK_MESSAGE }
   }
 
+  // BUG-91: **eine Sitzung genügt nicht — es muss eine Recovery-Sitzung sein.**
+  //
+  // `design.md` → Behaviors & Access sagt „nur mit gültiger Recovery-Sitzung";
+  // im Code stand davon nichts. Gemessen wurde die Folge am 2026-09-06: Mit einer
+  // gewöhnlichen Login-Sitzung ließ sich das Passwort setzen, ohne das alte zu
+  // kennen — das alte war danach ungültig, das neue funktionierte. Wer ein
+  // angemeldetes Gerät erreicht, übernimmt damit das Konto endgültig, und die
+  // Sitzung lebt laut AC-5 bis zum aktiven Abmelden (`Max-Age=34560000`).
+  //
+  // **Woran eine Recovery-Sitzung erkennbar ist:** am `amr`-Anspruch des JWT.
+  // Gegen die lokale Instanz gemessen — `signInWithPassword` ergibt
+  // `amr: [{method: 'password'}]`, `verifyOtp({type:'recovery'})` ergibt
+  // `amr: [{method: 'otp'}]`. Der Anspruch steht **im signierten Token**, ist also
+  // nicht fälschbar; ein selbstgesetztes Merker-Cookie wäre genau auf dem
+  // geteilten Gerät manipulierbar, gegen das dieser Schutz gerichtet ist.
+  //
+  // `otp` deckt bei Supabase auch Magic Link und E-Mail-OTP ab — beides hat diese
+  // App nicht (`spec.md` kennt nur Passwort-Login und Passwort-Reset). Käme je
+  // eines dazu, muss diese Prüfung enger werden.
+  if (!(await hasRecoverySession(supabase))) {
+    // Bewusst dieselbe Meldung wie bei einer fehlenden Sitzung (AC-12): Wer
+    // hierher kommt, hat keinen gültigen Reset-Link — und die Seite bietet ihm
+    // genau die richtige Abhilfe an, „Neuen Link anfordern".
+    return { error: INVALID_RESET_LINK_MESSAGE }
+  }
+
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password })
 
   if (error) {
-    return { error: NETWORK_ERROR_MESSAGE }
+    return mapUpdatePasswordError(error)
   }
 
   redirect('/')

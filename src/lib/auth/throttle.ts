@@ -41,6 +41,60 @@ export const LIMITS = {
    * ihrem Preis steht in `features/PROJ-1-user-login/design.md`.
    */
   credentialsPerAccount: { limit: 20, windowSeconds: 900 },
+  /**
+   * Der Passwort-Reset bekommt eine **eigene, engere** Konto-Grenze als der Login
+   * (spec.md AC-19). Bis BUG-76 galt hier `credentialsPerAccount` mit — nicht
+   * entschieden, sondern geerbt.
+   *
+   * Der Unterschied ist nicht die Zahl, sondern was begrenzt wird: Beim Login
+   * begrenzt der Zähler das **Raten am eigenen Konto**. Beim Reset begrenzt er
+   * **Mails an eine fremde Adresse** — das Opfer hat nichts getan, und jede Mail
+   * verbraucht eine Einheit des SMTP-Kontingents, das laut `docs/PRD.md` ohnehin
+   * der Engpass dieses Projekts ist. 20 je 15 Minuten waren rund 80 Mails pro
+   * Stunde an einen Unbeteiligten.
+   *
+   * 5 pro Stunde, nicht 3: Zwei oder drei Versuche sind der ehrliche Fall, wenn
+   * die Mail nicht ankommt. Der fünfte ist schon Verzweiflung — und der Reset ist
+   * der einzige Weg zurück ins Konto, eine Fehlsperre trifft hier härter als
+   * anderswo.
+   */
+  passwordResetPerAccount: { limit: 5, windowSeconds: 3600 },
+  /**
+   * Das Einlösen des Reset-Links (spec.md AC-20).
+   *
+   * **Nicht gegen das Erraten** — der Token-Hash ist zu lang dafür. Sondern gegen
+   * das Leerlaufen des **gemeinsamen** Prüfkontingents des Auth-Dienstes
+   * (`token_verifications`, Standard 30 je 5 Minuten): Weil die App ausschließlich
+   * über Server Actions mit Supabase spricht, sieht dieses Limit für alle Spieler
+   * dieselbe Server-IP (BUG-21). Wer es erschöpft, macht den Passwort-Reset für
+   * **alle** unmöglich.
+   *
+   * 10 je 15 Minuten ist für einen Menschen, der einen Link anklickt, unerreichbar
+   * weit — und eng genug, dass eine einzelne Quelle das Kontingent nicht leert.
+   */
+  tokenConfirmPerIp: { limit: 10, windowSeconds: 900 },
+  /**
+   * Das **Setzen** des neuen Passworts (BUG-91).
+   *
+   * `updatePasswordAction` war der einzige Zugangsdaten-Pfad ohne jeden Zähler —
+   * gemessen im QA-Nachlauf vom 2026-09-06: 12 Aufrufe von einer Verbindung, null
+   * abgewiesen. Das widersprach der Zusage in `spec.md` → Technical Requirements,
+   * die Drosselung sitze **in den Server Actions**, und ließ AC-18 auf diesem Pfad
+   * ins Leere laufen.
+   *
+   * Der Zweck ist derselbe wie bei `tokenConfirmPerIp`, nicht das Erraten eines
+   * Passworts: Jeder Aufruf löst ein `getUser()` und ein `updateUser()` gegen
+   * Supabase aus, deren gemeinsames Kontingent wegen der Server-Action-Architektur
+   * für alle Spieler an derselben Server-IP hängt (BUG-21).
+   *
+   * **Keine E-Mail-Adresse, also nur der Verbindungs-Zähler:** Die Adresse steht
+   * erst nach der Sitzungsprüfung fest, und die soll hinter der Drosselung liegen,
+   * nicht davor.
+   *
+   * 10 je 15 Minuten, dieselbe Zahl wie beim Einlösen: Wer ein Passwort setzt, tut
+   * es ein- oder zweimal; die Grenze ist für einen Menschen unerreichbar weit.
+   */
+  passwordUpdatePerIp: { limit: 10, windowSeconds: 900 },
 } as const
 
 type Limit = { limit: number; windowSeconds: number }
@@ -85,28 +139,61 @@ async function count(key: string, { limit, windowSeconds }: Limit): Promise<bool
   return data === true
 }
 
-export type ThrottleScope = 'login' | 'register' | 'password-reset'
+export type ThrottleScope =
+  | 'login'
+  | 'register'
+  | 'password-reset'
+  | 'token-confirm'
+  | 'password-update'
+
+/** Welche Grenze für welchen Vorgang gilt — an einer Stelle, statt verstreut. */
+function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
+  switch (scope) {
+    case 'password-reset':
+      return { ip: LIMITS.passwordResetPerIp, account: LIMITS.passwordResetPerAccount }
+    case 'token-confirm':
+      // Beim Einlösen ist keine Adresse bekannt — der Token verrät sie erst nach
+      // der Prüfung. Der Konto-Wert steht hier nur, damit der Rückgabetyp
+      // vollständig ist; `registerAttempt` benutzt ihn ohne E-Mail nie.
+      return { ip: LIMITS.tokenConfirmPerIp, account: LIMITS.credentialsPerAccount }
+    case 'password-update':
+      // Wie beim Einlösen ist hier keine Adresse bekannt: Sie steht erst fest,
+      // nachdem die Sitzung geprüft wurde — und diese Prüfung liegt bewusst
+      // **hinter** der Drosselung. Der Konto-Wert bleibt ungenutzt.
+      return { ip: LIMITS.passwordUpdatePerIp, account: LIMITS.credentialsPerAccount }
+    default:
+      return { ip: LIMITS.credentialsPerIp, account: LIMITS.credentialsPerAccount }
+  }
+}
+
+/** Welcher der beiden Zähler abgewiesen hat — für die Meldung an den Nutzer. */
+export type ThrottleBlock = 'connection' | 'account' | null
 
 /**
- * Zählt einen Versuch auf beiden Zählern und meldet, ob er erlaubt bleibt.
+ * Zählt einen Versuch auf beiden Zählern und meldet, ob er erlaubt bleibt — und
+ * bei einer Abweisung, **welcher** Zähler sie ausgelöst hat (BUG-67).
  *
  * **Beide werden immer gezählt**, auch wenn der erste schon abgelehnt hat: Sonst
  * könnte ein Angreifer den Konto-Zähler leer halten, indem er den IP-Zähler
  * absichtlich überlaufen lässt.
+ *
+ * **Sperren beide, gewinnt das Konto.** Sein Fenster ist das längere (15 Minuten
+ * beim Login, eine Stunde beim Reset, gegen 60 Sekunden bei der Verbindung) —
+ * „warte eine Minute" wäre dann ein falscher Rat.
  */
 export async function registerAttempt(
   scope: ThrottleScope,
   email: string | null
-): Promise<{ allowed: boolean }> {
-  const ipLimit = scope === 'password-reset' ? LIMITS.passwordResetPerIp : LIMITS.credentialsPerIp
+): Promise<{ allowed: boolean; blockedBy: ThrottleBlock }> {
+  const { ip: ipLimit, account: accountLimit } = limitsFor(scope)
 
-  const checks = [count(`${scope}:ip:${await clientIp()}`, ipLimit)]
-  if (email) {
-    checks.push(count(accountKey(scope, email), LIMITS.credentialsPerAccount))
-  }
+  const [ipAllowed, accountAllowed] = await Promise.all([
+    count(`${scope}:ip:${await clientIp()}`, ipLimit),
+    email ? count(accountKey(scope, email), accountLimit) : Promise.resolve(true),
+  ])
 
-  const results = await Promise.all(checks)
-  return { allowed: results.every(Boolean) }
+  const blockedBy: ThrottleBlock = !accountAllowed ? 'account' : !ipAllowed ? 'connection' : null
+  return { allowed: ipAllowed && accountAllowed, blockedBy }
 }
 
 /**
