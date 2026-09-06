@@ -429,6 +429,33 @@ Die Ursache im Testcode, belegt: `actions.test.ts:20` legt einen Spion `settleSu
 
 **Wer diese Lücke schließt, fängt bei M14 an:** Es ist die einzige der drei, die eine Sicherheitszusage betrifft, und die billigste — ein Test, der `getUser` auf `null` kippt und `INVALID_RESET_LINK_MESSAGE` erwartet.
 
+
+#### Fortschreibung 2026-09-06 (spät) — die akzeptierte Test-Lücke nach dem BUG-91/93-Build
+
+Auf Entscheidung des Nutzers vom 2026-09-06 werden **BUG-101 und BUG-102 nicht als eigener `/build`-Durchgang behandelt**, sondern als weitere dokumentierte Punkte **derselben** akzeptierten Lücke wie BUG-81/82. Die Begründung von damals gilt unverändert: Die Schutzmechanismen selbst sind gegen echte Angriffe verifiziert und halten; was fehlt, ist Regressionsschutz an Aufrufstellen und an Zahlen — **kein aktiver Funktionsfehler**.
+
+**Zwei der drei damals ungeschützten Mutationen sind inzwischen geschlossen.** Die Lücke ist nicht nur gewachsen, sie hat sich an den Stellen geschlossen, die als die teuersten benannt waren:
+
+| Damals ungeschützt | Stand 2026-09-06 (spät) |
+| --- | --- |
+| **M14** `updatePasswordAction` prüft die Recovery-Sitzung nicht mehr — *„die einzige der drei, die eine Sicherheitszusage betrifft"* | ✅ **geschlossen.** Der BUG-91/93-Build bewacht sie auf **beiden** Ebenen: Entscheidung (`hasRecoverySession` gibt immer `true`) und Verdrahtung (die Action fragt nicht mehr) werden je rot |
+| **M12** `registerAction` zählt mit `null` statt der E-Mail | ✅ **geschlossen.** Der neue Wächter prüft die **Argumente** von `registerAttempt` auf allen drei Pfaden |
+| **M31** falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert | ⚠️ **weiterhin kein automatischer Wächter** |
+
+**Neu hinzugekommen, und dieselbe Klasse:**
+
+| Befund | Was ungeschützt bleibt | Rest-Risiko |
+| --- | --- | --- |
+| **BUG-101** | Die **Zahlen** von `credentialsPerAccount` (AC-16, 20/15 min), `passwordResetPerAccount` (AC-19, 5/Std), `tokenConfirmPerIp` (AC-20, 10/15 min) und `passwordUpdatePerIp` (10/15 min). Die vorhandenen Tests sind **tautologisch** — sie vergleichen den Code gegen sich selbst und bewachen, welches Limit-Objekt gezogen wird, nicht welcher Wert darin steht. Gemessen: 5→19, 20→2000, 10→10000 laufen grün durch beide Suiten; erst grobe Ausreißer (5→500) werden rot | **Eine stille Aufweichung der Konto-Bremse fiele nicht auf.** Der Mechanismus selbst ist mehrfach gegen echte Angriffe gemessen — was fehlt, ist der Schutz gegen einen künftigen Umbau |
+| **BUG-102** | Für **beide** als High geführten Fixes gibt es je nur **einen** Wächter, und zwar spiegelbildlich: BUG-91 hält allein `src/lib/auth/actions.test.ts` (die E2E-Suite bleibt grün), BUG-87 hält allein `tests/PROJ-1-reset-response.spec.ts` (`npm test` bleibt 218/218 grün) | Keine zweite, unabhängige Bestätigung. Fällt eine der beiden Dateien weg oder wird ihr Mock angepasst, ist die Zusage ungeprüft |
+| **BUG-92** (erweitert) | Der BUG-87-Wächter ist zur Hälfte **zeitfenster-abhängig**: Mit 1500 ms zwischen den Sonden gingen alle drei *vergleichenden* Zusicherungen grün auf kaputtem Code. Rot wurde nur die *absolute* Cookie-Zusicherung — die den Status- und Rumpf-Kanal nicht abdeckt | Der Test prüft nicht, ob der 429 überhaupt eintrat; **er kann nicht merken, dass er gerade nichts mehr misst.** Lokal ist `max_frequency` 1 s, gehostet 60 s — das lokale CI-Signal ist das dünne |
+| **BUG-103** | Der Fehlerzweig von `getClaims()` in `recovery-session.ts` | Der ausgelieferte Code ist korrekt fail-closed, aber eine Umkehrung der Richtung würde grün ausgeliefert |
+| **BUG-104** | Die Recovery-Prüfung in `src/app/reset-password/page.tsx` | Sicherheitsgrenze bleibt die Server Action; der Verlust wäre eine Sackgasse in der Oberfläche, kein Loch |
+
+**Wer diese Lücke später schließt, fängt bei BUG-101 an** — nicht bei BUG-102. Die Zahlen sind der billigste Fix (ein literaler Test je Grenzwert, wie er für `credentialsPerIp` und `passwordResetPerIp` in `throttle.test.ts:44-45` bereits existiert) und decken vier Kriterien auf einmal ab. BUG-102 ist teurer, weil es eine zweite Testebene je Fix verlangt.
+
+**Die Mutationen liegen als fertiges Abnahmekriterium** im `qa-report.md` → QA-Abschlusslauf vom 2026-09-06, jeweils mit dem genauen Diff und dem gemessenen Rot/Grün-Verhalten beider Suiten.
+
 ### Nachtrag 2026-09-06 (spät) — BUG-87: die ganze Antwort normalisiert, nicht ein Kanal
 
 **Was der erste Anlauf falsch verstanden hat.** Der Fix zu BUG-79 vereinheitlichte den *Rückgabewert* von `mapPasswordResetRequestError`, und zwei Tests bewachten ihn. Die **HTTP-Antwort** blieb unterscheidbar: Bei Supabases 429 — der nur auftritt, wenn tatsächlich eine Mail hinausginge, also nur bei einem existierenden Konto — löscht `@supabase/ssr` die PKCE-`code-verifier`-Cookies, und dieser Schreibvorgang lief über den Cookie-Adapter in dieselbe Antwort. Gemessen: **30 von 30 Adressen korrekt, 4,13 pro Sekunde**, schneller als das Orakel, das der Fix beseitigen sollte.

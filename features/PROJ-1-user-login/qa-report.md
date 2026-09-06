@@ -2079,3 +2079,36 @@ Neu in diesem Lauf: **4 Medium** (BUG-100, BUG-101, BUG-102, BUG-92 erweitert) u
 **Was dieser Lauf positiv festhält:** Die beiden schwersten Befunde der letzten Tage sind geschlossen und **von Kontexten bestätigt, die den Fix nicht gebaut haben** — die Kontoübernahme über `updatePasswordAction` und das Kontoexistenz-Orakel auf dem Reset-Pfad. Erstmals sind **alle 20 AC und alle 11 EC** belegt, darunter AC-18 zum ersten Mal zur Laufzeit. Keine Regression.
 
 **Was bewusst offen bleibt:** Die Substanz stimmt, das **Netz** darunter ist dünner als es aussieht. Die Grenzwerte von vier Drosselungen sind durch keinen Test gepinnt (BUG-101), und für beide High-Fixes gibt es je nur **einen** Wächter (BUG-102). Beides ist kein Defekt im Produkt, sondern das Risiko, dass ein künftiger Umbau einen der Schutzmechanismen still aufweicht. Das gehört als erstes in den nächsten `/build`.
+
+---
+
+## Nachtrag — 2026-09-06 (spät): Ausgang der Befunde aus dem Abschlusslauf
+
+Entscheidung des Nutzers vom 2026-09-06, nach Vorlage des Abschlussberichts. **Kein weiterer Fix-Zyklus für PROJ-1.**
+
+| Befund | Ausgang | Wo es jetzt steht |
+| --- | --- | --- |
+| **BUG-100** Recovery-Sitzung wird nicht verbraucht | **als Edge Case in den Vertrag**, nicht behoben | `spec.md` → **EC-12**, mit der vollständigen Abwägung; Product Decision vom 2026-09-06 |
+| **BUG-101** vier Drosselungs-Grenzwerte ungepinnt | **akzeptiert**, eingeordnet als Fortschreibung der bekannten Test-Lücke | `design.md` → „Fortschreibung 2026-09-06 (spät)" |
+| **BUG-102** je nur ein Wächter pro High-Fix | **akzeptiert**, ebenda | ebenda |
+| **BUG-92** (erweitert), **BUG-103**, **BUG-104** | **akzeptiert**, ebenda | ebenda |
+| **BUG-105 … BUG-108**, **BUG-97** | dokumentiert, Sammelposten Low | `features/INDEX.md` → Bekannte Restrisiken |
+| **BUG-61**, **T18** | unverändert **Deploy-Blocker** | `features/INDEX.md` → Deploy-Blocker |
+
+### Warum BUG-101/102 keine eigene Runde bekommen
+
+Dieselbe Begründung, die am 2026-09-06 schon für BUG-81/82 galt und die hier weiter trägt: **Die Schutzmechanismen selbst sind gegen echte Angriffe verifiziert und halten.** BUG-91 und BUG-87 wurden in diesem Lauf von Kontexten bestätigt, die den Fix nicht gebaut haben — inklusive gescheiterter Umgehungsversuche. Was fehlt, ist Regressionsschutz gegen einen **künftigen** Umbau, kein aktiver Funktionsfehler. Ein weiterer Zyklus hätte Tests gegen Tests gestellt, nicht Schutz gegen Angriff.
+
+**Ein Argument dagegen bleibt stehen und gehört genannt:** BUG-101 betrifft Zahlen, die im Vertrag als Zusage stehen (AC-16, AC-19, AC-20). Eine Zusage, deren Wert kein Test festhält, ist beim nächsten Refactoring so viel wert wie die Aufmerksamkeit dessen, der es macht. Das ist der bewusst getragene Preis, nicht ein übersehener Punkt.
+
+### Was dieser Lauf an der alten Lücke geschlossen hat
+
+Die Fortschreibung ist nicht nur Zuwachs. **Zwei der drei Mutationen, für die es am 2026-09-06 „überhaupt keinen automatischen Wächter" gab, sind durch den BUG-91/93-Build geschlossen** — darunter ausgerechnet die, die damals als „die einzige der drei, die eine Sicherheitszusage betrifft" markiert war:
+
+- **M14** (`updatePasswordAction` prüft die Recovery-Sitzung nicht mehr) → jetzt auf **beiden** Ebenen bewacht, Entscheidung und Verdrahtung getrennt
+- **M12** (`registerAction` zählt mit `null` statt der E-Mail) → jetzt durch die Argument-Prüfung auf allen drei Pfaden bewacht
+- **M31** (falsche Adresse an `settleSuccessfulLogin`) → unverändert ohne automatischen Wächter
+
+### Status
+
+**PROJ-1 bleibt `Approved`.** Der Abschlusslauf fand keinen neuen Critical und keinen neuen High; die beiden weiterhin als High geführten Punkte sind nicht neu und nur am Deploy-Ziel schließbar. Die vollständige Liste dessen, was mit dieser Abnahme bewusst getragen wird, steht in `features/INDEX.md` → **Bekannte Restrisiken**.
