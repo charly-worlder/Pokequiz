@@ -1511,3 +1511,167 @@ Auf Entscheidung des Nutzers vom 2026-09-06 nicht behoben. Begründung: Der Dros
 **Für drei Mutationen gibt es jedoch gar keinen automatischen Wächter:** **M31** (falsche Adresse an `settleSuccessfulLogin` → Konto-Zähler wird nie geleert), **M12** (`registerAction` zählt ohne E-Mail → Konto-Hälfte der Registrierungs-Drosselung tot) und **M14** (`updatePasswordAction` prüft die Recovery-Sitzung nicht mehr → **AC-12 gebrochen**, eine Sicherheitszusage). Dort ruht die Zusage allein auf Messungen, die einmal von Hand gemacht wurden.
 
 Die vollständige Aufteilung je Mutation, die Ursache im Testcode und der Vorschlag, wo man beim Schließen anfängt, stehen in `design.md`.
+
+---
+
+## QA-Lauf — 2026-09-06 (final), nach dem BUG-79-Fix
+
+**Anlass:** Gegenprüfung des BUG-79/BUG-80-Fixes, der neu bewerteten EC-9 und der neuen EC-11 — und die Zahl, die dem Vertrag fehlte: der Zeitkanal **durch die Server Action** statt an der Supabase-API.
+
+**Tester:** drei `qa-engineer`-Sub-Agenten mit disjunktem Scope und sauberem Kontext. Beide Prüf-Lanes haben die Server Actions über das Flight-Protokoll angesprochen, mit frischer Verbindung je Messung.
+
+### Ergebnis in einem Satz
+
+**Der Meldekanal ist geschlossen — die Antwort nicht.** BUG-79 lebt über den `Set-Cookie`-Header weiter, deterministisch und doppelt so schnell wie vorher. Zusätzlich ist die am Vortag neu geschriebene Begründung von EC-9 **zum zweiten Mal** durch Messung widerlegt, und die Zahl der ungeschützten Mutationen ist von 5 auf 12 gestiegen.
+
+### Acceptance Criteria
+
+**Alle 19 geprüft, alle bestanden** — AC-1 bis AC-8, AC-10 bis AC-20. Hervorzuheben:
+
+- **AC-10 und EC-3 — auf dem Meldekanal repariert.** 12 echte gegen 12 erfundene Adressen, je **zwei** aufeinanderfolgende Anfragen von derselben Verbindung (genau die Bedingung des alten Befunds): **24 von 24 Paaren vollständig identisch** — Status 200, 9923 Byte, gleicher Text. Der Fix trägt, soweit er reicht
+- **AC-20 — erneut entscheidend belegt:** 10 Dummy-Einlösungen, dann der **echte** Token als 11. → abgewiesen ohne Sitzung; derselbe Token von frischer Verbindung → eingelöst. Der Token war unverbraucht, die Drosselung war der Grund
+- **AC-16, AC-17, AC-19** — mit den Vertragszahlen bestätigt, und **AC-19 auch mit einer frei erfundenen Adresse** (Zähler zählt Adressen ohne Konto identisch)
+- **EC-1** — echter Wettlauf mit 8 gleichzeitigen Registrierungen in drei Schreibweisen: 1 Gewinner, 7 Feldfehler, genau 1 Profil
+- **AC-12** — Passwort setzen **ohne** Sitzung wird korrekt abgewiesen. Der verwandte Schwachpunkt betrifft eine *vorhandene* Sitzung und ist BUG-17, siehe unten
+
+### Edge Cases
+
+**EC-1 bis EC-8, EC-10 bestanden. EC-6 teilweise** (echter Ausfall nicht provozierbar, ohne die Parallel-Lanes zu treffen). **EC-9 und EC-11 mit Abweichungen** — siehe Befunde.
+
+### Die Zahl, die dem Vertrag fehlte: EC-11 durch die Server Action
+
+Beide Lanes haben unabhängig gemessen, mit frischer Adresse und frischer Verbindung je Messung:
+
+| Messebene | Konto vorhanden | erfunden | Δ | Quelle |
+|---|---|---|---|---|
+| **Server Action** (Lane 2, 3 Serien à 80) | 124,8 ms | 84,4 ms | **+40,3 ms** | AUC 0,998 |
+| **Server Action** (Lane 1, 12+12) | 154,0 ms | 99,4 ms | **+54,6 ms** | Faktor 1,55 |
+| Supabase-API (Lane 2) | 37,8 ms | 9,6 ms | +28,1 ms | Faktor 3,9 |
+| Supabase-API (Lane 1) | 40,9 ms | 11,0 ms | +29,9 ms | Faktor 3,7 |
+
+**Die entscheidende Antwort: der Kanal ist durch die App hindurch praktisch nutzbar.** Out-of-sample mit festem Schwellwert aus einer anderen Serie: **97,5 % Trefferquote bei einer einzigen Anfrage je Adresse.** Unter Maschinenlast und mit realistischer gleitender Eichung 85 % je Einzelmessung; **3 Messungen** drücken den Irrtum unter 7 %, **5** unter 3 %.
+
+Der Grund ist einfach: Die konstante Zusatzarbeit der App verschiebt **beide** Fälle gleich und bringt eine Eigenstreuung von sd ≈ 9 ms mit — das Signal von ~40 ms ist ein Vielfaches davon.
+
+**Damit ist die Open Question aus `spec.md` beantwortet, und die Antwort fällt zuungunsten aus.** Die Vorhersage dort („die absolute Differenz bleibt, aber der relative Abstand schrumpft") trifft nur zur Hälfte: Der relative Abstand schrumpft (3,9 → 1,5), die **absolute Differenz ist durch die Action größer** als an der API.
+
+### Bugs
+
+#### BUG-87: BUG-79 ist nicht geschlossen — nur der Body ist es
+**Severity: High** · betrifft **AC-10**, **EC-3** und die tragende Begründung von **EC-9**
+
+Der Meldungstext ist vereinheitlicht, Status und Antwortlänge auch. **Der `Set-Cookie`-Header verrät die Kontoexistenz weiter.**
+
+Liefert Supabase den 429 (was nur passiert, wenn tatsächlich eine Mail hinausginge, also nur bei existierendem Konto), löscht `@supabase/ssr` die PKCE-`code-verifier`-Cookies. Dieser Schreibvorgang läuft über den Cookie-Adapter in `src/lib/supabase/server.ts:21-25` in **dieselbe Antwort**, deren Body neutralisiert wurde:
+
+```
+echtes Konto, 2. Anfrage:  Set-Cookie: sb-…-code-verifier=          (Max-Age=0, gelöscht)
+erfundene Adresse:         Set-Cookie: sb-…-code-verifier=base64-…  (mit Wert)
+```
+
+**Blind gemessen: 30 von 30 Adressen korrekt, 4,13 Adressen/Sekunde** — doppelt so schnell wie das ursprüngliche Orakel (dort ~2/s). Kein Konto, keine Sitzung, kein Browser nötig; der Endpunkt ist öffentlich.
+
+**Der Mechanismus ist festgenagelt, nicht nur korreliert:** Dieselbe echte Adresse mit 1,5 s Pause — also nach Ablauf von `max_frequency = 1s` — ergibt **0 gelöschte Cookies** und ist von einer erfundenen Adresse ununterscheidbar. Der Diskriminator ist exakt der 429, den der Fix zu schlucken glaubte.
+
+**Gehostet wird es leichter, nicht schwerer:** `max_frequency` steht lokal auf 1 s, Supabases Standard ist **60 s** — das Zeitfenster für die zweite Anfrage ist 60× breiter.
+
+**Was der Fix richtig gemacht hat und was er übersah:** Er hat die Zuordnungsfunktion korrigiert und mit zwei Wächtern abgesichert. Er hat „die Antwort" mit „dem Rückgabewert der Funktion" verwechselt. Die HTTP-Antwort entsteht aber aus mehr als diesem Wert — der Cookie-Adapter schreibt an derselben Stelle mit.
+
+**Repro:** zwei Reset-Anfragen an dieselbe Adresse innerhalb von `max_frequency`; enthält die zweite Antwort ein `Set-Cookie` mit `Max-Age=0` auf `*-code-verifier`, existiert das Konto.
+
+#### BUG-88: Die Begründung von EC-9 ist zum zweiten Mal durch Messung widerlegt
+**Severity: Medium** · Vertragsdefekt, kein Codefehler
+
+EC-9 stützt seine Low-Einstufung seit dem 2026-09-06 auf vier Aussagen. **Zwei davon stimmen nicht**, beide unabhängig von zwei Lanes belegt:
+
+| Aussage im Vertrag | Messung |
+|---|---|
+| „Die Bestätigung einer Adresse ist nur noch **statistisch** möglich — kostet Messreihen statt zweier Anfragen" | **Falsch, dreifach.** (a) BUG-87 ist deterministisch, zwei Anfragen. (b) EC-11 genügt mit **einer** Anfrage bei 97,5 %. (c) Es gibt ein drittes, deterministisches Ein-Anfragen-Orakel über das **Registrierungsformular** — siehe unten |
+| „Ausgerechnet **derselbe** Konto-Zähler begrenzt die Zahl der Proben je Adresse" | **Falsch.** Es sind getrennte Schlüssel: Aussperren über `login:account:` (20/15 min), Reset-Proben über `password-reset:account:` (5/Std). Gemessen: nach 9 Reset-Proben existiert `login:account:` **überhaupt nicht**, und danach gehen volle 20 Login-Fehlversuche durch. Das Messen kostet **null** vom Aussperr-Budget |
+
+**Das dritte Orakel ist kein Bug, sondern der eigene Vertrag.** Eine Registrierung mit einem **bereits vergebenen Trainernamen** legt kein Konto an und antwortet eindeutig:
+
+```
+Adresse hat ein Konto  -> {"fieldErrors":{"email":"Diese E-Mail-Adresse ist bereits registriert."}}
+Adresse hat keins      -> {"fieldErrors":{"trainerName":"Dieser Trainername ist bereits vergeben."}}
+```
+
+Das ist die ausdrückliche Produktentscheidung hinter **AC-3** (Decision Log, 2026-08-31) — und AC-3 ist zu Recht PASS. Der Befund ist, dass **EC-9 eine Begründung trägt, die der eigene Vertrag an anderer Stelle widerlegt**: 5 bestätigte Adressen pro Minute und Verbindung, ohne jede Nebenwirkung.
+
+Die Aussagen (3) Ausheilen und (4) kein CAPTCHA sind bestätigt.
+
+> **Das ist die zweite widerlegte EC-9-Begründung in zwei Tagen.** Die erste („man muss die Adresse kennen") fiel durch BUG-79, die zweite („nur noch statistisch") fällt jetzt durch drei unabhängige Wege. Der beschriebene **Sachverhalt** stimmt jedes Mal — es ist die Einordnung, die nicht hält. Wer EC-9 ein drittes Mal begründet, sollte zuerst festhalten, was tatsächlich gemessen ist, statt die Einstufung zu erhalten.
+
+#### BUG-89: EC-11 unterschätzt den eigenen Kanal
+**Severity: Low** · Vertragstext
+
+EC-11 nennt „41 ms gegenüber 20 ms, ungefähr Faktor 2". Gemessen an derselben Ebene: **37,8 / 9,6 ms** und **40,9 / 11,0 ms** — der Erfunden-Wert ist halb so groß wie eingetragen, der Faktor **3,7 bis 3,9** statt 2. Der Kanal ist breiter als zugesagt, nicht schmaler. Dazu fehlt die jetzt gemessene Aussage, dass **eine** Anfrage für 97,5 % genügt; der Vertrag legt bislang „Messreihen" nahe.
+
+#### BUG-90: `updatePasswordAction` ist die einzige Zugangsdaten-Action ohne Drosselung
+**Severity: Medium** · betrifft **AC-18** und die Technical Requirements
+
+Gemessen: **15 Aufrufe ohne Sitzung von einer Verbindung — 0 abgewiesen.** In `src/lib/auth/actions.ts:177-209` fehlt jeder `registerAttempt`-Aufruf; Login (`:47`), Registrierung (`:93`), Reset (`:138`) und `/auth/confirm` (seit AC-20) haben ihn.
+
+Das widerspricht zwei Zusagen: `spec.md` → Technical Requirements („Die Drosselung der Zugangsdaten-Pfade sitzt **in den Server Actions selbst**") und **AC-18** (der nur greift, wo überhaupt gezählt wird). Sachlich derselbe Grund, aus dem AC-20 gebaut wurde: Jeder Aufruf löst ein `getUser()` gegen Supabase aus, dessen gemeinsames Kontingent an derselben Server-IP hängt (BUG-21).
+
+#### Bestätigt, nicht neu
+
+- **BUG-17** (Medium, High-nah) — `updatePasswordAction` akzeptiert **jede** Sitzung, nicht nur eine Recovery-Sitzung; ein Passwortwechsel ohne Kenntnis des alten ist möglich. Von Lane 2 unabhängig zur Laufzeit reproduziert (Login mit neuem Passwort erfolgreich, mit altem abgelehnt). **Seit dem 2026-09-04 dokumentiert und unverändert offen** — mit BUG-90 zusammen betrifft es dieselbe Action
+- **BUG-61, BUG-12, BUG-18** — Deploy-Blocker, Zahlen bestätigt (20/20 Spraying, 30/30 Konten; keine Security-Header)
+- **BUG-77** — `origin` ungeprüft in `redirectTo`, unverändert vorhanden
+- **T18** — offene `[user]`-Aufgabe auf dem Reset-Pfad, von beiden Lanes als **High** nach Skill-Regel gemeldet; deploy-blockiert durch fehlenden SMTP
+
+### Die akzeptierte Test-Lücke ist gewachsen: 5 → 12
+
+Lane 3 hat **41 Mutationen** gefahren und die in `design.md` dokumentierte Liste gegengeprüft. **Alle fünf dokumentierten überleben unverändert — die Liste stimmt.** Aber sie ist unvollständig; **sieben weitere** überleben, und der Zuwachs liegt überwiegend auf dem zuletzt geänderten Pfad:
+
+| Neu | Mutation | Wirkung |
+|---|---|---|
+| **N23 / N2** | Den BUG-79-Zweig in `actions.ts:174` wieder einbauen statt in der Zuordnungsfunktion | **Das Kontoexistenz-Orakel ist wieder offen, 206/206 grün.** Die zwei Wächter fangen die Mutation *in* der Funktion — dass die Action ihr Ergebnis unverändert zurückgibt, prüft niemand |
+| **N3** | Reset zählt unter Scope `'login'` | **AC-17 und AC-19 zugleich tot** |
+| **N24 / N25** | `registerAttempt(…, null)` auf Reset- bzw. Login-Pfad | Konto-Hälfte von AC-19 bzw. AC-16 tot. Die M12-Lücke betrifft **alle drei** Aufrufstellen |
+| **N22 / N31** | `tokenConfirmPerIp` auf 1000 bzw. Fenster 1 s | **Die Zahlen von AC-20 sind nirgends festgeschrieben** |
+| **N27** | `return data !== false` statt `=== true` | Fail-open-Variante **an AC-18 vorbei**, wenn die RPC `null` liefert |
+
+**Das Muster, das Lane 3 herausarbeitet:** Was in `throttle.ts`, `error-mapping.ts`, `trainer-name.ts` und `proxy.ts` **entschieden** wird, ist dicht bewacht (24 von 41 Mutationen erkannt). Was in `actions.ts` **verdrahtet** wird — welcher Scope, welche Adresse, welches Ergebnis weitergereicht wird —, ist es nur punktuell.
+
+> **N23 verdient besondere Beachtung:** Es ist dieselbe Fehlklasse wie BUG-75, auf Code, der eine Stunde alt ist, und es betrifft ausgerechnet den Fix für den schwersten Befund des Vortags.
+
+### Regression und automatisierte Tests
+
+| Prüfung | Ergebnis |
+|---|---|
+| **Test** | ✅ 19 Dateien, **206/206** |
+| **Lint** | ✅ 75 Dateien, 0/0 — **Dateizahl in beide Richtungen abgeglichen**, kein blinder Fleck |
+| **Build** | ✅ Exit 0 in einer Kopie; `diff -r` gegen den Projektbaum: identisch |
+| **E2E** | ✅ **33/33** in drei Engines, nichts nachinstalliert |
+
+**0 Regressionen an PROJ-2.** Schema ohne Drift (6 von 6 Migrationen), Funktions-Grants eng, RLS auf allen drei Tabellen, beide Trigger aktiv, alle Indizes vorhanden. **Aufräum-Mechanik als Gegenbeweis zum BUG-56-Zustand:** 2163 Zeilen, davon nur **6 älter als eine Stunde**.
+
+**Zur Lint-Notiz aus `design.md`:** stimmt weiterhin und war **zu freundlich** — nicht nur fehlen TypeScript-Regeln, es fehlt auch `eslint:recommended`. Empirisch: unbenutzte Konstante **und** ein Typfehler laufen durch `eslint` (Exit 0), `tsc` meldet `TS2322`. **Das Typnetz dieses Projekts ist `next build`, nicht `npm run lint`.**
+
+### Unit-Tests aus diesem Lauf
+
+**Keine geschrieben.** Dieselbe Begründung wie in den beiden Vorläufen, und sie ist durch N23 eher bestätigt worden: Die Lücken sitzen an Code, den derselbe Kontext geschrieben hat, der sie schließen würde. Sie gehören in den `/build`-Durchgang, der BUG-87 behebt — und dort auf die **Verdrahtung**, nicht auf die Funktion.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser, responsive Darstellung (375/768/1440 px), DevTools** — kein Browser-Engine
+- [!] **AC-13 „ohne dass die Seite neu lädt"**, **AC-14/AC-15 als sichtbare Darstellung** — Client-Verhalten bzw. Layout
+- [!] **AC-18 und EC-6 zur Laufzeit** — hätten verlangt, Container anzuhalten oder den Service-Role-Schlüssel zu entziehen; beides hätte die zwei parallelen Lanes mitgerissen. Garantie im Code belegt (`throttle.ts:116`, `admin.ts:26-35`) plus Unit-Test
+- [!] **AC-12 mit einem wirklich abgelaufenen Token** — hätte das Abwarten von `otp_expiry` verlangt; Ersatzbeleg über unbekannte und bereits verwendete Tokens
+- [!] **E2E-Wirksamkeit für M27 und M13** — nicht als roter Lauf nachgemessen; ein Mutationslauf gegen den Browser hätte den Produktivbaum verändert oder `.env.local` in die Kopie verlangt. Per Code-Inspektion bestätigt
+- [!] **Geheimnis-Suche im Produktions-Build** — durchsucht wurden die vom Dev-Server ausgelieferten Chunks (11 MB, 0 Treffer, Positivkontrolle schlägt an), kein `next build`-Ergebnis
+- [!] **Set-Cookie-Orakel im gehosteten Projekt** — nur lokal gemessen (`max_frequency` 1 s); die Richtung der Verschiebung auf 60 s ist abgeleitet
+- [!] **Rate Limiting auf gewöhnlichen Endpunkten** — nicht implementiert (100× `GET /login` → 100× 200). Für ein MVP optional, kein Pass
+- [!] **BUG-61-Schließbedingung, Security-Header, T18 im gehosteten Projekt** — nur gegen die Live-URL bzw. das Dashboard prüfbar
+
+### Verdikt
+
+**NOT READY.** Kein Critical. **Ein High: BUG-87**, dazu das nach Skill-Regel als High geführte **T18** (deploy-blockiert) und der unverändert offene **BUG-17** (Medium, High-nah). Neu ferner 2 Medium (BUG-88, BUG-90) und 1 Low (BUG-89).
+
+**Was dieser Lauf positiv festgestellt hat:** Alle 19 Acceptance Criteria bestehen. Der Fix hat den Meldekanal wirklich geschlossen (24/24 identisch). AC-20 wurde erneut entscheidend belegt, AC-19 auch gegen eine erfundene Adresse. Die Drosselung ist an allen geprüften Stellen unbeschädigt, RLS und Grants sind dicht, kein Geheimnis im ausgelieferten Code, 0 Regressionen. Die geforderte Zahl für EC-11 liegt jetzt vor.
+
+**Was offen bleibt:** BUG-87 ist der schwerste Befund — ein bereits behobenes Orakel, das über einen zweiten Kanal derselben Antwort zurückkehrt, schneller als zuvor. BUG-88 zeigt, dass die Einordnung von EC-9 zum zweiten Mal an der Wirklichkeit vorbeigeht. Und die ungeschützte Verdrahtung in `actions.ts` hat sich von fünf auf zwölf Stellen ausgeweitet, darunter der Fix von vorhin.
+
+`features/INDEX.md` bleibt bei **In Review**.
