@@ -22,7 +22,7 @@
 
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
-| PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | In Review | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
+| PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
@@ -53,5 +53,36 @@
 | PROJ-1 | **Grenzwerte des neuen Scopes `password-update` stehen nicht im Vertrag** — 10 je 15 Minuten, gebaut beim BUG-91-Fix und durch eine Mutation bewacht, aber AC-18 nennt keine Zahlen und `spec.md` ist während `/build` read-only. Dieselbe Klasse wie N22/N31 im Vorlauf: eine Entscheidung ohne Kriterium. Per `/refine` in AC-18 nachzutragen | Vertrag nachziehen |
 | PROJ-1 | **Kontoexistenz weiterhin über zwei andere Kanäle bestimmbar** (BUG-88/BUG-89, Medium) — nicht mehr über die Reset-Antwort, aber über die **Antwortzeit** (durch die Server Action gemessen: Median 120,3 vs. 71,1 ms, Blindtest **20/20** bzw. **30/30** bei **einer** Anfrage je Adresse, ~10 Adressen/s) und über das **Registrierungsformular** (deterministisch, **30/30**, 6,72 Adressen/s, ohne Kontoanlage — Folge von AC-3). Kein Codefehler im engeren Sinn; entwertet aber die Low-Einstufung von **EC-9** zum zweiten Mal.<br>**✅ Entschieden am 2026-09-06 durch `/refine`:** EC-9 steht jetzt auf **Medium** statt Low, EC-11 trägt die durch die Server Action gemessenen Zahlen, EC-4 die richtigen Ausheilzeiten je Vorgang. Neu im Vertrag festgehalten: Begründungen für EC-9 dürfen sich **nicht mehr auf die Vertraulichkeit von Adressen stützen** — AC-3 gibt die Kontoexistenz bewusst preis, und genau daran sind drei Begründungen nacheinander gescheitert. **Verhalten unverändert** — bewusst getragen, korrekt benannt | ✅ dokumentiert |
 | PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen | beim Deploy |
+
+
+## Bekannte Restrisiken — PROJ-1 (Stand 2026-09-06)
+
+> **PROJ-1 steht auf `Approved` mit offenen Punkten.** Das ist eine bewusste Entscheidung des Nutzers vom 2026-09-06: Nach dem Abschlusslauf wird alles außer einem **neuen** Critical/High mit direkter Auswirkung auf echte Nutzerdaten oder Kontoübernahme **dokumentiert statt behoben**. Der Lauf fand keinen solchen Befund. Diese Liste ist der Preis dieser Entscheidung — sie steht hier, damit niemand `Approved` für „nichts mehr offen" hält.
+>
+> **Die beiden weiterhin als High geführten Punkte sind nicht neu und lokal nicht schließbar:** Ihre Schließbedingung verlangt ein Deploy-Ziel, das es noch nicht gibt (`deploy: null` in `.ai-eng-kit`, keine Absender-Domain). Sie stehen unverändert in der Deploy-Blocker-Tabelle oben und **müssen vor dem öffentlichen Start erledigt sein**.
+
+### Was der Abschlusslauf positiv festgehalten hat
+
+Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten bestätigt, die den Fix nicht gebaut haben** — die Kontoübernahme über `updatePasswordAction` (BUG-91) und das Kontoexistenz-Orakel auf dem Reset-Pfad (BUG-87). Erstmals sind **alle 20 AC und alle 11 EC** belegt, AC-18 zum ersten Mal zur Laufzeit. Keine Regression: Test 218/218, Lint 0, Build Exit 0, E2E 39/39 in drei Engines über zwei Läufe.
+
+### Offen, nach Gewicht
+
+| # | Risiko | Severity | Warum es liegen bleibt |
+| --- | --- | --- | --- |
+| **BUG-61** | Rotierendes `x-forwarded-for` hebelt den IP-Zähler aus — **29 von 30** Spraying-Versuchen kamen durch | **High** | **Deploy-Blocker.** Nur am gehosteten Ziel schließbar: Der Host muss den Header selbst setzen und Client-Werte verwerfen. Kein Codefehler |
+| **T18** | Reset-Mail-Vorlage im gehosteten Projekt nicht gesetzt | **High** (Skill-Regel) | **Deploy-Blocker**, blockiert durch fehlenden eigenen SMTP-Dienst und fehlende Absender-Domain |
+| **BUG-100** | Die **Recovery-Sitzung wird nicht verbraucht**: Wer den Reset-Link je auf einem geteilten Gerät geöffnet hat, kann dort das Passwort beliebig oft weiter setzen — ohne das aktuelle zu kennen, ohne neuen Link | Medium | Setzt Gerätezugriff voraus; in diesem Zustand gewährt die Sitzung nach AC-5 ohnehin 400 Tage vollen Zugriff. **Kein Kontoverlust** — der Besitzer kontrolliert sein Postfach und kann jederzeit zurücksetzen. Gehört per `/refine` entschieden: Sitzung verbrauchen oder die Grenze als EC in den Vertrag |
+| **BUG-101** | **Vier Drosselungs-Grenzwerte sind von keinem Test gepinnt** (AC-16, AC-19, AC-20 und der `password-update`-Scope). Die vorhandenen Tests sind tautologisch — Code gegen sich selbst. Gemessen: 5→19, 20→2000, 10→10000 laufen **grün durch alle Gates** | Medium | Kein Produktdefekt, aber eine stille Aufweichung der Konto-Bremse gegen Brute Force würde nicht auffallen. **Dritte Auflage derselben Klasse** (vorher N22/N31) |
+| **BUG-102** | **Für beide High-Fixes gibt es je nur einen Wächter.** BUG-91 hält allein `actions.test.ts` (E2E bleibt grün), BUG-87 allein `tests/PROJ-1-reset-response.spec.ts` (`npm test` bleibt grün) | Medium | Keine zweite, unabhängige Bestätigung. Fällt eine Datei weg oder wird ihr Mock angepasst, ist der Schutz ungeprüft |
+| **BUG-92** | Der BUG-87-Wächter ist **zur Hälfte zeitfenster-abhängig**: mit 1500 ms Pause zwischen den Sonden gingen alle drei vergleichenden Zusicherungen **grün auf kaputtem Code**. Rot wurde nur die absolute Cookie-Zusicherung | Medium | Der Test merkt nicht, dass er nichts mehr misst. Lokal `max_frequency` 1 s, gehostet 60 s — das lokale CI-Signal ist das dünne |
+| **BUG-12** | Security-Header (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS, CSP) sämtlich nicht gesetzt | Medium | Werden beim Host konfiguriert, gegen die Live-URL zu prüfen |
+| **BUG-18 / BUG-77** | `X-Forwarded-Host` hebelt die Origin-Prüfung aus; `origin` fließt ungeprüft in `redirectTo` | Medium | Beim gewählten Host zu prüfen und zu strippen; BUG-77 hängt zusätzlich an T18 |
+| **EC-9 / EC-10 / EC-11** | Kontoexistenz bleibt über **Antwortzeit** und über das **Registrierungsformular** bestimmbar — eine Anfrage je Adresse, ~10 Adressen/s | Medium, **im Vertrag akzeptiert** | Bewusst getragen. Die Preisgabe beim Registrieren ist eine Produktentscheidung (AC-3). Nachgemessen, Zahlen unverändert |
+| **BUG-103 … BUG-108** | Fehlerzweig von `getClaims()` ungepinnt · neue Prüfung in `reset-password/page.tsx` ohne Test · `X-Powered-By` · Passwort-Obergrenze (72 Byte) nicht im Vertrag · Dev-Build gibt DB-Meldung und absolute Serverpfade aus (Produktions-Build ungeprüft) · `PROJ-2-access-guard.spec.ts:53` verdrahtet Port fest | Low | Sammelposten für den nächsten Aufräum-Durchgang |
+| **BUG-97** | „Stattdessen einloggen" erscheint auch bei einem bloßen Formatfehler in der E-Mail | Low | — |
+
+### Empfehlung für den nächsten `/build`
+
+**BUG-101 und BUG-102 zuerst** — nicht weil das Produkt kaputt wäre, sondern weil das Netz unter den beiden gerade geschlossenen High-Befunden zu dünn ist. Die Mutationen aus dem Abschlusslauf liegen als fertiges Abnahmekriterium im `qa-report.md`. **BUG-100** gehört davor über `/refine` entschieden, weil es eine Vertragsfrage ist und keine Implementierungsfrage.
 
 ## Next Available ID: PROJ-5

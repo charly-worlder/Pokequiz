@@ -1910,3 +1910,172 @@ Ein 4000 Zeichen langer Header erzeugt anstandslos eine Zeile mit 4000-Zeichen-S
 **Was dieser Lauf positiv festhält:** BUG-87 ist geschlossen, und zwar erstmals mit einem Wächter, dessen Rot-Zustand von einem Kontext nachgewiesen wurde, der den Fix nicht gebaut hat. Die Kette „Fix → eigener Wächter → nächster Lauf findet dasselbe Orakel wieder" ist damit unterbrochen.
 
 **Was offen bleibt:** Der schwerste Befund ist nicht mehr das Orakel, sondern **BUG-91** — eine vollständige Kontoübernahme, seit dem 2026-09-04 als BUG-17 dokumentiert und dreimal überrollt worden. Und die Test-Lücke hat sich verlagert, nicht geschlossen: Sie sitzt jetzt sichtbar in der **Verdrahtung** der Reset-Drosselung (BUG-93) und in einem Wächter, der unter der gewünschten Deploy-Konfiguration leer grün werden kann (BUG-92).
+
+---
+
+## QA-Abschlusslauf — 2026-09-06 (dritter des Tages), nach dem BUG-91/BUG-93-Fix
+
+**Getestet:** 2026-09-06 · **App URL:** http://localhost:3000 (`probe.baseUrl`, lokaler Dev-Server + lokaler Supabase-Stack)
+**Auftrag:** BUG-91 unabhängig gegenprüfen, Regression auf AC-10/EC-3 und AC-17/AC-19. **Abnahmeregel des Nutzers für diesen Lauf:** Alles außer einem **neuen** Critical/High mit direkter Auswirkung auf echte Nutzerdaten oder Kontoübernahme wird **dokumentiert, nicht behoben**.
+
+### Aufbau
+
+Drei `qa-engineer`-Lanes in getrennten Kontexten, die den `/build`-Durchgang nie gesehen haben: (1) Abnahme, (2) Security-Red-Team, (3) Regression + Wächter-Tauglichkeit. Lane 2 wurde ausdrücklich beauftragt, **um den Schutz herumzukommen**, nicht ihn zu bestätigen. Lane 3 hat ihre Mutationen in einer quellgleichen Kopie außerhalb des Projektbaums auf einem eigenen Port gefahren, damit die beiden anderen Lanes nicht gestört werden.
+
+### Das Kernergebnis: BUG-91 ist geschlossen
+
+**Von zwei Lanes unabhängig belegt — und beide haben am Ergebnis gemessen, nicht am Antwortrumpf.**
+
+```
+Gewöhnliche Sitzung (Registrierung/Login, amr = password)
+  -> updatePasswordAction       -> "Dieser Link ist ungültig oder abgelaufen."
+  -> Login mit NEUEM Passwort   -> abgelehnt
+  -> Login mit ALTEM Passwort   -> ERFOLG        (das Passwort wurde nicht geändert)
+```
+
+**Der Schutz ist spezifisch, nicht pauschal** — der legitime Weg ist unversehrt: Reset-Link aus Mailpit, geöffnet in einem **frischen** Kontext ohne die Cookies der anfordernden Verbindung (EC-7), ergibt `amr = otp`, das Setzen gelingt, das neue Passwort gilt, das alte nicht mehr, und derselbe Link ein zweites Mal führt nach `?error=1`.
+
+**Lane 2 hat versucht, den Schutz zu umgehen, und ist gescheitert:** Ein bereits eingelöster `token_hash` liefert **keine** Sitzung (`307 → /reset-password?error=1`, kein Cookie) — eine zweite Recovery-Sitzung lässt sich daraus nicht erzeugen. Der Marker steht im **signierten** JWT; der JWT-Schlüssel ist im ausgelieferten Bundle nachweislich nicht vorhanden (0 Treffer bei validierter Suche).
+
+**Drosselung auf diesem Pfad:** 10 Aufrufe erlaubt, der 11. abgewiesen — vorher 0 von 12.
+
+### Alle AC und EC bestanden
+
+Lane 1 hat **AC-1 bis AC-20 und EC-1 bis EC-11 sämtlich als PASS** belegt, jeweils mit Kommando oder `file:line`. Hervorzuheben, weil sie in früheren Läufen offen waren:
+
+| ID | Ergebnis | Beleg |
+| --- | --- | --- |
+| **AC-18** | ✅ PASS, **erstmals zur Laufzeit** | Zähler unzählbar gemacht (Schlüssel über dem btree-Maximum) → Login mit **richtigem** Passwort schlägt fehl, **keine** Sitzung gesetzt. Mit Kontrollmessung davor. Fail-closed bestätigt |
+| **AC-20** | ✅ PASS, entscheidend | 10 Einlösungen durch; der 11. mit einem **echten** Token abgewiesen, derselbe Token unmittelbar danach von frischer Verbindung angenommen |
+| **AC-10 / EC-3** | ✅ PASS | je 2 Anfragen, zweite innerhalb `max_frequency`: Status, Länge (160), Rumpf, `Set-Cookie` (`[]`) identisch. Gegenkontrolle: 1 Mail für die echte Adresse, 0 für die erfundene |
+| **AC-19** | ✅ PASS | **frei erfundene** Adresse: 5 durch, ab der 6. abgewiesen — wortgleich zum echten Konto |
+| **EC-1** | ✅ PASS | 6 gleichzeitige Registrierungen desselben Namens von 6 Verbindungen → genau 1 angelegt. Garantie: Unique-Index `0001_profiles.sql:13` |
+| **EC-11** | ✅ PASS | je 12 Messungen durch die Server Action: Median 123,6 vs. 78,8 ms — deckt sich mit den am Vortag eingetragenen Zahlen |
+
+### Bugs
+
+#### BUG-100: Die Recovery-Sitzung wird durch das Setzen des Passworts nicht verbraucht
+**Severity: Medium** · betrifft den Restbereich von BUG-91
+
+Der Reset-**Link** ist einmalig (AC-12, belegt). Die daraus entstandene **Sitzung** ist es nicht: Ihr `amr` bleibt `otp`, das Cookie lebt 400 Tage.
+
+```
+1. Reset-Link einlösen                                   -> Recovery-Sitzung
+2. updatePasswordAction "Neu111!"                        -> Erfolg
+3. updatePasswordAction "Neu222!"  (dieselbe Sitzung)    -> Erfolg
+4. Login "Neu111!" -> abgelehnt      Login "Neu222!" -> Erfolg
+```
+
+**Wirkung:** Wer den Reset-Link je auf einem geteilten oder fremden Gerät geöffnet hat, kann dort das Passwort beliebig oft weiter setzen, ohne das aktuelle zu kennen und ohne neuen Link.
+
+**Warum Medium und nicht High — die Einordnung ausgeschrieben, weil sie knapp ist.** Die Voraussetzung ist Zugriff auf ein Gerät, auf dem ein Reset-Link geöffnet wurde. In genau diesem Zustand gewährt die Sitzung nach AC-5 ohnehin 400 Tage lang vollen Kontozugriff, und die Design-Entscheidung vom 2026-08-31 nimmt das ausdrücklich in Kauf. Der zusätzliche Gewinn für einen Angreifer ist, dass er das Passwort **ändern** statt es nur zu **benutzen** kann. Ein dauerhaftes Aussperren ist es aber **nicht**: Der rechtmäßige Besitzer kontrolliert sein Postfach und kann jederzeit selbst zurücksetzen. Es ist ein Zermürbungsspiel, kein Kontoverlust.
+
+**Kein AC deckt das ab.** Die Design-Entscheidung sagt „ist dort automatisch eingeloggt", nicht „behält dauerhaft das Recht, das Passwort zu setzen". Gehört per `/refine` entschieden: entweder die Sitzung nach dem Setzen verbrauchen, oder die Grenze als EC in den Vertrag.
+
+#### BUG-101: Vier Drosselungs-Grenzwerte aus dem Vertrag sind von keinem Test gepinnt
+**Severity: Medium** · Test-Lücke · betrifft **AC-16**, **AC-19**, **AC-20**, **AC-18**
+
+Die Tests, die sie zu prüfen scheinen, sind **tautologisch** — `throttle.test.ts:188` lautet sinngemäß `expect(accountCall.p_limit).toBe(LIMITS.passwordResetPerAccount.limit)`: der Code gegen sich selbst. Sie bewachen die **Verdrahtung** (welches Limit-Objekt gezogen wird), nicht die **Zahl**.
+
+| Mutation | `npm test` | E2E |
+| --- | --- | --- |
+| `passwordResetPerAccount` 5 → **19** (AC-19 sagt 5/Std) | grün | grün |
+| `credentialsPerAccount` 20 → **2000** (AC-16 sagt 20/15 min) | grün | grün |
+| `tokenConfirmPerIp` 10 → **10000** (AC-20) | grün | grün |
+| `passwordUpdatePerIp` 10 → **10000** (BUG-91-Scope) | grün | grün |
+
+Die relationalen Tests fangen nur grobe Ausreißer: 5 → **500** wird rot, 5 → **19** nicht. **Wirkung: eine stille Aufweichung der Konto-Bremse gegen Brute Force und Passwort-Spraying geht grün durch alle Gates.** Nur `credentialsPerIp` (5/60 s) und `passwordResetPerIp` (3/300 s) sind literal festgehalten (`throttle.test.ts:44-45`).
+
+Dies ist die dritte Auflage derselben Klasse (vorher N22/N31 und die Notiz aus dem BUG-91-Build, dass die Zahl des neuen Scopes in keinem AC steht).
+
+#### BUG-102: Der BUG-91-Schutz hängt an einer einzigen Testdatei
+**Severity: Medium** · Test-Lücke
+
+Beide Mutationen — die Verdrahtung umgangen (`if (false)`) und `password` als Recovery-Methode akzeptiert — werden **ausschließlich** von `src/lib/auth/actions.test.ts` rot gemacht; die **E2E-Suite bleibt grün**, weil kein Browser-Test versucht, mit einer gewöhnlichen Login-Sitzung ein Passwort zu setzen.
+
+Spiegelbildlich gilt dasselbe auf dem Reset-Pfad: Dort hält **nur** `tests/PROJ-1-reset-response.spec.ts` (das Orakel wieder einzubauen lässt `npm test` 218/218 grün). **Für keinen der beiden als High geführten Fixes gibt es eine zweite, unabhängige Bestätigung.**
+
+#### BUG-92 (erweitert): Der BUG-87-Wächter ist zur Hälfte zeitfenster-abhängig
+**Severity: Medium** · Test-Konstruktion · schärft den Befund vom Vortag
+
+Neu gemessen: Mit wieder eingebautem Orakel **und** 1500 ms Pause zwischen den beiden Sonden gingen **alle drei vergleichenden Zusicherungen grün** (Status, Rumpf, Cookies). Rot wurde der Test nur noch durch die **absolute** Zusicherung „gar kein `code-verifier`-Cookie auf diesem Pfad" — und die deckt ausschließlich den **Cookie**-Kanal ab. Für Status und Rumpf bleibt allein der zeitabhängige Vergleich.
+
+Der Test prüft nirgends, ob der 429 überhaupt eingetreten ist; **er kann also nicht merken, dass er gerade nichts mehr misst.** Lokal ist `max_frequency` 1 s, gehostet 60 s — das lokale CI-Signal ist das dünne.
+
+#### BUG-103: Der Fehlerzweig von `getClaims()` ist von keinem Test gepinnt
+**Severity: Low** · `src/lib/auth/recovery-session.ts`
+
+Der ausgelieferte Code ist korrekt fail-closed (`data?.claims?.amr ?? []` → `[]` → `false`), aber eine Mutation, die den Fehlerfall als Recovery-Sitzung gelten lässt, überlebt beide Suiten. Ein Refactoring, das die Richtung umdreht, würde grün ausgeliefert.
+
+#### BUG-104: Die neue Prüfung in `src/app/reset-password/page.tsx` hat keinen Test
+**Severity: Low**
+
+Ihre Rücknahme überlebt beide Suiten. Die Sicherheitsgrenze bleibt die Server Action — der Verlust wäre eine Sackgasse in der Oberfläche, kein Loch —, aber die Zeile ist ungeschützt.
+
+#### BUG-105: `X-Powered-By: Next.js` auf jeder Antwort
+**Severity: Low** · Preisgabe des Technologie-Stacks.
+
+#### BUG-106: Die Passwort-Obergrenze steht in keinem Kriterium
+**Severity: Low** · `src/lib/validation/auth.ts:27-31`
+
+500 Zeichen → „Höchstens 72 Zeichen (Umlaute und Emoji zählen mehrfach)". AC-1 und AC-11 nennen nur „mindestens 8". Das Verhalten ist richtig begründet (bcrypt-Grenze), vertraglich aber nicht abgedeckt — und Passwortmanager erzeugen längere Passphrasen.
+
+#### BUG-107: Der Dev-Build gibt auf dem AC-18-Fehlerpfad DB-Meldung und absolute Serverpfade aus
+**Severity: Low** (Produktions-Build **nicht** geprüft — siehe Not Verified)
+
+#### BUG-108: `tests/PROJ-2-access-guard.spec.ts:53` verdrahtet Host und Port fest
+**Severity: Low** · `toHaveURL(/localhost:3000\/$/)` statt `baseURL` — bindet die Suite an einen Port.
+
+#### Bestätigt, unverändert
+- **BUG-97** — „Stattdessen einloggen" erscheint auch bei einem bloßen Formatfehler in der E-Mail (`register-view.tsx:99`), Low
+- **BUG-61** (High, Deploy-Blocker) — rotierendes `x-forwarded-for`: **29 von 30** Spraying-Versuchen kamen durch, Gegenprobe von einer Verbindung 35 von 40 abgewiesen. Der Zähler funktioniert, sein Schlüssel ist angreiferkontrolliert
+- **T18** (High nach Skill-Regel, Deploy-Blocker) — unabgehakte `[user]`-Aufgabe auf dem Reset-Pfad, von beiden Lanes gemeldet
+- **BUG-12** (Medium) — keiner der Security-Header gesetzt
+- **EC-9 / EC-10 / EC-11** — nachgemessen, Zahlen decken sich mit dem am selben Tag überarbeiteten Vertrag. Keine Abweichung
+
+### Regression und automatisierte Tests
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| **Test** | ✅ 20 Dateien, **218/218**, zwei Läufe identisch, Exit 0 |
+| **Lint** | ✅ 0 Befunde, Exit 0 |
+| **Build** | ✅ Exit 0 (in quellgleicher Kopie, weil `next build` und der laufende `next dev` sich `.next` teilen) |
+| **E2E** | ✅ **39/39 in drei Engines, zwei vollständige Läufe** (56,2 s / 55,4 s), kein Flake |
+
+**0 Regressionen.** PROJ-2 zweimal vollständig grün. RLS zur Laufzeit mit zwei echten Konten in beide Richtungen geprüft (Fremd-Insert `42501`, Fremd-Select `[]`, Fremd-Patch/Delete 0 Zeilen, Zeile danach nachgelesen und unverändert). Funktions-Grants nur `service_role` (anon 401, authenticated 403). **Kein Schema-Drift** — 0001–0006 angewandt, Tabellen, 3 Policies, 7 Indizes, 10 Constraints, beide Trigger und 7 Funktionen deckungsgleich. Aufräum-Mechanik trägt (1747 Zeilen, nichts älter als eine Stunde). PROJ-2-Datenschicht gegengeprüft: doppelter `client_round_id` → 201 dann **409**, `streak=400` → **400**, unplausible Dauer → **400**.
+
+**Positivbefund zur Wächter-Qualität:** Ein Reset, der stillschweigend nichts mehr verschickt, lässt `npm test` 218/218 grün und macht **4 E2E-Tests rot**. Die Wächter sind echt, nicht dekorativ — sie sitzen nur je an einer einzigen Stelle (BUG-102).
+
+### Unit-Tests aus diesem Lauf
+
+**Keine geschrieben.** Der Auftrag für diesen Lauf war ausdrücklich „dokumentieren, nicht beheben". Die Lücken sind benannt und mit Mutationen belegt (BUG-101 bis BUG-104); sie gehören in den `/build`-Durchgang, der sie schließt — mit den Mutationen als Abnahmekriterium.
+
+### Security-Audit — Zusammenfassung
+
+**Verifiziert: 10 Prüfungen** — Kontoübernahme über den Passwort-Setz-Pfad (**geschlossen**, inkl. Umgehungsversuchen), Kontoexistenz über die Reset-Antwort (**geschlossen**, Blindtest 20 Adressen: ein Rumpf, null Cookies), Auth-Bypass, Authorization/RLS zur Laufzeit, Input-Injection, Drosselung **jedes** Zugangsdaten-Pfades, exponierte Geheimnisse (5,3 MB ausgelieferte Chunks, 0 Treffer, mit Positivkontrolle), sensible Daten in Antworten, Credentials in URLs, Session-Cookie-Härtung.
+
+**`[!] NOT VERIFIED: 9** — siehe unten. Die wichtigsten hängen sämtlich am fehlenden Deploy-Ziel.
+
+### Not Verified In This Run
+
+- [!] **BUG-61 gegen die echte Live-URL** — die Schließbedingung verlangt eine Messung am gehosteten Ziel; `deploy` steht in `.ai-eng-kit` auf `null`, es gibt keine Live-URL
+- [!] **Security-Header am Host** — lokal nachweislich alle abwesend, gesetzt werden sie beim Host
+- [!] **T18 / Mail-Vorlage / Site-URL / Redirect-URLs im gehosteten Projekt** — kein eigener SMTP-Dienst, kein gehosteter Zugang aus diesem Lauf
+- [!] **Supabases eingebaute Rate-Limit-Ebene** — lokal nicht auslösbar
+- [!] **Ausheilzeiten 15 Minuten (Konto/Login) und 1 Stunde (Konto/Reset)** — über die Laufzeit des Durchgangs hinaus; die beiden kurzen Fenster (60 s, 5 min) sind gemessen, die langen nur aus den Konstanten belegt
+- [!] **AC-5 als echter Browser-Neustart** — über die Cookie-Attribute belegt (persistent, 400 Tage), nicht durch einen tatsächlichen Neustart
+- [!] **Verhalten von AC-18 im Produktions-Build** — lokal lief ein Dev-Server, der die interne Fehlermeldung mitschickt; ob `next build` sie maskiert, ist ungeprüft (BUG-107)
+- [!] **Cross-Browser jenseits der drei Playwright-Engines, responsives Rendering (375/768/1440 px), DevTools, Fokus/Animation** — kein Browser-Engine-Urteil in `/qa`
+- [!] **Migrationen gegen das gehostete Schema** — nur das lokale Schema wurde verglichen
+
+### Production-Ready-Entscheidung
+
+**READY — nach der für diesen Lauf vereinbarten Abnahmeregel**, und mit den unten benannten Restrisiken.
+
+**Kein neuer Critical.** **Kein neuer High.** Die beiden weiterhin als High geführten Punkte — **BUG-61** und **T18** — sind **nicht neu** und **lokal nicht schließbar**: Beider Schließbedingung verlangt ein Deploy-Ziel, das noch nicht existiert (`deploy: null`, keine Absender-Domain). Sie blockieren nach der Regel des Nutzers die Abnahme nicht, bleiben aber als **Deploy-Blocker** in `features/INDEX.md` stehen und müssen vor dem Start erledigt sein.
+
+Neu in diesem Lauf: **4 Medium** (BUG-100, BUG-101, BUG-102, BUG-92 erweitert) und **6 Low** (BUG-103 bis BUG-108).
+
+**Was dieser Lauf positiv festhält:** Die beiden schwersten Befunde der letzten Tage sind geschlossen und **von Kontexten bestätigt, die den Fix nicht gebaut haben** — die Kontoübernahme über `updatePasswordAction` und das Kontoexistenz-Orakel auf dem Reset-Pfad. Erstmals sind **alle 20 AC und alle 11 EC** belegt, darunter AC-18 zum ersten Mal zur Laufzeit. Keine Regression.
+
+**Was bewusst offen bleibt:** Die Substanz stimmt, das **Netz** darunter ist dünner als es aussieht. Die Grenzwerte von vier Drosselungen sind durch keinen Test gepinnt (BUG-101), und für beide High-Fixes gibt es je nur **einen** Wächter (BUG-102). Beides ist kein Defekt im Produkt, sondern das Risiko, dass ein künftiger Umbau einen der Schutzmechanismen still aufweicht. Das gehört als erstes in den nächsten `/build`.
