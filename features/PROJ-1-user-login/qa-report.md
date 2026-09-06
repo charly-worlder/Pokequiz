@@ -1675,3 +1675,238 @@ Lane 3 hat **41 Mutationen** gefahren und die in `design.md` dokumentierte Liste
 **Was offen bleibt:** BUG-87 ist der schwerste Befund — ein bereits behobenes Orakel, das über einen zweiten Kanal derselben Antwort zurückkehrt, schneller als zuvor. BUG-88 zeigt, dass die Einordnung von EC-9 zum zweiten Mal an der Wirklichkeit vorbeigeht. Und die ungeschützte Verdrahtung in `actions.ts` hat sich von fünf auf zwölf Stellen ausgeweitet, darunter der Fix von vorhin.
 
 `features/INDEX.md` bleibt bei **In Review**.
+
+---
+
+## QA-Nachlauf — 2026-09-06 (zweiter des Tages), Gegenprüfung des BUG-87-Fixes
+
+**Getestet:** 2026-09-06 · **App URL:** http://localhost:3000 (`probe.baseUrl`, lokaler Dev-Server + lokaler Supabase-Stack)
+**Auftrag:** BUG-87 **unabhängig** gegenprüfen — der Wächter dafür stammt vom selben Kontext, der den Fix gebaut hat, und genau daran sind die beiden Vorläufe gescheitert.
+
+### Aufbau — warum dieses Ergebnis mehr trägt als die Vorläufe
+
+Drei `qa-engineer`-Lanes in getrennten Kontexten, die den `/build`-Durchgang **nie gesehen haben**: (1) Abnahme, (2) Security-Red-Team, (3) Regression + Wächter-Tauglichkeit. Jede bekam nur den Feature-Ordner, die AC-/EC-Liste, ihren Schritt aus `SKILL.md`, `.ai-eng-kit` und die Adresse des laufenden Servers — keine Beschreibung des Fixes, keine Bauhistorie.
+
+**Zusätzlich hat der Owner die entscheidende Mutation selbst gefahren**, statt sie sich berichten zu lassen. Das ist der Punkt, an dem die beiden Vorläufe nachgaben: Dort belegte der Wächter, dass eine *Funktion* richtig entscheidet, nicht dass die *Antwort* dicht ist.
+
+### Das Kernergebnis: BUG-87 ist geschlossen — dreifach belegt
+
+**(1) Lane 2, Blindtest über den ursprünglichen Vektor.** 12 echte + 12 erfundene Adressen, je 2 Anfragen innerhalb `max_frequency`, Fingerabdruck aus Status + vollem Rumpf + Content-Länge + **allen** `Set-Cookie`-Kopfzeilen + allen Header-Namen:
+
+```
+24 Sonden -> 1 einziger Fingerabdruck   (REAL=12, FAKE=12)
+{"status":200,"len":161,"cookieCount":0,"cookies":[],...}
+```
+
+**(2) Lane 1, unabhängig und mit anderer Methode.** Status gleich, Rumpf **byte-identisch** (`cmp`), **kein einziger** `Set-Cookie` auf beiden Seiten, `diff` der Header-Namen leer — auch im Zwei-Anfragen-Fall.
+
+**Beide mit Gegenkontrolle**, damit „identisch" nicht „kaputt" heißt: Mailpit trägt die Reset-Mail für die echten Adressen, für die erfundenen keine. Der Pfad tut also weiterhin, was er soll.
+
+**(3) Der Owner hat den Fehler wieder eingebaut** — und zwar in der Klasse, die diesem Projekt zweimal die Wächter unterlaufen hat (N23): das Orakel **inline in `actions.ts`**, Rückgabewert vollkommen gleichförmig, Leck ausschließlich über die Cookies des regulären Clients.
+
+| Prüfung mit eingebautem Orakel | Ergebnis |
+| --- | --- |
+| `npm test` | 🟢 **209/209 grün** — die Unit-Ebene ist für diese Klasse **blind** |
+| `npx playwright test tests/PROJ-1-reset-response.spec.ts` | 🔴 **rot**, Zeile 106, mit der richtigen Diagnose |
+
+```
+Error: zweite Anfrage: Cookie-Kopfzeilen müssen gleich sein — hier hing BUG-87
+-   "sb-127-auth-token-flow-<id>-code-verifier:gesetzt"
++   "sb-127-auth-token-flow-<id>-code-verifier:geloescht"
+```
+
+Nach Rücknahme der Mutation (`git checkout --`) wieder **2/2 grün**. **Rot mit Fehler, grün ohne — der Wächter ist echt.** Damit ist die Frage aus dem Auftrag beantwortet: Der Wächter belegt diesmal wirklich die Zusage und nicht sich selbst.
+
+### Was diesen Fix von den beiden Vorläufen unterscheidet
+
+Er normalisiert die **Antwort**, nicht einen Kanal. `requestPasswordResetIdentically` (`src/lib/auth/reset-response.ts:44-57`) ist der einzige Ausgang, und der Cookie-Kanal ist an der Quelle zu: `createResponseNeutralClient` (`src/lib/supabase/server.ts:25-44`) gibt `@supabase/ssr` ein leeres `setAll()`, sodass die PKCE-Löschung die Antwort nicht erreichen kann.
+
+### Ergebnisse nach AC-ID / EC-ID
+
+| ID | Ergebnis | Beleg |
+| --- | --- | --- |
+| **AC-10** | ✅ PASS | Lane 1 (byte-identisch, 0 Cookies) + Lane 2 (1 Fingerabdruck / 24 Sonden) + Owner-Mutation (rot/grün) + Mailpit-Gegenkontrolle |
+| **EC-3** | ✅ PASS | dieselben drei Messungen |
+| AC-1 … AC-6 | ✅ PASS | Lane 1, Flight-Protokoll gegen den laufenden Server |
+| AC-7 | ✅ PASS | 40 Messungen, ausnahmslos „E-Mail-Adresse oder Passwort ist falsch." |
+| AC-8 | ✅ PASS (Verhalten) | 1–5 durch, ab 6 abgewiesen; Erstattung belegt (4 Fehl → 1 Erfolg → 5. noch erlaubt). **IP-Vorbedingung unerfüllt**, siehe BUG-61 |
+| AC-11, AC-12 | ✅ PASS | echter Mail-Link in leerem Cookie-Jar eingelöst; Zweiteinlösung → `?error=1` |
+| AC-13 | ✅ PASS (serverseitig) | Client-Hälfte `[!]`, kein Browser |
+| AC-14, AC-15 | ✅ PASS (Quelle) | Darstellung `[!]`, kein Browser |
+| AC-16 | ✅ PASS | 20 Fehlversuche von 20 Verbindungen durch, 21. abgewiesen; Leerung nach Erfolg belegt |
+| AC-17 | ✅ PASS | 3 durch, 4. abgewiesen; keine Erstattung |
+| AC-18 | ✅ PASS (Code + Unit) | Laufzeit-Ausfall nicht provozierbar → `[!]` |
+| AC-19 | ✅ PASS | **frei erfundene** Adresse: 5 durch, ab 6. abgewiesen — die tragende Behauptung „zählt auch Adressen ohne Konto" ist bestätigt |
+| AC-20 | ✅ PASS | 10 Müll-Einlösungen, dann echter Token von derselben Verbindung abgewiesen, von frischer Verbindung angenommen |
+| EC-1 | ✅ PASS | echtes Rennen gefahren, genau eine Profilzeile; Unique-Index `0001_profiles.sql:13` |
+| EC-2, EC-5, EC-7, EC-8 | ✅ PASS | Lane 1; EC-8 exakt reproduziert (8/8 ohne Tippfehler, 4/8 mit) |
+| EC-4 | ⚠️ Verhalten PASS, **Zahlen im Vertrag falsch** | BUG-95 |
+| EC-6 | ⚠️ Serverseitig PASS, UI-Hälfte `[!]` | kein Browser |
+| **EC-9** | ⚠️ **Verhalten PASS, Begründung widerlegt** | BUG-88, siehe unten |
+| **EC-10** | ✅ PASS, **Kanal breiter als gedacht** | Median 136,2 vs. 78,7 ms, n=24/24, **überlappungsfrei**, 100 % bei *einer* Anfrage |
+| **EC-11** | ✅ PASS (Kanal existiert), **Open Question beantwortet** | BUG-89 |
+
+### Bugs
+
+#### BUG-87 — **GESCHLOSSEN**
+Siehe oben. Drei unabhängige Belege, davon einer eine vom Owner selbst gefahrene Mutation.
+
+#### BUG-91: `updatePasswordAction` — Kontoübernahme aus jeder beliebigen Sitzung
+**Severity: High** · betrifft **AC-18**, Technical Requirements · **fasst BUG-17 und BUG-90 zusammen**
+
+`src/lib/auth/actions.ts:161-193` prüft nur `getUser()` — nicht, ob es eine **Recovery**-Sitzung ist — und ruft `registerAttempt` **überhaupt nicht** auf. `design.md` → Behaviors & Access sagt ausdrücklich „nur mit gültiger Recovery-Sitzung"; diese Zusage existiert im Code nicht.
+
+Zur Laufzeit gefahren (Lane 2), mit gewöhnlicher Login-Sitzung:
+
+```
+updatePasswordAction mit NORMALER Sitzung -> kein Fehler | status 200
+  Login mit ALTEM Passwort  -> "E-Mail-Adresse oder Passwort ist falsch."
+  Login mit NEUEM Passwort  -> ERFOLG (Sitzung gesetzt)
+12 Aufrufe von EINER IP    -> abgewiesen: 0
+```
+
+Wirkung: Wer eine bestehende Sitzung erreicht — geteiltes Gerät; die Sitzung läuft laut AC-5 und `AUTH_COOKIE_OPTIONS` mit `Max-Age=34560000` bis zum aktiven Logout — übernimmt das Konto endgültig **ohne Kenntnis des alten Passworts** und sperrt den Besitzer aus. Zugleich der einzige Zugangsdaten-Pfad ohne Zähler. **Seit dem 2026-09-04 als BUG-17 dokumentiert und unverändert offen**; die Höherstufung folgt aus dem erstmals gefahrenen Laufzeit-Nachweis der vollständigen Übernahme.
+
+#### BUG-88: Die Begründung von EC-9 ist zum zweiten Mal widerlegt — **bestätigt, mit einer Korrektur**
+**Severity: Medium** · Vertragsdefekt, kein Codefehler · von **beiden** Lanes unabhängig belegt
+
+| Aussage in `spec.md` | Messung |
+| --- | --- |
+| „Bestätigung nur noch **statistisch** möglich — kostet Messreihen statt zweier Anfragen" | **Falsch.** **Eine** Anfrage je Adresse genügt. EC-11: Lane 1 Blindtest **20/20**, 97,9 % über n=48; Lane 2 Blindtest **30/30**, 9,93 Adressen/s. EC-10: 100 % über n=48, überlappungsfreie Verteilungen. Dazu ein **drittes**, deterministisches Ein-Anfragen-Orakel über die Registrierung: Lane 2 **30/30**, 6,72 Adressen/s, ohne Kontoanlage. Das ist **billiger** als die zwei Anfragen von BUG-79, nicht teurer |
+| „Ausgerechnet **derselbe** Konto-Zähler begrenzt Proben **und** Aussperren" | **Halb falsch — hier korrigiert der Nachlauf auch BUG-88 selbst.** Für den **Reset**-Kanal falsch: Sondieren zählt auf `password-reset:account:` (5/Std), Aussperren auf `login:account:` (20/15 min) — getrennte Budgets. Für den **Login**-Kanal (EC-10) trifft die Aussage dagegen **zu**: derselbe Schlüssel. Der Vertrag ist also nicht schlicht falsch, sondern **unzulässig verallgemeinert** |
+
+Laufzeit-Beleg für die Schlüsseltrennung (Lane 2, `public.auth_throttle` nach 3 Reset-Sonden + 3 Fehl-Logins):
+
+```
+ login:account:<adresse>          | 8
+ password-reset:account:<adresse> | 6
+ register:account:<adresse>       | 1
+```
+
+Und die Folge davon, ebenfalls gemessen: 6 Reset-Sonden bis zur Abweisung, **danach Login mit richtigem Passwort von frischer IP erfolgreich** — `login:account:` existierte zu dem Zeitpunkt gar nicht. Sondieren über den Reset kostet **null** vom Aussperr-Budget.
+
+Die Aussagen (3) *Ausheilen* und (4) *kein CAPTCHA* sind bestätigt.
+
+#### BUG-89: EC-11 unterschätzt den eigenen Kanal — **bestätigt und verschärft**
+**Severity: Low → Medium** · Vertragstext
+
+Die **Open Question** aus `spec.md` („Wie breit ist der Kanal **durch die Server Action**?") ist damit beantwortet, und zwar zuungunsten:
+
+| Messung | Konto vorhanden | Adresse erfunden | Trefferquote bei **1** Anfrage |
+| --- | --- | --- | --- |
+| Lane 1, n=24/24 | Median **120,3 ms** | Median **71,1 ms** | 97,9 % · Blindtest **20/20** |
+| Lane 2, n=25/25 | Median **117,2 ms** | Median **83,3 ms** | überlappungsfrei · Blindtest **30/30**, 9,93 Adr./s |
+
+Die absolute Differenz **wächst** durch die Server Action (≈20 ms an der API → ≈49 ms), der relative Abstand schrumpft (Faktor 2,0 → 1,7). Der Vertragssatz „sagt nur, dass der Kanal existiert, nicht wie breit er ist" ist überholt: Der Kanal ist **mit einer einzigen Anfrage je Adresse** nutzbar.
+
+#### BUG-92: Der E2E-Wächter des Reset-Pfades kann **leer grün** werden
+**Severity: Medium** · Test-Konstruktion · von Lane 3 **vorgeführt**, nicht vermutet
+
+`tests/PROJ-1-reset-response.spec.ts:35` hat **keine positive Kontrolle in sich**: Er vergleicht nur echt gegen erfunden und behauptet nirgends, dass die Antwort die *Bestätigung* ist. Antwortet die App-eigene Drosselung **vor** dem bewachten Code, sind alle vier Sonden byte-gleich und alle Cookie-Listen leer — alle drei Vergleiche bestehen, obwohl `actions.ts:143-158` nie lief:
+
+```
+alle 4 Sonden identisch, Rumpf = {"error":"Zu viele Versuche von dieser Verbindung. ..."}
+Anfrage 1/2: status gleich=true  rumpf gleich=true  cookies gleich=true
+Bestaetigungstext im Rumpf? false
+```
+
+Mit **eingebautem Orakel** und einem Host, der `x-forwarded-for` überschreibt — also der **geforderten Schließbedingung von BUG-61**, dem gewünschten Deploy-Zustand, in dem die synthetischen Adressen aus `tests/fixtures.ts:59-75` auf **einen** Zählerschlüssel kollabieren:
+
+```
+--- Orakel M5b eingebaut ---
+  ok  Die Reset-Antwort ist ... identisch (AC-10, EC-3)   <- GRÜN MIT LECK
+  x   Der Reset funktioniert weiterhin ... (AC-10)
+```
+
+Der eigentliche Wächter war grün; rot wurde nur der Begleittest — **mit einer Meldung, die auf ein fehlendes Bestätigungs-Element zeigt, nicht auf ein Leck.** Wer den Begleittest entfernt, umbaut oder überspringt, verliert die Leck-Erkennung, ohne dass etwas rot wird. Dazu hängt der Test am lokalen `max_frequency`-Fenster (1 s; gemessene Sondenabstände 178–381 ms, Marge ≈ 4×) und kippt unter Last **still ins Vakuum statt ins Rot**. Die Klasse hat in zwei Tagen zwei High-Bugs erzeugt.
+
+#### BUG-93: AC-17 und AC-19 haben auf der Verdrahtungsebene **keinen einzigen** Wächter
+**Severity: Medium** · Test-Lücke, kein aktueller Produktdefekt
+
+Drei Mutationen überleben `npm test` **und** `npx playwright test` (Lane 3, in quellgleicher Kopie gefahren):
+
+| ID | Mutation | Wirkung |
+| --- | --- | --- |
+| M1 | `actions.ts:138` · `registerAttempt('password-reset', email)` → `(..., null)` | Konto-Hälfte von **AC-19** tot |
+| M2 | `actions.ts:138` · Scope `'password-reset'` → `'login'` | **AC-17 und AC-19 zugleich** auf Login-Grenzwerte umgestellt |
+| **M3** | `actions.ts:138-141 + :158` · Zähl-Block **hinter** den Versand verschieben | **neu.** Der Zähler zählt weiter, verhindert den Versand aber nicht mehr — genau die Sache, die AC-17/AC-19 begrenzen („Begrenzt ist der Versand selbst") |
+
+`actions.test.ts` prüft nie die **Argumente** von `registerAttempt`, `throttle.test.ts` ruft die Funktion direkt mit dem richtigen Scope auf, und ein E2E-Test für die Reset-Drosselung existiert nicht. M1/M2 entsprechen N24/N3 aus dem Vorlauf und sind damit **zum zweiten Mal offen**.
+
+#### BUG-94: `npm test` allein deckt die N23-Klasse auf dem Reset-Pfad nicht ab
+**Severity: Medium** · Prozess/Test-Lücke
+
+Vom Owner selbst gemessen: mit vollständig wiederhergestelltem Kontoexistenz-Orakel **209/209 grün**. `actions.test.ts` erreicht `actions.ts:143-158` in **keinem** Test — die einzige Reset-Zusicherung dort mockt `registerAttempt` auf `allowed: false` und kehrt vorher um. **Wer vor einem Commit nur `npm test` fährt, sieht BUG-87 nicht wiederkommen.**
+
+#### BUG-95: EC-4 nennt für den Reset-Pfad die falschen Ausheilzeiten
+**Severity: Low** · Vertragstext
+
+`spec.md` sagt „60 Sekunden bei der Verbindung, 15 Minuten beim Konto". Für den Reset gilt **300 s** (`passwordResetPerIp`, `throttle.ts:26`) und **3600 s** (`passwordResetPerAccount`, `:61`). Gemessen: nach 4 Reset-Anfragen war die Verbindung nach 60 s **noch** gesperrt, erst nach ~5 min frei. EC-4 ist generisch formuliert, nennt aber nur die Login-Zahlen.
+
+#### BUG-96: AC-8 formuliert die Erstattung so, als gälte sie auch für die Registrierung
+**Severity: Low** · Vertragswiderspruch zwischen AC-8 und AC-17
+
+Gemessen: **5 erfolgreiche Registrierungen** von einer Verbindung, die 6. abgewiesen — bei der Registrierung zählt auch der Erfolg. So gewollt (AC-17, BUG-47), aber AC-8 allein gelesen sagt das Gegenteil.
+
+#### BUG-97: „Stattdessen einloggen" erscheint bei **jedem** E-Mail-Feldfehler
+**Severity: Low** · `src/components/auth/register-view.tsx:105`
+
+Geprüft wird nur `form.formState.errors.email`. Wer sich bei der Adresse **vertippt**, bekommt den Vorschlag, sich stattdessen einzuloggen — in ein Konto, das es nicht gibt. AC-3 verlangt den Link nur für den Duplikat-Fall. Nur an der Quelle geprüft.
+
+#### BUG-98: Trainername wird vor der Prüfung getrimmt, EC-5 sagt „Leerzeichen ⇒ abgelehnt"
+**Severity: Low** · `src/lib/validation/auth.ts:4-7`
+
+`"  QaTrim_1788716000  "` wird angenommen und als `QaTrim_1788716000` gespeichert. Innenliegende Leerzeichen werden korrekt abgelehnt. Fachlich vermutlich gewollt, steht so aber nicht im Vertrag.
+
+#### BUG-99: `auth_throttle.key` wird ungeprüft aus `x-forwarded-for` gebaut
+**Severity: Low** · Speicher-/Kostenvektor · `src/lib/auth/throttle.ts:92-98`
+
+Ein 4000 Zeichen langer Header erzeugt anstandslos eine Zeile mit 4000-Zeichen-Schlüssel. Die Tabelle ist damit von außen mit beliebig vielen, beliebig großen Zeilen befüllbar; aufgeräumt wird erst nach einer Stunde und nur verkehrsabhängig (`0005`). Hängt an derselben Wurzel wie BUG-61.
+
+#### Bestätigt, unverändert offen
+- **BUG-61** (Deploy-Blocker) — Passwort-Spraying **40 Versuche gegen 20 Konten, rotierender Header → 0 abgewiesen, 5,5 s**; Kontrolle von fester IP: **36 von 40 abgewiesen**. Der Zähler funktioniert, sein Schlüssel ist angreiferkontrolliert. Massenregistrierung **30 Konten in 9,5 s**
+- **BUG-12** — keiner von `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `HSTS`, `CSP` gesetzt; kein `headers()`-Block in `next.config.ts`
+- **BUG-18** — `X-Forwarded-Host` hebelt die Origin-Prüfung aus, erstmals auf einem **PROJ-1**-Credential-Pfad reproduziert (`Origin evil` → 500, `Origin evil + X-Forwarded-Host: evil` → 200)
+- **BUG-77** — `origin` ungeprüft in `redirectTo` (`actions.ts:143-144`)
+- **T18** — offene `[user]`-Aufgabe auf dem Reset-Pfad, von beiden Lanes nach Skill-Regel als **High** gemeldet; deploy-blockiert durch fehlenden SMTP
+
+### Regression und automatisierte Tests
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| **Test** | ✅ 20 Dateien, **209/209**, Exit 0 |
+| **Lint** | ✅ 0 Fehler, 0 Warnungen, Exit 0 |
+| **Build** | ✅ Exit 0 — in quellgleicher Kopie gefahren, weil `next build` und der laufende `next dev` sich `.next` teilen |
+| **E2E** | ✅ **39/39 in drei Engines, zwei vollständige Läufe** (53,2 s / 55,2 s), kein Flake, nichts nachinstalliert |
+
+**0 Regressionen an PROJ-2.** RLS auf allen drei Tabellen **zur Laufzeit mit zwei echten Konten** geprüft: A liest B's `runs` → `[]`; A löscht B's Run → 204, Run **noch da**; A patcht B's Trainernamen → 200, Name **unverändert**. Funktions-Grants eng (anon 401, angemeldet 403), beide Trigger aktiv, alle Indizes vorhanden, **kein Schema-Drift** (6/6 Migrationen). Aufräum-Mechanik trägt: 1754 Zeilen, **0 älter als eine Stunde**.
+
+### Unit-Tests aus diesem Lauf
+
+**Keine geschrieben** — und diesmal mit einem konkreten Ziel statt einer Begründung: Die Lücke sitzt nicht in einer Funktion, sondern in der **Verdrahtung** (BUG-93, BUG-94). Ein sinnvoller Test prüft die **Argumente** von `registerAttempt` in `requestPasswordResetAction` und die **Reihenfolge** von Zählen und Versenden. Das gehört in den `/build`-Durchgang, der BUG-93 schließt, mit den drei Mutationen M1/M2/M3 als Abnahmekriterium.
+
+### Security-Audit — Zusammenfassung
+
+**Verifiziert: 9 Prüfungen** — Auth-Bypass (Redirects korrekt), Authorization (RLS zur Laufzeit, beide Richtungen), Input-Injection (XSS/SQLi/CRLF sämtlich an der Zod-Grenze abgewiesen, nichts erreicht die DB), Brute-Force auf Zugangsdaten (Zähler greifen, Grenzen wie zugesagt), Meldungsgleichheit beim Login, exponierte Geheimnisse (27 ausgelieferte Antworten + gebautes `.next/static`, **0 Treffer**, mit Positivkontrolle), sensible Daten in Antworten (keine Adresse, keine Tokens, keine UUIDs), Credentials in URLs (alle vier Formulare `method="post"`), Kontoexistenz über den Reset-Pfad (**geschlossen**).
+
+**`[!] NOT VERIFIED: 8** — siehe unten. Die wichtigste davon ist die Schließbedingung von BUG-61, die eine echte Live-URL braucht; `deploy` in `.ai-eng-kit` steht auf `null`.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser jenseits der drei Playwright-Engines, responsive Darstellung (375/768/1440 px), DevTools** — kein Browser-Engine in `/qa`
+- [!] **AC-13 „ohne dass die Seite neu lädt", AC-14/AC-15 als gerendertes Ergebnis, EC-6 UI-Hälfte** — Client-Verhalten bzw. Layout
+- [!] **AC-18 zur Laufzeit** — der Zähler war ohne Eingriff in die laufende Datenbank nicht ausfallbar zu machen; Code (`throttle.ts:116`) und `throttle.test.ts:111` belegen die Richtung
+- [!] **AC-8, IP-Vorbedingung** (Host setzt `x-forwarded-for` und verwirft Client-Werte) — nur gegen die echte Live-URL messbar, **BUG-61**
+- [!] **AC-11 / AC-12 / EC-7 gegen das gehostete Projekt** (Site URL, Redirect URLs, Mail-Vorlage T18)
+- [!] **Supabases eingebaute Rate-Limit-Ebene** — lokal nicht auslösbar
+- [!] **`Secure`-Flag am Session-Cookie** — greift erst bei `NODE_ENV=production`
+- [!] **Wirksamkeit des Reset-Wächters im gehosteten Projekt** — nur lokal gemessen (`max_frequency` 1 s statt 60 s); die Richtung der Verschiebung ist abgeleitet, nicht gemessen
+- [!] **Visuelle Regressionen an gemeinsamen Komponenten** — kein Viewport, keine Screenshots
+
+### Production-Ready-Entscheidung
+
+**NOT READY.** Kein Critical. **Zwei High:** BUG-91 (Kontoübernahme über `updatePasswordAction`) und T18 nach Skill-Regel; dazu der unverändert offene Deploy-Blocker BUG-61. Ferner 5 Medium (BUG-88, BUG-89, BUG-92, BUG-93, BUG-94) und 5 Low (BUG-95 … BUG-99).
+
+**Was dieser Lauf positiv festhält:** BUG-87 ist geschlossen, und zwar erstmals mit einem Wächter, dessen Rot-Zustand von einem Kontext nachgewiesen wurde, der den Fix nicht gebaut hat. Die Kette „Fix → eigener Wächter → nächster Lauf findet dasselbe Orakel wieder" ist damit unterbrochen.
+
+**Was offen bleibt:** Der schwerste Befund ist nicht mehr das Orakel, sondern **BUG-91** — eine vollständige Kontoübernahme, seit dem 2026-09-04 als BUG-17 dokumentiert und dreimal überrollt worden. Und die Test-Lücke hat sich verlagert, nicht geschlossen: Sie sitzt jetzt sichtbar in der **Verdrahtung** der Reset-Drosselung (BUG-93) und in einem Wächter, der unter der gewünschten Deploy-Konfiguration leer grün werden kann (BUG-92).
