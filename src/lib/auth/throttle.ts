@@ -73,6 +73,28 @@ export const LIMITS = {
    * weit — und eng genug, dass eine einzelne Quelle das Kontingent nicht leert.
    */
   tokenConfirmPerIp: { limit: 10, windowSeconds: 900 },
+  /**
+   * Das **Setzen** des neuen Passworts (BUG-91).
+   *
+   * `updatePasswordAction` war der einzige Zugangsdaten-Pfad ohne jeden Zähler —
+   * gemessen im QA-Nachlauf vom 2026-09-06: 12 Aufrufe von einer Verbindung, null
+   * abgewiesen. Das widersprach der Zusage in `spec.md` → Technical Requirements,
+   * die Drosselung sitze **in den Server Actions**, und ließ AC-18 auf diesem Pfad
+   * ins Leere laufen.
+   *
+   * Der Zweck ist derselbe wie bei `tokenConfirmPerIp`, nicht das Erraten eines
+   * Passworts: Jeder Aufruf löst ein `getUser()` und ein `updateUser()` gegen
+   * Supabase aus, deren gemeinsames Kontingent wegen der Server-Action-Architektur
+   * für alle Spieler an derselben Server-IP hängt (BUG-21).
+   *
+   * **Keine E-Mail-Adresse, also nur der Verbindungs-Zähler:** Die Adresse steht
+   * erst nach der Sitzungsprüfung fest, und die soll hinter der Drosselung liegen,
+   * nicht davor.
+   *
+   * 10 je 15 Minuten, dieselbe Zahl wie beim Einlösen: Wer ein Passwort setzt, tut
+   * es ein- oder zweimal; die Grenze ist für einen Menschen unerreichbar weit.
+   */
+  passwordUpdatePerIp: { limit: 10, windowSeconds: 900 },
 } as const
 
 type Limit = { limit: number; windowSeconds: number }
@@ -117,7 +139,12 @@ async function count(key: string, { limit, windowSeconds }: Limit): Promise<bool
   return data === true
 }
 
-export type ThrottleScope = 'login' | 'register' | 'password-reset' | 'token-confirm'
+export type ThrottleScope =
+  | 'login'
+  | 'register'
+  | 'password-reset'
+  | 'token-confirm'
+  | 'password-update'
 
 /** Welche Grenze für welchen Vorgang gilt — an einer Stelle, statt verstreut. */
 function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
@@ -129,6 +156,11 @@ function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
       // der Prüfung. Der Konto-Wert steht hier nur, damit der Rückgabetyp
       // vollständig ist; `registerAttempt` benutzt ihn ohne E-Mail nie.
       return { ip: LIMITS.tokenConfirmPerIp, account: LIMITS.credentialsPerAccount }
+    case 'password-update':
+      // Wie beim Einlösen ist hier keine Adresse bekannt: Sie steht erst fest,
+      // nachdem die Sitzung geprüft wurde — und diese Prüfung liegt bewusst
+      // **hinter** der Drosselung. Der Konto-Wert bleibt ungenutzt.
+      return { ip: LIMITS.passwordUpdatePerIp, account: LIMITS.credentialsPerAccount }
     default:
       return { ip: LIMITS.credentialsPerIp, account: LIMITS.credentialsPerAccount }
   }

@@ -14,20 +14,38 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
  * gefragt werden** — und was der Nutzer am Ende sieht.
  */
 
-const { registerAttempt, settleSuccessfulLogin, isTrainerNameTaken, signUp, updateUser, getUser } =
-  vi.hoisted(() => ({
-    registerAttempt: vi.fn(),
-    settleSuccessfulLogin: vi.fn(),
-    isTrainerNameTaken: vi.fn(),
-    signUp: vi.fn(),
-    updateUser: vi.fn(),
-    getUser: vi.fn(),
-  }))
+const {
+  registerAttempt,
+  settleSuccessfulLogin,
+  isTrainerNameTaken,
+  signUp,
+  updateUser,
+  getUser,
+  getClaims,
+  signInWithPassword,
+  requestPasswordResetIdentically,
+} = vi.hoisted(() => ({
+  registerAttempt: vi.fn(),
+  settleSuccessfulLogin: vi.fn(),
+  isTrainerNameTaken: vi.fn(),
+  signUp: vi.fn(),
+  updateUser: vi.fn(),
+  getUser: vi.fn(),
+  getClaims: vi.fn(),
+  signInWithPassword: vi.fn(),
+  requestPasswordResetIdentically: vi.fn(),
+}))
 
 vi.mock('@/lib/auth/throttle', () => ({ registerAttempt, settleSuccessfulLogin }))
 vi.mock('@/lib/auth/trainer-name', () => ({ isTrainerNameTaken }))
+vi.mock('@/lib/auth/reset-response', () => ({
+  requestPasswordResetIdentically,
+  RESET_REQUEST_RESPONSE: { message: 'bestaetigung' },
+}))
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: async () => ({ auth: { signUp, updateUser, getUser } }),
+  createClient: async () => ({
+    auth: { signUp, updateUser, getUser, getClaims, signInWithPassword },
+  }),
 }))
 vi.mock('next/headers', () => ({ headers: async () => ({ get: () => null }) }))
 vi.mock('next/navigation', () => ({
@@ -48,12 +66,26 @@ import {
   SAME_PASSWORD_MESSAGE,
   THROTTLED_MESSAGE,
   THROTTLED_ACCOUNT_MESSAGE,
+  INVALID_RESET_LINK_MESSAGE,
 } from './error-mapping'
+
+/** Der `amr`-Anspruch, an dem `updatePasswordAction` die Recovery-Sitzung erkennt. */
+function sitzungMit(methode: string) {
+  return { data: { claims: { amr: [{ method: methode, timestamp: 1 }] } } }
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
   registerAttempt.mockResolvedValue({ allowed: true, blockedBy: null })
   getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+  // Standard ist die **Recovery**-Sitzung: Die bestehenden Wächter unten prüfen
+  // die Fehlerzuordnung, nicht den Sitzungstyp, und sollen daran nicht scheitern.
+  getClaims.mockResolvedValue(sitzungMit('otp'))
+  requestPasswordResetIdentically.mockResolvedValue({ message: 'bestaetigung' })
+  // Standard ist der **fehlgeschlagene** Login: Er endet mit einer Rückgabe statt
+  // mit einem Redirect, sodass ein Wächter die Verdrahtung prüfen kann, ohne den
+  // Erfolgspfad mit abzuwickeln.
+  signInWithPassword.mockResolvedValue({ error: { status: 400, code: 'invalid_credentials' } })
 })
 
 function registerForm(trainerName = 'AshKetchum') {
@@ -196,5 +228,122 @@ describe('updatePasswordAction — benutzt die eigene Zuordnung (BUG-66, BUG-75)
 
     expect(result.error).toBe(NETWORK_ERROR_MESSAGE)
     expect(result.fieldErrors).toBeUndefined()
+  })
+})
+
+/**
+ * Die **Verdrahtung der Drosselung** (BUG-93).
+ *
+ * Warum es diesen Block gibt: Der QA-Nachlauf vom 2026-09-06 hat drei Mutationen
+ * gefahren, die `npm test` **und** die E2E-Suite überlebt haben — alle drei in
+ * `actions.ts`, alle drei an der Stelle, an der die Drosselung *verdrahtet* wird:
+ *
+ * - **M1** `registerAttempt('password-reset', null)` → die Konto-Hälfte von AC-19
+ *   ist tot, ohne dass etwas rot wird
+ * - **M2** Scope `'login'` statt `'password-reset'` → AC-17 und AC-19 laufen
+ *   plötzlich auf den Login-Grenzwerten
+ * - **M3** der Zähl-Block wandert **hinter** den Versand → gezählt wird weiter,
+ *   verhindert wird nichts; genau das, was AC-17/AC-19 begrenzen sollen
+ *
+ * `throttle.test.ts` ruft `registerAttempt` direkt mit dem richtigen Scope auf und
+ * kann das nicht sehen. Hier steht deshalb nicht, **ob** der Zähler funktioniert,
+ * sondern **womit er gerufen wird und wann** — dieselbe Lehre wie bei BUG-75,
+ * diesmal auf die Argumente und die Reihenfolge angewandt.
+ */
+describe('Die Drosselung ist richtig verdrahtet (BUG-93)', () => {
+  function resetForm(email = 'ash@example.com') {
+    const fd = new FormData()
+    fd.set('email', email)
+    return fd
+  }
+
+  function loginForm() {
+    const fd = new FormData()
+    fd.set('email', 'ash@example.com')
+    fd.set('password', 'LangGenug1')
+    return fd
+  }
+
+  // Fängt M1 (Adresse → null) und M2 (Scope → 'login') zugleich.
+  it('zählt den Passwort-Reset unter dem eigenen Scope und mit der Adresse (M1, M2)', async () => {
+    await requestPasswordResetAction({}, resetForm())
+
+    expect(registerAttempt).toHaveBeenCalledWith('password-reset', 'ash@example.com')
+  })
+
+  /**
+   * Fängt M3. Die Reihenfolge ist die eigentliche Zusage von AC-17/AC-19:
+   * „Begrenzt ist der Versand selbst." Ein Zähler, der erst hinterher zählt,
+   * erfüllt den Wortlaut und verfehlt den Zweck.
+   */
+  it('verschickt nichts mehr, sobald die Drosselung abgewiesen hat (M3)', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'account' })
+
+    await requestPasswordResetAction({}, resetForm())
+
+    expect(requestPasswordResetIdentically).not.toHaveBeenCalled()
+  })
+
+  it('zählt den Login unter dem Login-Scope und mit der Adresse', async () => {
+    await loginAction({}, loginForm())
+
+    expect(registerAttempt).toHaveBeenCalledWith('login', 'ash@example.com')
+  })
+
+  it('zählt die Registrierung unter dem Register-Scope und mit der Adresse', async () => {
+    await registerAction({}, registerForm())
+
+    expect(registerAttempt).toHaveBeenCalledWith('register', 'ash@example.com')
+  })
+
+  it('zählt das Setzen des Passworts unter dem eigenen Scope (BUG-91)', async () => {
+    await updatePasswordAction({}, passwordForm())
+
+    expect(registerAttempt).toHaveBeenCalledWith('password-update', null)
+  })
+})
+
+/**
+ * **BUG-91** — `updatePasswordAction` war der einzige Zugangsdaten-Pfad, der
+ * jede beliebige Sitzung akzeptierte und überhaupt nicht zählte. Gemessen am
+ * 2026-09-06: Mit einer gewöhnlichen Login-Sitzung ließ sich das Passwort setzen,
+ * ohne das alte zu kennen (danach war das alte ungültig und das neue gültig), und
+ * 12 Aufrufe von einer Verbindung wurden alle durchgelassen.
+ */
+describe('updatePasswordAction verlangt eine Recovery-Sitzung und zählt (BUG-91)', () => {
+  it('lehnt eine gewöhnliche Login-Sitzung ab, ohne das Passwort zu ändern', async () => {
+    getClaims.mockResolvedValue(sitzungMit('password'))
+
+    const result = await updatePasswordAction({}, passwordForm())
+
+    expect(result.error).toBe(INVALID_RESET_LINK_MESSAGE)
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('lehnt auch eine Sitzung ohne jeden amr-Anspruch ab', async () => {
+    getClaims.mockResolvedValue({ data: { claims: {} } })
+
+    const result = await updatePasswordAction({}, passwordForm())
+
+    expect(result.error).toBe(INVALID_RESET_LINK_MESSAGE)
+    expect(updateUser).not.toHaveBeenCalled()
+  })
+
+  it('lässt die Recovery-Sitzung durch', async () => {
+    getClaims.mockResolvedValue(sitzungMit('otp'))
+    updateUser.mockResolvedValue({ error: null })
+
+    await expect(updatePasswordAction({}, passwordForm())).rejects.toThrow('REDIRECT:/')
+    expect(updateUser).toHaveBeenCalled()
+  })
+
+  it('weist ab, sobald die Drosselung greift — vor jedem Supabase-Aufruf', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false, blockedBy: 'connection' })
+
+    const result = await updatePasswordAction({}, passwordForm())
+
+    expect(result.error).toBe(THROTTLED_MESSAGE)
+    expect(getUser).not.toHaveBeenCalled()
+    expect(updateUser).not.toHaveBeenCalled()
   })
 })

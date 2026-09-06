@@ -2,6 +2,7 @@ import Link from 'next/link'
 
 import { ResetPasswordForm } from '@/components/auth/reset-password-form'
 import { createClient } from '@/lib/supabase/server'
+import { hasRecoverySession } from '@/lib/auth/recovery-session'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -33,7 +34,13 @@ export default async function ResetPasswordPage({
 
   // spec.md AC-12: link missing, invalid, expired or already used. /auth/confirm
   // sets ?error=1 for the first three; no session covers the rest.
-  const isInvalid = error === '1' || !user
+  //
+  // BUG-91: Eine Sitzung allein reicht auch hier nicht. Vorher bekam **jeder**
+  // Angemeldete das Formular zu sehen — seit `updatePasswordAction` eine echte
+  // Recovery-Sitzung verlangt, wäre das ein Formular, das nur noch scheitern kann.
+  // Die Sicherheitsgrenze ist und bleibt die Server Action; diese Zeile sorgt
+  // dafür, dass die Seite dasselbe sagt wie sie, statt in eine Sackgasse zu führen.
+  const isInvalid = error === '1' || !user || !(await hasRecoverySession(supabase))
 
   return (
     // BUG-5: siehe login/page.tsx — die App-Shell liefert seit PROJ-2 das main-Element.

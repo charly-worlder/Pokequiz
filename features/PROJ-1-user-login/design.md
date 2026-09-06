@@ -468,3 +468,57 @@ Die Lehre in einem Satz: **Der Rückgabewert einer Funktion ist nicht die Antwor
 
 
 
+
+### Nachtrag 2026-09-06 (zweiter Build des Tages) — BUG-91 und BUG-93
+
+Zwei Befunde aus dem QA-Nachlauf, gemeinsam gebaut, weil sie dieselbe Wurzel haben: **eine Zusage, die nur im Design stand, und ein Test-Netz, das die Verdrahtung nicht abdeckte.**
+
+#### BUG-91 — `updatePasswordAction` verlangt jetzt eine echte Recovery-Sitzung und zählt
+
+Die Zeile „Neues Passwort setzen … **nur mit gültiger Recovery-Sitzung**" steht seit dem 2026-08-31 in Behaviors & Access. Im Code stand davon nichts: Geprüft wurde `getUser()`, also nur *ob* jemand angemeldet ist, nicht *wie*. Dazu war es der einzige Zugangsdaten-Pfad ohne Zähler.
+
+**Woran eine Recovery-Sitzung erkennbar ist — gemessen, nicht angenommen.** Gegen die lokale Instanz mit demselben `supabase-js`, das die App benutzt:
+
+| Weg | `amr` im JWT |
+| --- | --- |
+| `signInWithPassword` | `[{ method: 'password' }]` |
+| `verifyOtp({ type: 'recovery' })` | `[{ method: 'otp' }]` |
+
+Der Anspruch steht **im signierten Token**. Ein selbstgesetztes Merker-Cookie wäre die naheliegende Alternative gewesen und ausgerechnet auf dem **geteilten Gerät** manipulierbar — also genau dort, wogegen dieser Schutz gerichtet ist. Gelesen wird er über `supabase.auth.getClaims()` (`src/lib/auth/recovery-session.ts`).
+
+**Die Grenze, ausgeschrieben:** `otp` deckt bei Supabase auch Magic Link und E-Mail-OTP ab. Diese App hat beides nicht — `spec.md` kennt ausschließlich Passwort-Login (AC-4) und Passwort-Reset (AC-10 ff.). Käme je einer dieser Wege dazu, trägt `otp` allein nicht mehr und die Prüfung muss enger werden. Das steht auch im Kopf von `recovery-session.ts`, damit es beim Einbau eines Magic Links auffällt.
+
+**Zwei Ebenen, eine Grenze.** Die Sicherheitsgrenze ist und bleibt die Server Action. `src/app/reset-password/page.tsx` prüft dasselbe zusätzlich, damit ein gewöhnlich Angemeldeter nicht ein Formular sieht, das nur noch scheitern kann — das ist Bedienbarkeit, kein zweiter Schutz.
+
+**Laufzeit-Nachweis** (echte Server Action, echte Sitzung, echte Datenbank; die Angriffsanfrage ist die abgefangene Anfrage eines legitimen Resets, wiederholt mit dem Cookie-Glas einer gewöhnlichen Login-Sitzung):
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Seite `/reset-password` mit gewöhnlicher Login-Sitzung | Formular **nicht** sichtbar, zeigt „ungültig oder abgelaufen" |
+| Legitimer Reset über den Mail-Link (AC-11) | funktioniert unverändert, neues Passwort gilt |
+| **Angriff: `updatePasswordAction` mit Login-Sitzung** | **abgewiesen** (`INVALID_RESET_LINK_MESSAGE`); Angriffspasswort gilt **nicht**, das vorherige gilt **weiter** |
+| Drosselung, 15 Aufrufe von einer Verbindung | **8 abgewiesen** — vorher 0 von 12 |
+
+**Die Meldung ist bewusst dieselbe wie bei AC-12** („Dieser Link ist ungültig oder abgelaufen"). Wer ohne gültigen Reset-Link hier ankommt, bekommt damit genau die richtige Abhilfe angeboten — „Neuen Link anfordern" —, statt einer neuen Fehlerklasse, die im Vertrag nicht steht.
+
+#### BUG-93 — die Verdrahtung der Drosselung hat jetzt Wächter
+
+`throttle.test.ts` ruft `registerAttempt` direkt mit dem richtigen Scope auf und kann deshalb nicht sehen, **womit** die Actions sie rufen. Der QA-Nachlauf hat das mit drei Mutationen belegt, die beide Suiten überlebten. Die neuen Wächter in `actions.test.ts` prüfen nicht mehr, *ob* der Zähler funktioniert, sondern **womit er gerufen wird und wann**.
+
+**Rot-Nachweis — jede Mutation eingebaut, Suite gefahren, Originalstand wiederhergestellt:**
+
+| Mutation | Wirkung | Suite |
+| --- | --- | --- |
+| **M1** `registerAttempt('password-reset', null)` | Konto-Hälfte von AC-19 tot | 🔴 rot |
+| **M2** Scope `'login'` statt `'password-reset'` | AC-17 und AC-19 zugleich auf Login-Grenzwerten | 🔴 rot |
+| **M3** Zähl-Block hinter den Versand verschoben | zählt weiter, verhindert nichts — der Zweck von AC-17/AC-19 | 🔴 rot |
+| **M14a** `hasRecoverySession` gibt immer `true` | BUG-91 zurück, in der Funktion | 🔴 rot |
+| **M14b** die Action fragt gar nicht mehr | BUG-91 zurück, in der **Verdrahtung** (N23-Klasse) | 🔴 rot |
+| **M15** Drosselung aus `updatePasswordAction` entfernt | AC-18 auf diesem Pfad tot | 🔴 rot |
+
+**M14a und M14b sind bewusst getrennt.** Genau diese Trennung — die Funktion entscheidet richtig, aber niemand prüft, ob die Action sie fragt — hat BUG-75, BUG-87 und BUG-91 erzeugt. Ein Wächter nur auf der Funktion hätte M14b durchgelassen.
+
+#### Was dabei offen bleibt
+
+- **Die Grenzwerte des neuen Scopes stehen nicht im Vertrag.** `passwordUpdatePerIp` ist 10 je 15 Minuten, dieselbe Zahl wie beim Einlösen (AC-20). AC-18 nennt keine Zahlen, und `spec.md` ist während `/build` read-only. Die Zahl ist in `throttle.ts` begründet und durch `M15` bewacht — aber sie ist eine **Entscheidung ohne Kriterium**, genau die Klasse, die im Vorlauf als N22/N31 auffiel. Gehört per `/refine` in AC-18 nachgetragen.
+- **Kein E2E-Test für den Angriffspfad.** Der Laufzeit-Nachweis oben lief als einmaliges Skript, nicht als dauerhafter Wächter. Die Unit-Ebene deckt beide Mutationsklassen ab; ein Browser-Test dafür gehört zu `/e2e-tests`, nicht hierher.

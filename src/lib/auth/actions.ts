@@ -22,6 +22,7 @@ import {
 } from '@/lib/auth/error-mapping'
 import { isTrainerNameTaken } from '@/lib/auth/trainer-name'
 import { requestPasswordResetIdentically } from '@/lib/auth/reset-response'
+import { hasRecoverySession } from '@/lib/auth/recovery-session'
 
 export type { ActionState }
 
@@ -168,6 +169,17 @@ export async function updatePasswordAction(
     return { fieldErrors: fieldErrorsFromZod(parsed.error.issues) }
   }
 
+  // BUG-91: gezählt wird **vor** jedem Supabase-Aufruf, wie auf allen anderen
+  // Zugangsdaten-Pfaden. Diese Action war die einzige ohne Zähler (gemessen:
+  // 12 Aufrufe von einer Verbindung, null abgewiesen), obwohl jeder Aufruf ein
+  // `getUser()` und ein `updateUser()` gegen das gemeinsame Kontingent des
+  // Auth-Dienstes auslöst (BUG-21). Ohne E-Mail-Adresse, weil die erst nach der
+  // Sitzungsprüfung feststeht — und die soll hinter der Drosselung liegen.
+  const updateThrottle = await registerAttempt('password-update', null)
+  if (!updateThrottle.allowed) {
+    return { error: throttleMessage(updateThrottle.blockedBy) }
+  }
+
   let supabase
   try {
     supabase = await createClient()
@@ -180,6 +192,32 @@ export async function updatePasswordAction(
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) {
+    return { error: INVALID_RESET_LINK_MESSAGE }
+  }
+
+  // BUG-91: **eine Sitzung genügt nicht — es muss eine Recovery-Sitzung sein.**
+  //
+  // `design.md` → Behaviors & Access sagt „nur mit gültiger Recovery-Sitzung";
+  // im Code stand davon nichts. Gemessen wurde die Folge am 2026-09-06: Mit einer
+  // gewöhnlichen Login-Sitzung ließ sich das Passwort setzen, ohne das alte zu
+  // kennen — das alte war danach ungültig, das neue funktionierte. Wer ein
+  // angemeldetes Gerät erreicht, übernimmt damit das Konto endgültig, und die
+  // Sitzung lebt laut AC-5 bis zum aktiven Abmelden (`Max-Age=34560000`).
+  //
+  // **Woran eine Recovery-Sitzung erkennbar ist:** am `amr`-Anspruch des JWT.
+  // Gegen die lokale Instanz gemessen — `signInWithPassword` ergibt
+  // `amr: [{method: 'password'}]`, `verifyOtp({type:'recovery'})` ergibt
+  // `amr: [{method: 'otp'}]`. Der Anspruch steht **im signierten Token**, ist also
+  // nicht fälschbar; ein selbstgesetztes Merker-Cookie wäre genau auf dem
+  // geteilten Gerät manipulierbar, gegen das dieser Schutz gerichtet ist.
+  //
+  // `otp` deckt bei Supabase auch Magic Link und E-Mail-OTP ab — beides hat diese
+  // App nicht (`spec.md` kennt nur Passwort-Login und Passwort-Reset). Käme je
+  // eines dazu, muss diese Prüfung enger werden.
+  if (!(await hasRecoverySession(supabase))) {
+    // Bewusst dieselbe Meldung wie bei einer fehlenden Sitzung (AC-12): Wer
+    // hierher kommt, hat keinen gültigen Reset-Link — und die Seite bietet ihm
+    // genau die richtige Abhilfe an, „Neuen Link anfordern".
     return { error: INVALID_RESET_LINK_MESSAGE }
   }
 
