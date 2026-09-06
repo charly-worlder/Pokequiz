@@ -1281,3 +1281,189 @@ Der Rot-Nachweis im vorherigen Nachtrag war korrekt, aber **eine Ebene zu tief a
 **Drei Dinge gehören außerdem in den Vertrag statt in einen Bugreport:** die Zahlen in **EC-10** sind maschinenabhängig und zu eng formuliert; die **Konto-Grenze des Reset-Pfads** (BUG-76) steht in keinem Kriterium; und ob `/auth/confirm` gedrosselt sein muss, ist eine Frage an AC-11/AC-12, die der Vertrag nicht beantwortet.
 
 `features/INDEX.md` bleibt bei **In Review**.
+
+---
+
+## QA-Lauf — 2026-09-06, nach AC-19/AC-20 und dem BUG-67-Fix
+
+**Anlass:** AC-19 und AC-20 waren erstmals gebaut und nie unabhängig geprüft; BUG-67, BUG-74 und BUG-75 wurden in derselben Sitzung behoben, in der sie gefunden worden waren. Schwerpunktfrage des Nutzers: **Gibt die neue, ursachenbezogene Sperrmeldung irgendwo Informationen preis?**
+
+**App URL:** `http://localhost:3000` · **Tester:** drei `qa-engineer`-Sub-Agenten mit disjunktem Scope und sauberem Kontext. Lane 2 bekam die Schwerpunktfrage **offen** gestellt — mit den zu prüfenden Angriffsflächen, aber ohne vorweggenommenes Ergebnis.
+
+### Ergebnis in einem Satz
+
+**Die neue Meldung ist sauber — aber zwei Lanes haben unabhängig voneinander ein Kontoexistenz-Orakel im Zweig daneben gefunden, das älter ist als der Fix und AC-10 sowie EC-3 im Wortlaut bricht.** Dazu deckt ein Mutationstest über 32 Fälle auf, dass die Tests aus dem letzten Build zwei von fünf Aufrufstellen bewachen — die drei übrigen nicht.
+
+### Die Schwerpunktfrage, einzeln beantwortet
+
+Alle fünf Teilfragen an der laufenden App gemessen, nicht aus dem Code abgeleitet:
+
+| Frage | Antwort | Beleg |
+|---|---|---|
+| Verrät die Unterscheidung Verbindung/Adresse die **Kontoexistenz**? | **Nein** | Beide Pfade, existierende gegen frei erfundene Adresse: Reset je 5 durch, ab der 6. `ACCOUNT`; Login je exakt 20 durch, ab der 21. `ACCOUNT`. Der Zähler zählt Adressen ohne Konto identisch mit |
+| Neuer **Zeitseitenkanal**? | **Nein** | Im gesperrten Zustand Median 108 ms (existierend) gegen 106 ms (erfunden) — 2 ms. Der EC-10-Kanal **verschwindet** dort sogar, weil Supabase gar nicht mehr angerufen wird |
+| **Zählerstand** ablesbar? | **Ja, exakt** — BUG-84, Low | Fremdverbrauch korrekt bestimmt (2 von 5 belegt → 3 gingen durch; unbelastet → 5) |
+| Was erfährt ein **Erstkontakt** mit sofortiger Adressmeldung? | Dass Dritte die Adresse im laufenden Fenster bearbeitet haben — **keine** Kontoexistenz | Erstkontakt von unbelasteter IP (`attempts = 1`) nach 5 fremden Anfragen → `ACCOUNT` |
+| Systematisches **Orakel**? | **Ja — aber aus dem Zweig daneben**, nicht aus der Unterscheidung | BUG-79, siehe unten |
+
+**Die Antwort auf die gestellte Frage lautet also: Nein, die neue Meldung leckt nicht.** Der Befund liegt daneben und wurde durch den Fix weder verursacht noch verschärft.
+
+### Acceptance Criteria
+
+Alle geprüft. **Bestanden: AC-1 bis AC-8, AC-11 bis AC-20.** **Fehlgeschlagen: AC-10** (siehe BUG-79).
+
+Hervorzuheben:
+
+- **AC-20 — entscheidend belegt, von beiden Lanes unabhängig.** Der `Location`-Header taugt nicht als Beleg, weil die Abweisung laut Vertrag absichtlich wie ein abgelaufener Link aussieht. Beide Lanes lösten das gleich: echten Token aus dem Postfach ziehen, Verbindung bis an die Grenze füllen, dann den **gültigen** Token von dort abweisen lassen (kein `Set-Cookie`) und **denselben** Token unmittelbar danach von einer unbelasteten Verbindung erfolgreich einlösen. Nur die Drosselung kann ihn aufgehalten haben, und sie greift vor dem Auth-Dienst
+- **AC-19 — gemessen mit einer frei erfundenen Adresse**, damit zugleich die Zusage „der Zähler zählt jede Adresse" geprüft ist: 5 durch, ab der 6. abgewiesen, abweisende Verbindung nachweislich unbelastet (1 von 3)
+- **AC-18 — zur Laufzeit provoziert**, indem der `execute`-Grant auf `register_auth_attempt` kurzzeitig entzogen wurde: Login mit **korrekten** Zugangsdaten → HTTP 500, kein Cookie, kein Redirect. Grant danach wiederhergestellt und mit `has_function_privilege` **und** einem erfolgreichen Login gegengemessen
+- **AC-8 — die Reihenfolge belegt**, nicht nur die Zahl: Der 8. Versuch mit **korrekten** Zugangsdaten wurde ebenfalls abgewiesen, die Drosselung greift also vor der Zugangsdatenprüfung
+
+### Edge Cases
+
+**Bestanden: EC-1, EC-2, EC-5, EC-7.** **Fehlgeschlagen: EC-3** (BUG-79). **Teilweise: EC-4** (BUG-80), **EC-6** (kein echter Ausfall provozierbar).
+
+- **EC-1** — Garantie im Code (`0001_profiles.sql:13` Unique-Index auf `lower()`, Trigger in derselben Transaktion) **und** echter Wettlauf: 6 parallele Registrierungen in 6 Schreibweisen → genau 1 Gewinner, 5 Feldfehler, 1 `profiles`-Zeile, **0 auth.users ohne Profil**
+- **EC-4** — alle drei zugesagten Zweige stimmen, einzeln gemessen: nur Verbindung → „von dieser Verbindung"; nur Adresse (unbelastete Verbindung) → „für diese E-Mail-Adresse"; **beide zugleich → die Adresse**, wie verlangt. Selbstheilung gemessen: Fenster um 61 s zurückdatiert → nächster Versuch geht durch. **Aber es gibt einen vierten Zweig, den der Vertrag nicht kennt** — siehe BUG-80
+
+**EC-8, EC-9, EC-10 — Zusagen halten, keine Abweichung.** EC-8: 8 von 8 ohne Tippfehler (Zähler danach 0), 4 von 8 mit je einem. EC-9: 20 von 20 durch, dann der Besitzer mit richtigem Passwort von unbelasteter Verbindung abgewiesen. EC-10: rund 58–60 ms in beiden Lanes — Richtung und Größenordnung wie zugesagt. **Die am 2026-09-06 entschärfte Formulierung hat sich bewährt:** Mit der alten festen Zahl hätten beide Lanes eine Abweichung melden müssen, die keine ist.
+
+### Security-Audit
+
+**17 Prüfungen belegt · 4 `[!] NOT VERIFIED` · 1 High, 1 Medium, 3 Low.**
+
+Sauber und mit Belegen: Authentifizierungs-Umgehung · **Autorisierung mit zwei echten Sitzungen** (fremde `runs` lesen → `[]`, INSERT → `42501`, UPDATE/DELETE → 0 Zeilen bei unveränderten 446) · Funktions-Grants inklusive der neuen `is_trainer_name_taken` (für `anon` **und** `authenticated` gesperrt) · Input-Injection (0 angelegte Profile, `runs` unverändert) · Open Redirect `?next=` (fünf Varianten, alle abgewiesen — BUG-20 nicht zurück) · Brute Force auf beiden Zählern · Erstattungs-Semantik (BUG-39 nicht zurück) · Zugangsdaten in der URL · Session-Cookie.
+
+**Geheimnisse: kein Treffer, mit belastbarer Kontrolle.** 5.357.138 Byte tatsächlich ausgeliefertes Material — HTML von fünf Routen plus alle 19 nachgeladenen JS-Chunks. Sechs Suchmuster (Service-Role-Wert, Literal `service_role`, Variablenname, `isTrainerNameTaken`, `register_auth_attempt`, Anon-Wert) je **0 Treffer**, bei **drei Positivkontrollen > 0**.
+
+### Bugs
+
+#### BUG-79: Die Kontoexistenz ist über den Passwort-Reset ermittelbar
+**Severity: High** · bricht **AC-10** und **EC-3** im Wortlaut · `.claude/rules/security.md` → „Never reveal whether an account exists"
+
+**Von zwei Lanes unabhängig gefunden.** Zwei aufeinanderfolgende Anfragen für dieselbe Adresse genügen:
+
+| 2. Reset-Anfrage | Konto existiert | Konto existiert nicht |
+|---|---|---|
+| Antwort | „Zu viele Versuche von dieser **Verbindung**." | „Falls diese Adresse registriert ist, wurde ein Link verschickt." |
+
+**Gemessen: 30 von 30 Adressen korrekt bestimmt, ~2 Adressen/Sekunde**, ohne Zeitmessung, ohne Statistik, ohne eigenes Konto.
+
+**Ursache.** Supabase antwortet auf `/auth/v1/recover` mit `429 over_email_send_rate_limit` **nur dann, wenn tatsächlich eine Mail hinausginge** — also nur bei existierenden Konten. `mapPasswordResetRequestError` (`src/lib/auth/error-mapping.ts:123`) bildet diesen 429 auf die Drosselungsmeldung ab, während die unbekannte Adresse die Bestätigung bekommt. Direkt gegen die Auth-API bestätigt, an der App vorbei:
+
+```
+POST /auth/v1/recover  {"email":"<existiert>"}       -> 1. 200   2. 429 over_email_send_rate_limit
+POST /auth/v1/recover  {"email":"<existiert nicht>"} -> 1. 200   2. 200
+```
+
+**Ausschluss der App-Zähler gemessen:** `password-reset:ip:… = 2` (Grenze 3) und `password-reset:account:… = 2` (Grenze 5) — **keiner** der beiden hatte gegriffen.
+
+**Herkunft, damit die Zuordnung stimmt:** Diese Zeile steht seit dem ursprünglichen Build und ist **nicht** durch den BUG-67-Fix entstanden. Drei vorherige QA-Läufe haben sie nicht gefunden. Der Fix hätte sie allerdings aufdecken müssen: Er stellte die Drosselungsmeldungen auf Ursachenbezug um und ließ genau die Funktion aus, die dieselbe Art Zuordnung macht.
+
+**In Produktion wird es größer, nicht kleiner:** Lokal steht `max_frequency` auf 1 Sekunde, der gehostete Supabase-Standard ist **60 Sekunden** — das Zeitfenster ist 60× breiter. Dazu erzeugt das Stundenkontingent (`email_sent`, laut `config.toml` 2/Stunde) denselben 429 aus einem zweiten Grund; solange es erschöpft ist, steht das Orakel dauerhaft offen.
+
+> **Diese Konsequenz reicht über den Befund hinaus: BUG-79 entwertet die Begründung von EC-9.** Dort ist das Aussperren eines Kontos als Low akzeptiert, **ausdrücklich weil man die Adresse kennen muss**. Wer Adressen maschinell bestätigen kann, hat diese Voraussetzung. Nach dem Fix gehört EC-9 neu gerechnet — und die DSGVO-Seite mitbedacht, denn die bloße Zugehörigkeit zu diesem Dienst ist ein personenbezogenes Datum (`docs/PRD.md`: `standard`-Niveau, absehbar minderjährige Nutzer).
+
+**Reproduktion:** 2× `requestPasswordResetAction` für dieselbe Adresse innerhalb von `max_frequency`, von einer Verbindung. Verbindungs-Meldung ⇒ Konto existiert; Bestätigung ⇒ existiert nicht.
+
+#### BUG-80: Die Sperrmeldung nennt eine Ursache, die messbar nicht zutrifft
+**Severity: Medium** · betrifft **EC-4** · dieselbe Codezeile wie BUG-79
+
+EC-4 verlangt, dass die Meldung sagt, **welche der beiden Grenzen** griff. In der oben gezeigten Abweisung griff **keine**: Verbindungszähler 2 von 3, Adresszähler 2 von 5. Der Nutzer liest „von dieser Verbindung", wechselt das Netz — und es hilft nicht, weil die Ursache das Mailkontingent des Projekts ist. Genau die Fehlklasse, die BUG-67 für den Konto-Zähler beseitigt hat; `mapPasswordResetRequestError` wurde dabei nicht mitgezogen.
+
+> **BUG-79 und BUG-80 haben dieselbe Wurzel und eine gemeinsame Behebung** — mit einer wichtigen Umkehrung gegenüber AC-19: Supabases 429 darf **nicht** unterscheidbar sein, weil er nur bei existierenden Konten auftritt. Die App-eigenen Zähler dürfen ihre Ursache nennen, weil sie auch unbekannte Adressen zählen. Der Unterschied ist nicht Formulierungskunst, sondern messbar.
+
+#### BUG-81: Die Aufräumlogik nach dem Login ist von der schnellen Testsuite völlig unbewacht
+**Severity: High**
+
+Ein Mutationstest über **32 Fälle** (in einer Wegwerf-Kopie, Projektbaum unangetastet) zeigt: 26 Mutationen werden erkannt, **6 überleben** — und die schwerste ist keine Kleinigkeit.
+
+| Mutation | `npm test` | E2E deckt |
+|---|---|---|
+| **M27** `settleSuccessfulLogin` läuft **auch nach fehlgeschlagenem** Login → beide Zähler bei **jedem** Rateversuch zurückgesetzt | **0 rot** | ja |
+| **M13** `settleSuccessfulLogin` wird gar nicht mehr aufgerufen | **0 rot** | ja |
+| **M31** `settleSuccessfulLogin` bekommt die **falsche Adresse** → Konto-Zähler wird nie geleert | **0 rot** | **nein** |
+
+**M27 wäre unbegrenztes Raten** — AC-8 und AC-16 gleichzeitig tot. Das schnelle Gate (`npm test`, 3,8 s) fängt es nicht; nur die langsame Browser-Suite. **Und genau diese Datei ist bereits zweimal in Folge in die jeweils andere Richtung gekippt** (BUG-39, dann BUG-54).
+
+**Ursache im Testcode belegt, nicht vermutet:** `actions.test.ts:20` legt einen Spion `settleSuccessfulLogin: vi.fn()` an und mockt ihn in Zeile 27 — **kein einziger Test prüft ihn danach.** Das ist genau die Hälfte, die der Kopf derselben Datei als ihren Existenzgrund nennt („nicht was die Funktionen entscheiden, sondern **dass sie gefragt werden**"): umgesetzt für zwei von fünf Aufrufstellen.
+
+#### BUG-82: Zwei weitere ungeprüfte Aufrufstellen
+**Severity: Medium**
+
+| Mutation | Folge | Erkannt von |
+|---|---|---|
+| **M12** `registerAction` zählt mit `null` statt der E-Mail | Konto-Hälfte der Registrierungs-Drosselung tot | **niemandem** |
+| **M14** `updatePasswordAction` prüft die Recovery-Sitzung nicht mehr | AC-12 gebrochen | **niemandem** |
+
+Belegt: Die Argumente von `registerAttempt` werden nirgends geprüft (die einzige `toHaveBeenCalledWith`-Zeile der Datei betrifft `isTrainerNameTaken`); `getUser` wird in `beforeEach` gesetzt und **nie auf `null` gekippt**; `INVALID_RESET_LINK_MESSAGE` kommt in **keiner** Testdatei vor.
+
+#### BUG-83: `profiles` gibt angemeldeten Nutzern alle Spalten heraus
+**Severity: Low** · betrifft PROJ-3 stärker als PROJ-1
+
+`profiles_select_authenticated` hat `USING (true)` ohne Spaltenbeschränkung — angemeldete Nutzer lesen neben `trainer_name` auch `id` (die Auth-User-UUID) und `created_at`. `design.md` sagt „darf `trainer_name` aller Profile lesen". Eine Spaltenbeschränkung oder eine View wäre die engere Umsetzung.
+
+#### BUG-84: Der Zählerstand einer fremden Adresse ist ablesbar
+**Severity: Low**
+
+Der Konto-Zähler ist eine geteilte Ressource. Wer zählt, wie viele Anfragen noch durchgehen, liest den Fremdverbrauch exakt aus (gemessen: 2 von 5 belegt → 3 gingen durch; unbelastet → 5) und erfährt damit, **dass gerade jemand für diese Adresse ein Passwort zurücksetzt** — ein brauchbares Timing-Signal für eine Phishing-Mail. Keine Kontoexistenz. Das Ablesen kostet das gesamte Stundenbudget des Opfers, ist also zugleich die in AC-19 bewusst akzeptierte Sperre. Strukturbedingt bei jedem geteilten Konto-Zähler vorhanden.
+
+#### BUG-85: `anon` und `authenticated` besitzen `TRUNCATE` auf allen drei Tabellen
+**Severity: Low**
+
+`has_table_privilege` = true für `profiles`, `runs`, `auth_throttle` (Supabase-Standard `GRANT ALL`). **`TRUNCATE` unterliegt in PostgreSQL nicht der Row Level Security.** Über PostgREST nicht auslösbar, über die App-Oberfläche also nicht ausnutzbar — aber RLS ist damit nicht das Einzige, was zwischen der `anon`-Rolle und den Daten steht. Verwandt mit dem offenen BUG-70.
+
+#### BUG-86: `npm run lint` prüft keine TypeScript-Regeln
+**Severity: Low**
+
+66 Regeln konfiguriert, **61 aktiv — sämtlich React / Next / react-hooks / jsx-a11y.** Gemessen: `const qaUnbenutzt = 1` und `function qaKaputt(x: any)` liefen ohne einen Befund durch. Unbenutzte Variablen und `any` fängt hier nichts; das Typnetz ist allein der `tsc`-Schritt in `next build`. Der Lint-Lauf ist echt (Positivkontrolle: ein `<img>` wurde als `no-img-element` gemeldet), nur schmaler als sein grünes Ergebnis suggeriert.
+
+#### Unverändert offen aus den Vorläufen
+- **BUG-72, BUG-73** (Medium) — roher `x-forwarded-for` als DB-Schlüssel; gemeinsame Wurzel, gemeinsame Behebung
+- **BUG-77** (Low) — hängt an T18; lokal wie dokumentiert nicht auslösbar, weil die eigene Vorlage `{{ .SiteURL }}` nutzt
+- **BUG-78** (Low), **BUG-70** (Low)
+- **BUG-61**, **BUG-12**, **BUG-18** — Deploy-Blocker, mit ihren Zahlen bestätigt (25 Konten in 9 s; keine Security-Header)
+
+### `[user]`-Aufgaben
+
+- [x] **T4** — abgehakt und lokal beobachtbar bestätigt: Registrierung mit 7 Zeichen → Feldfehler, **kein Konto angelegt**
+- [ ] **T18** — offen, auf dem Passwort-Reset-Pfad. Nach Skill-Regel ein **High**. Bereits Deploy-Blocker und sachlich blockiert (kein eigener SMTP; Free Tier lehnt `supabase config push` ab). **BUG-77 hängt daran**
+
+### Regression und automatisierte Tests
+
+| Prüfung | Ergebnis |
+|---|---|
+| **Test** | ✅ 19 Dateien, **205/205**, zweimal gelaufen |
+| **Lint** | ✅ 0/0 — **75 Dateien** wirklich geprüft, mit Positivkontrolle. Reichweite siehe BUG-86 |
+| **Build** | ✅ Exit 0 (isolierte Kopie aus `git archive HEAD`; einziger Unterschied zum Arbeitsbaum ist `features/INDEX.md`) |
+| **E2E** | ✅ **33/33** in drei Engines — Browser waren vorhanden, **nichts nachinstalliert** |
+
+**0 Regressionen an PROJ-2** (einziges `Approved`-Feature; kein Feature steht auf `Deployed`). Routen-Wächter, Kopfzeile mit Abmelden, Schema, Policies, Constraints alle unversehrt.
+
+**Datenbank:** 6 von 6 Migrationen angewandt, deckungsgleich mit den Dateien. RLS empirisch mit `set role` geprüft — `anon` sieht 0/0/0 und bekommt auf alle fünf Funktionen `permission denied`. **Löschtrigger in einer zurückgerollten Transaktion gemessen:** alle drei Konto-Schlüssel weg, IP-Schlüssel unverändert da, `profiles`/`runs` sauber kaskadiert. Aufräum-Mechanik arbeitet: 882 Zeilen, **0 älter als eine Stunde**. Alle vier Scopes zählen tatsächlich, auch der neue `token-confirm` (30 IP-Schlüssel). `profiles` 1570 = `auth.users` 1570.
+
+### Unit-Tests aus diesem Lauf
+
+**Keine geschrieben — mit Begründung.** Die identifizierten Lücken (BUG-81, BUG-82) sind Lücken in Tests, die **ich in derselben Sitzung geschrieben habe**. Sie jetzt selbst zu schließen, würde Finder und Behebenden erneut zusammenlegen — genau der Fehler, der diese Lücken überhaupt erst entstehen ließ: Der Rot-Nachweis zu BUG-75 saß eine Ebene zu tief und deckte zwei von fünf Aufrufstellen ab. Die fehlenden Tests gehören in denselben `/build`-Durchgang, der BUG-79 behebt, und danach unabhängig geprüft.
+
+### Not Verified In This Run
+
+- [!] **Cross-Browser, responsive Darstellung (375/768/1440 px), DevTools** — kein Browser-Engine. Die Playwright-Suite lief über drei Engines, prüft aber Journeys, keine Darstellung
+- [!] **AC-13 zweite Hälfte („ohne dass die Seite neu lädt")** und **AC-14/AC-15 als sichtbare Darstellung** — Client-Verhalten; Quelltext und Komponententests belegt. Die Registrierungsansicht steht nicht im server-gerenderten HTML (Client-Umschalter), per `curl` also nicht prüfbar
+- [!] **EC-6 an einem echten Ausfall** — nicht provoziert; der Auth-Container hätte gestoppt werden müssen, was die parallelen Lanes getroffen hätte
+- [!] **Ob die E2E-Suite M13 und M27 wirklich rot meldet** — hätte einen zweiten Dev-Server mit mutiertem Code und damit `.env.local` verlangt. Die Deckung ist **aus dem Testcode** belegt (`PROJ-1-throttle.spec.ts:96–105` und `:191–197`); die für den Befund entscheidende Hälfte ist gemessen: **`npm test` fängt beide nicht**
+- [!] **Rate Limiting auf gewöhnlichen Endpunkten** — nicht implementiert (40× `GET /login` → 40× 200). Für ein MVP optional, kein Pass
+- [!] **BUG-61-Schließbedingung, Security-Header, T18 und BUG-77 im gehosteten Projekt** — nur gegen die Live-URL bzw. das Dashboard prüfbar
+- [!] **Build mit echten Umgebungsvariablen** — bewusst ohne `.env.local` in einer Kopie gebaut
+
+### Verdikt
+
+**NOT READY.** Kein Critical. **Zwei High: BUG-79 und BUG-81**, dazu das nach Skill-Regel als High geführte offene **T18** (deploy-blockiert). Ferner 2 Medium (BUG-80, BUG-82) und 4 Low (BUG-83 bis BUG-86).
+
+**Was dieser Lauf positiv festgestellt hat:** Die Schwerpunktfrage ist beantwortet — **die neue ursachenbezogene Meldung leckt nicht**, in fünf Teilaspekten einzeln gemessen. AC-19 und AC-20 halten, beide erstmals unabhängig und AC-20 entscheidend getrennt. AC-18 wurde zur Laufzeit provoziert. Die Fixes zu BUG-66, BUG-67 und BUG-74 tragen; 26 von 32 Mutationen werden erkannt, inklusive der Verdrahtungsebene und zweier Reihenfolge-Mutationen, die kein Testname ankündigt.
+
+**Was offen bleibt:** BUG-79 ist ein deterministisches Orakel auf einem Pfad, den der Vertrag ausdrücklich anders zusagt — und es entwertet die Begründung von EC-9. BUG-81 zeigt, dass die schnelle Testsuite einen Zustand durchließe, in dem unbegrenztes Raten möglich wäre.
+
+**Drei Dinge gehören nach dem Fix in den Vertrag, nicht in einen Bugreport:** die neu zu rechnende Risikoakzeptanz in **EC-9**; die Frage, ob der vierte Abweisungsgrund (Mailkontingent des Anbieters) ein eigenes Kriterium braucht; und ob `profiles` spaltenbeschränkt gelesen werden soll (BUG-83), was PROJ-3 betrifft.
+
+`features/INDEX.md` bleibt bei **In Review**.
