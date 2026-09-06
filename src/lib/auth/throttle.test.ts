@@ -115,6 +115,46 @@ describe('registerAttempt', () => {
   })
 })
 
+describe('Grenzwerte je Vorgang (AC-19, AC-20)', () => {
+  /**
+   * Bis BUG-76 nahm `registerAttempt` für **jeden** Vorgang
+   * `credentialsPerAccount`. Das war kein Entschluss, sondern der Login-Wert, der
+   * mitgalt — und beim Reset begrenzt derselbe Zähler etwas ganz anderes: Mails
+   * an eine fremde Adresse statt Raten am eigenen Konto.
+   */
+  it('nimmt für den Passwort-Reset die eigene, engere Konto-Grenze', async () => {
+    await registerAttempt('password-reset', 'a@b.de')
+
+    const accountCall = rpc.mock.calls.find((c) => c[1].p_key.includes(':account:'))
+    expect(accountCall?.[1].p_limit).toBe(LIMITS.passwordResetPerAccount.limit)
+    expect(accountCall?.[1].p_window_seconds).toBe(LIMITS.passwordResetPerAccount.windowSeconds)
+  })
+
+  it('nimmt für den Login weiterhin die weitere Konto-Grenze', async () => {
+    await registerAttempt('login', 'a@b.de')
+
+    const accountCall = rpc.mock.calls.find((c) => c[1].p_key.includes(':account:'))
+    expect(accountCall?.[1].p_limit).toBe(LIMITS.credentialsPerAccount.limit)
+  })
+
+  it('begrenzt den Reset am Konto enger als den Login', () => {
+    const proStunde = (l: { limit: number; windowSeconds: number }) =>
+      (l.limit * 3600) / l.windowSeconds
+
+    expect(proStunde(LIMITS.passwordResetPerAccount)).toBeLessThan(
+      proStunde(LIMITS.credentialsPerAccount)
+    )
+  })
+
+  it('zählt die Token-Einlösung mit eigenem Schlüssel und eigener Grenze (AC-20)', async () => {
+    await registerAttempt('token-confirm', null)
+
+    expect(keysUsed()).toEqual(['token-confirm:ip:1.2.3.4'])
+    expect(rpc.mock.calls[0][1].p_limit).toBe(LIMITS.tokenConfirmPerIp.limit)
+    expect(rpc.mock.calls[0][1].p_window_seconds).toBe(LIMITS.tokenConfirmPerIp.windowSeconds)
+  })
+})
+
 describe('settleSuccessfulLogin', () => {
   it('löscht den Konto-Zähler ganz', async () => {
     await settleSuccessfulLogin('Spieler@Example.COM')

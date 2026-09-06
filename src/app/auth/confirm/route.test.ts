@@ -15,11 +15,15 @@ import { GET } from './route'
  * would survive any manual test, which is exactly why it needs a test.
  */
 
-const { verifyOtp } = vi.hoisted(() => ({ verifyOtp: vi.fn() }))
+const { verifyOtp, registerAttempt } = vi.hoisted(() => ({
+  verifyOtp: vi.fn(),
+  registerAttempt: vi.fn(),
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({ auth: { verifyOtp } }),
 }))
+vi.mock('@/lib/auth/throttle', () => ({ registerAttempt }))
 
 const BASE = 'http://localhost:3000'
 
@@ -30,6 +34,8 @@ function call(query: string) {
 describe('/auth/confirm', () => {
   beforeEach(() => {
     verifyOtp.mockReset()
+    registerAttempt.mockReset()
+    registerAttempt.mockResolvedValue({ allowed: true })
   })
 
   it('redeems a valid token and redirects to next', async () => {
@@ -39,6 +45,46 @@ describe('/auth/confirm', () => {
 
     expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc123' })
     expect(res.headers.get('location')).toBe('/reset-password')
+  })
+
+  /**
+   * spec.md AC-20 — diese Route war die einzige Stelle der App, die ein Credential
+   * prüft und nicht zählt: Die Drosselung sitzt bewusst in den Server Actions, und
+   * eine Route ist keine Action. Gemessen im QA-Lauf: 40 Einlösungen von einer
+   * Verbindung, null abgewiesen (BUG-71).
+   *
+   * Der Angriff, gegen den das schützt, ist nicht das Erraten des Tokens, sondern
+   * das Leerlaufen von Supabases gemeinsamem Prüfkontingent — das für alle Spieler
+   * an derselben Server-IP hängt (BUG-21). Deshalb prüft der erste Test, dass
+   * **vor** `verifyOtp` gezählt wird und der Auth-Dienst bei Abweisung gar nicht
+   * erst erreicht wird.
+   */
+  it('zählt, bevor der Token beim Auth-Dienst landet (AC-20)', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    await call('?token_hash=abc123&type=recovery')
+
+    expect(registerAttempt).toHaveBeenCalledWith('token-confirm', null)
+  })
+
+  it('weist über der Grenze ab, ohne den Auth-Dienst zu fragen (AC-20)', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false })
+
+    const res = await call('?token_hash=abc123&type=recovery')
+
+    expect(verifyOtp).not.toHaveBeenCalled()
+    expect(res.headers.get('location')).toBe('/reset-password?error=1')
+  })
+
+  it('verrät bei Abweisung nicht, dass die Grenze der Grund war (AC-20)', async () => {
+    registerAttempt.mockResolvedValue({ allowed: false })
+    const gedrosselt = await call('?token_hash=abc123&type=recovery')
+
+    registerAttempt.mockResolvedValue({ allowed: true })
+    verifyOtp.mockResolvedValue({ error: { message: 'Token has expired' } })
+    const abgelaufen = await call('?token_hash=abc123&type=recovery')
+
+    expect(gedrosselt.headers.get('location')).toBe(abgelaufen.headers.get('location'))
   })
 
   it('sends an invalid or already-used token to the AC-12 error state', async () => {

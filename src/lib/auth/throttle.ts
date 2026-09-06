@@ -41,6 +41,38 @@ export const LIMITS = {
    * ihrem Preis steht in `features/PROJ-1-user-login/design.md`.
    */
   credentialsPerAccount: { limit: 20, windowSeconds: 900 },
+  /**
+   * Der Passwort-Reset bekommt eine **eigene, engere** Konto-Grenze als der Login
+   * (spec.md AC-19). Bis BUG-76 galt hier `credentialsPerAccount` mit — nicht
+   * entschieden, sondern geerbt.
+   *
+   * Der Unterschied ist nicht die Zahl, sondern was begrenzt wird: Beim Login
+   * begrenzt der Zähler das **Raten am eigenen Konto**. Beim Reset begrenzt er
+   * **Mails an eine fremde Adresse** — das Opfer hat nichts getan, und jede Mail
+   * verbraucht eine Einheit des SMTP-Kontingents, das laut `docs/PRD.md` ohnehin
+   * der Engpass dieses Projekts ist. 20 je 15 Minuten waren rund 80 Mails pro
+   * Stunde an einen Unbeteiligten.
+   *
+   * 5 pro Stunde, nicht 3: Zwei oder drei Versuche sind der ehrliche Fall, wenn
+   * die Mail nicht ankommt. Der fünfte ist schon Verzweiflung — und der Reset ist
+   * der einzige Weg zurück ins Konto, eine Fehlsperre trifft hier härter als
+   * anderswo.
+   */
+  passwordResetPerAccount: { limit: 5, windowSeconds: 3600 },
+  /**
+   * Das Einlösen des Reset-Links (spec.md AC-20).
+   *
+   * **Nicht gegen das Erraten** — der Token-Hash ist zu lang dafür. Sondern gegen
+   * das Leerlaufen des **gemeinsamen** Prüfkontingents des Auth-Dienstes
+   * (`token_verifications`, Standard 30 je 5 Minuten): Weil die App ausschließlich
+   * über Server Actions mit Supabase spricht, sieht dieses Limit für alle Spieler
+   * dieselbe Server-IP (BUG-21). Wer es erschöpft, macht den Passwort-Reset für
+   * **alle** unmöglich.
+   *
+   * 10 je 15 Minuten ist für einen Menschen, der einen Link anklickt, unerreichbar
+   * weit — und eng genug, dass eine einzelne Quelle das Kontingent nicht leert.
+   */
+  tokenConfirmPerIp: { limit: 10, windowSeconds: 900 },
 } as const
 
 type Limit = { limit: number; windowSeconds: number }
@@ -85,7 +117,22 @@ async function count(key: string, { limit, windowSeconds }: Limit): Promise<bool
   return data === true
 }
 
-export type ThrottleScope = 'login' | 'register' | 'password-reset'
+export type ThrottleScope = 'login' | 'register' | 'password-reset' | 'token-confirm'
+
+/** Welche Grenze für welchen Vorgang gilt — an einer Stelle, statt verstreut. */
+function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
+  switch (scope) {
+    case 'password-reset':
+      return { ip: LIMITS.passwordResetPerIp, account: LIMITS.passwordResetPerAccount }
+    case 'token-confirm':
+      // Beim Einlösen ist keine Adresse bekannt — der Token verrät sie erst nach
+      // der Prüfung. Der Konto-Wert steht hier nur, damit der Rückgabetyp
+      // vollständig ist; `registerAttempt` benutzt ihn ohne E-Mail nie.
+      return { ip: LIMITS.tokenConfirmPerIp, account: LIMITS.credentialsPerAccount }
+    default:
+      return { ip: LIMITS.credentialsPerIp, account: LIMITS.credentialsPerAccount }
+  }
+}
 
 /**
  * Zählt einen Versuch auf beiden Zählern und meldet, ob er erlaubt bleibt.
@@ -98,11 +145,11 @@ export async function registerAttempt(
   scope: ThrottleScope,
   email: string | null
 ): Promise<{ allowed: boolean }> {
-  const ipLimit = scope === 'password-reset' ? LIMITS.passwordResetPerIp : LIMITS.credentialsPerIp
+  const { ip: ipLimit, account: accountLimit } = limitsFor(scope)
 
   const checks = [count(`${scope}:ip:${await clientIp()}`, ipLimit)]
   if (email) {
-    checks.push(count(accountKey(scope, email), LIMITS.credentialsPerAccount))
+    checks.push(count(accountKey(scope, email), accountLimit))
   }
 
   const results = await Promise.all(checks)

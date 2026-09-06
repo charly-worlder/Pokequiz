@@ -329,6 +329,40 @@ Der Nachlauf fand zwei Stellen, an denen nicht der Code vom Vertrag abwich, sond
 
 **Warum EC-10 seine Zahlen verloren hat.** Der Vertrag nannte „Median 176 ms gegenüber 102 ms, rund 74 ms". Drei Messungen am selben Tag ergaben 74, 65 und 49 ms — je nachdem, wie viel der Server Action mitgemessen wurde und wie belastet die Maschine war. Eine feste Zahl hätte jeden künftigen QA-Lauf gezwungen, eine Abweichung zu melden, die keine ist; zugesagt ist jetzt, was tatsächlich stabil ist.
 
+### Nachtrag 2026-09-06 — AC-19 und AC-20 gebaut, BUG-74 und BUG-75 behoben
+
+**BUG-74 wurde nicht durch Escaping gelöst, sondern durch eine Datenbankfunktion.** `is_trainer_name_taken` (Migration `0006`) macht denselben Vergleich wie der Signup-Trigger — `lower(trainer_name) = lower(p_name)` — statt eines LIKE-Musters. Das behebt beide Hälften des Befunds auf einmal: die falsche Aussage bei Namen mit `_` **und** den Seq Scan, denn der Vergleich trifft den vorhandenen Funktionsindex.
+
+Gegen die laufende Datenbank belegt: Für den Namen `qa_egC54921` (existiert nicht, danebenliegend der echte `qaRegC54921`) sagte die alte `ilike`-Abfrage **true**, die Funktion sagt **false**; beim echten Namen sagt sie **true**. Dazu `Index Scan using profiles_trainer_name_lower_key`, 0,065 ms statt 0,72 ms, und `42501 permission denied` für `anon`.
+
+**BUG-75 ist die Lehre aus dem eigenen Rot-Nachweis.** Der vorige Durchgang hatte bewiesen, dass die Zuordnungs*funktionen* richtig entscheiden — nicht, dass die Actions sie benutzen. Diesmal wurde auf beiden Ebenen mutiert, und alle fünf Mutationen werden erkannt:
+
+| Mutation | Erkannt von |
+| --- | --- |
+| `isTrainerNameTaken` in `registerAction` umgangen | `actions.test.ts` (2 Tests) |
+| `mapUpdatePasswordError` nicht mehr aufgerufen | `actions.test.ts` (1 Test) |
+| `trainer-name.ts` zurück auf ein LIKE-Muster | `trainer-name.test.ts` (2 Tests) |
+| Drosselung aus `/auth/confirm` entfernt | `route.test.ts` (3 Tests) |
+| Reset erbt wieder die Login-Konto-Grenze | `throttle.test.ts` (1 Test) |
+
+Die ersten beiden Zeilen sind die, die vorher **grün** geblieben wären.
+
+**AC-20 wurde entscheidend belegt, nicht nur plausibel gemacht.** Die Abweisung sieht absichtlich aus wie ein abgelaufener Link — der Location-Header taugt deshalb nicht als Beleg. Gemessen wurde stattdessen mit einem **echten** Token aus dem Postfach: Über der Grenze wird er abgewiesen und setzt keine Sitzung; unmittelbar danach löst **derselbe** Token ihn von einer unbelasteten Verbindung erfolgreich ein. Damit kann nur die Drosselung ihn aufgehalten haben.
+
+**AC-19 gemessen:** 7 Anfragen für dieselbe Adresse von 7 **verschiedenen** Verbindungen — 5 durch, ab der 6. abgewiesen.
+
+#### ⚠️ Offene Abweichung: AC-19 verlangt eine Meldung, die der Code nicht gibt
+
+AC-19 sagt, die Abweisung erfolge „mit derselben Meldung wie in AC-10, die nichts über die Existenz des Kontos verrät". Gebaut ist etwas anderes: `requestPasswordResetAction` gibt bei jeder Abweisung `THROTTLED_MESSAGE` zurück („Zu viele Versuche von dieser Verbindung…"). **Das wurde nicht stillschweigend angepasst** — `spec.md` ist während `/build` unveränderlich, und die Entscheidung gehört dem Nutzer.
+
+Drei Gründe sprechen dafür, **die AC zu korrigieren statt den Code**:
+
+1. **Die Sorge, die meine Formulierung trug, greift hier nicht.** Der Konto-Zähler zählt **jede** Adresse, ob es ein Konto gibt oder nicht. „Zu viele Versuche" verrät deshalb nichts über die Existenz eines Kontos — der Grund für die Gleichmacherei in AC-10 fehlt.
+2. **Die AC-10-Meldung wäre hier eine Lüge an den ehrlichen Nutzer.** „Falls diese Adresse registriert ist, wurde ein Link verschickt" zu zeigen, obwohl gerade nichts verschickt wurde, lässt jemanden auf eine Mail warten, die nie kommt — auf dem einzigen Weg zurück ins Konto.
+3. **Umsetzbar wäre es nur mit einem Umbau der Drosselung.** `registerAttempt` gibt bewusst **einen** Boolean zurück und zählt beide Zähler; welcher von beiden abgewiesen hat, weiß der Aufrufer nicht. Die AC-10-Meldung nur für den Konto-Fall zu zeigen, verlangte diese Unterscheidung — und damit eine Änderung an der Stelle, deren Einfachheit bisher ihr Schutz war.
+
+Mitzudenken ist dabei **BUG-67** (offen, Low): Die Meldung nennt immer „von dieser Verbindung" und ist bei einer konto-bedingten Abweisung damit doppelt irreführend. Wer AC-19 anfasst, sollte beides zusammen entscheiden.
+
 ### Entscheidungen zum finalen QA-Lauf (2026-09-05)
 
 | Decision | Rationale | Alternative considered | Trade-off | Date |

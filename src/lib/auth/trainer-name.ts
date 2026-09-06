@@ -17,26 +17,25 @@ import { createAdminClient } from '@/lib/supabase/admin'
  * Das machte EC-1 richtig und alles andere falsch: Bei einer Störung las der
  * Nutzer, sein Wunschname sei weg, und probierte einen zweiten, dritten, vierten.
  *
+ * **Warum eine Datenbankfunktion und keine Abfrage von hier aus (BUG-74).** Die
+ * erste Fassung fragte mit PostgREST `ilike` — und traf damit eine andere
+ * Entscheidung als der Trigger: In einem LIKE-Muster ist `_` ein Platzhalter, in
+ * einem Trainernamen ein erlaubtes Zeichen. `'AshX1' ilike 'Ash_1'` ist wahr,
+ * obwohl `Ash_1` frei ist. Dazu kam, dass `ilike` den Funktionsindex nicht
+ * benutzen kann und als Seq Scan lief — auf einem Fehlerpfad, den ein Fremder
+ * auslösen kann, ist das ein Verstärker. `is_trainer_name_taken` (Migration
+ * `0006`) macht denselben Vergleich wie der Trigger und trifft den Index.
+ *
  * **Die Nachfrage läuft nur auf dem Fehlerpfad** — der geglückte Weg kostet keine
  * zusätzliche Abfrage.
- *
- * `profiles` ist für `anon` nicht lesbar (RLS, `0001_profiles.sql`), und der
- * normale Server-Client der Registrierung hat noch keine Sitzung. Deshalb der
- * Admin-Client. Er erfährt hier ausschließlich, **ob** ein Name vergeben ist —
- * genau die Auskunft, die AC-2 dem Nutzer ohnehin gibt.
  */
 export async function isTrainerNameTaken(trainerName: string): Promise<boolean> {
   try {
     const admin = createAdminClient()
-    const { data, error } = await admin
-      .from('profiles')
-      .select('id')
-      .ilike('trainer_name', trainerName)
-      .limit(1)
-      .maybeSingle()
+    const { data, error } = await admin.rpc('is_trainer_name_taken', { p_name: trainerName })
 
     if (error) return false
-    return data !== null
+    return data === true
   } catch {
     // Die Nachfrage selbst ist gescheitert — dann ist die Datenbank das Problem,
     // nicht der Name. `false` führt den Aufrufer zur Störungsmeldung, und das ist
