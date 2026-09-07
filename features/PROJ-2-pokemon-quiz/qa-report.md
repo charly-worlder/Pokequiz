@@ -2510,7 +2510,7 @@ Drei Beobachtungen der Regressions-Bahn, hier nur festgehalten, damit sie nicht 
 |---|---|---|---|---|
 | `active_runs` | an | **keine** — bewusst, denn die Zeile enthält die Lösung | **keine** (`revoke all`, `0007:109`) | ✅ **Das Vorbild:** zwei Schichten, beide zu |
 | `runs` | an | nur `runs_select_own` (SELECT) | `rDxtm` = SELECT + **TRUNCATE** + TRIGGER + REFERENCES | **BUG-122** — `0011:36` entzieht nur `insert, update, delete` |
-| `profiles` | an | nur `profiles_select_authenticated` (SELECT) | **`arwdDxtm` = alle Rechte** | ⚠️ **Hält allein durch RLS.** Gemessen: `PATCH`/`DELETE` auf eigene und fremde Zeilen → HTTP 204 mit **0 betroffenen Zeilen**, Trainername unverändert, Profilzahl unverändert (133). Einschichtig statt zweischichtig — dieselbe Klasse wie BUG-122, gehört zu PROJ-1 |
+| `profiles` | an | nur `profiles_select_authenticated` (SELECT) | **`arwdDxtm` = alle Rechte** | **BUG-131** — hält allein durch RLS. Gemessen: `INSERT` → 403 `42501`, `PATCH`/`DELETE` eigen und fremd → 204 mit **0 betroffenen Zeilen**. Einschichtig statt zweischichtig; dieselbe Klasse wie BUG-122, gehört zu PROJ-1 |
 
 ### BUG-130: Zwei Übergänge kennen die Runde nicht, die sie verändern
 
@@ -2556,3 +2556,47 @@ Die Runden-Kennung, die `0012` als Schutz eingeführt hat, wird hier **serversei
 Das ändert die Bewertung des dritten Laufs **nicht rückwirkend**, es ändert den Maßstab für den nächsten: Ein `NEIN` wird ab jetzt nur noch von Befunden getragen, die Verhalten, Daten oder Sicherheit betreffen — nicht von einer fehlenden Ladefläche und nicht von einem Satz im Vertrag, der dem gebauten Verhalten hinterherhinkt.
 
 **Der Stand nach diesem Nachtrag ist trotzdem `NEIN`** — aber aus einem anderen Grund als im Bericht oben: Die Autoritäts-Übersicht hat mit **BUG-130** eine Lücke gefunden, die Verhalten betrifft (die laufende Runde wird von einem veralteten Tab verändert und im Randfall beendet). Zusammen mit BUG-122, BUG-123 und BUG-124 sind das vier Befunde für den nächsten `/build`.
+
+### BUG-131: `profiles` gewährt `anon` und `authenticated` alle Tabellenrechte — es hält allein RLS
+
+- **Severity:** Medium
+- **Gehört zu:** PROJ-1 (die Tabelle stammt aus `0001_profiles.sql`), gefunden im QA-Lauf zu PROJ-2 beim Erstellen der Autoritäts-Übersicht
+- **Berührt:** PROJ-1 AC-2 (eindeutiger Trainername), AC-14; `.claude/rules/security.md` → „Enforce access at the data layer as well … Two independent checks, because sooner or later one of them gets bypassed"
+- **Erfasst am 2026-09-07** auf ausdrückliche Anweisung des Nutzers, analog zu BUG-122
+
+**Nachweis:**
+
+```
+select relname, relrowsecurity, relacl from pg_class where relname='profiles';
+ profiles | t | {postgres=arwdDxtm/postgres,
+                 anon=arwdDxtm/postgres,            ← alle Rechte
+                 authenticated=arwdDxtm/postgres,   ← alle Rechte
+                 service_role=arwdDxtm/postgres}
+
+select policyname, cmd from pg_policies where tablename='profiles';
+ profiles_select_authenticated | SELECT     ← die einzige Policy
+```
+
+`arwdDxtm` ist die vollständige Liste: INSERT, SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER. Die einzige Policy deckt **SELECT** ab. Schreibende Zugriffe werden also von **einer einzigen** Schicht abgewehrt — der Row Level Security —, während die Tabellenrechte weit offen stehen.
+
+**Zur Wirksamkeit gemessen (RLS hält — alle vier Verben):**
+
+| Versuch mit gewöhnlicher Nutzersitzung | Ergebnis |
+|---|---|
+| `POST /rest/v1/profiles` (erfundene Zeile einschmuggeln) | **HTTP 403 `42501` — „new row violates row-level security policy for table profiles"** |
+| `PATCH …?id=eq.<eigene>` (eigenen Trainernamen ändern) | HTTP 204, **0 Zeilen betroffen** — Trainername unverändert |
+| `DELETE …?id=eq.<eigene>` | HTTP 204, **0 Zeilen betroffen** — Profil weiterhin vorhanden |
+| `PATCH …?trainer_name=neq.xxxx` (alle Profile übernehmen) | HTTP 204, **0 Zeilen betroffen** — Profilzahl unverändert (133), 0 Zeilen umbenannt |
+
+**Mit Kontrollmessung**, damit die 204-mit-0-Zeilen nicht als kaputte Anfrage missdeutbar sind: derselbe `PATCH` mit `service_role` und `Prefer: return=representation` liefert die geänderte Zeile zurück (`{"trainer_name":"KontrolleQA"}`) — die Aufrufform stimmt also, es war RLS, die abgewehrt hat. Kontrolländerung anschließend zurückgesetzt und verifiziert.
+
+**Warum es trotzdem ein Bug ist.** Kein heute erreichbarer Angriff — RLS hält, in allen vier Verben gemessen. Der Befund ist eine **fehlende zweite Schicht**, und die Projektregel verlangt sie ausdrücklich. Drei Gründe, warum das hier mehr wiegt als anderswo:
+
+1. **`TRUNCATE` unterliegt keiner RLS** — dieselbe Kante wie bei BUG-122, hier zusätzlich zu allen anderen Rechten. Über PostgREST heute nicht erreichbar (kein TRUNCATE-Verb), aber von der Policy eben auch nicht gedeckt.
+2. **Eine einzige versehentlich hinzugefügte Policy öffnet alles.** Bei `active_runs` und (nach dem BUG-122-Fix) `runs` bliebe eine falsche Policy wirkungslos, weil das Tabellenrecht fehlt. Bei `profiles` genügt sie.
+3. **Der Trainername ist der eindeutige öffentliche Anzeigename** (PROJ-1 AC-2). Ein Schreibweg darauf wäre Identitätsübernahme in der Rangliste, nicht bloß eine geänderte Zeile.
+
+**Das Gegenbeispiel steht im selben Repository:** `0007_active_runs.sql:109` — `revoke all on table public.active_runs from anon, authenticated`, mit der Begründung „RLS ohne Policy hält die Zeilen bereits zurück, aber ohne Tabellenrecht scheitert der Zugriff schon eine Stufe früher — und eine später versehentlich hinzugefügte Policy allein reicht dann nicht aus". Genau dieses Muster fehlt bei `profiles`.
+
+- **Fix:** `revoke all on table public.profiles from anon, authenticated;` gefolgt von `grant select on table public.profiles to authenticated;` — dieselbe Form wie der Fix für BUG-122. `anon` braucht auf `profiles` nichts: Die einzige Policy gilt für `authenticated`, und die Registrierung legt die Zeile über einen Trigger als Tabelleneigentümer an, nicht über die Sitzung des Anmeldenden. **Vor dem Umsetzen zu prüfen**, ob wirklich kein Pfad `anon`-Lesezugriff braucht (Trainername-Verfügbarkeitsprüfung läuft über `is_trainer_name_taken`, `0006`, `security definer`).
+- **Priorität:** Zusammen mit BUG-122 — es ist derselbe Handgriff an einer zweiten Tabelle, und getrennt gebaut wäre es eine zweite Migration für dieselbe Sache
