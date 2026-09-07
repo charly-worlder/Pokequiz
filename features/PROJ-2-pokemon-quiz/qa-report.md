@@ -2480,3 +2480,79 @@ Drei Beobachtungen der Regressions-Bahn, hier nur festgehalten, damit sie nicht 
 - **Empfehlung, in dieser Reihenfolge:** (1) **BUG-122** — eine Zeile `revoke all` + `grant select`, die schärfste Kante für den geringsten Aufwand. (2) **BUG-123** — `on conflict (profile_id) do update` in `start_round`. (3) **BUG-112** — die Skelettfläche beim Rundenstart, danach ist AC-25 erfüllt. (4) `/refine PROJ-2` für **BUG-125**, und dabei gleich prüfen, ob AC-25 so gemeint war. (5) **BUG-124** zusammen mit T36/T37 beim Deploy. Die übrigen Low können warten
 
 > **Der Unterschied zum Vorlauf, in einem Satz:** Dort war ein Kriterium gebrochen, weil eine Zuständigkeit beim Falschen lag; hier ist eines unerfüllt, weil eine Skelettfläche fehlt. Die Liste unter „Nicht verifiziert" bleibt davon unberührt — **Darstellung und Responsive-Verhalten hat auch in diesem dritten Lauf niemand gesehen.**
+
+---
+
+## Nachtrag — Übersicht aller Server-Autoritätsübergänge (2026-09-07)
+
+**Anlass:** Vor dem nächsten `/build` sollte einmal zusammenhängend statt Bug für Bug sichtbar sein, wo die Runde vom Browser auf den Server übergeht — und woran der Server an jeder dieser Stellen erkennt, **welche** Runde gemeint ist. Alle Angaben aus dem Quelltext von `HEAD` (`5bb6631`) und aus Messungen gegen die laufende lokale Datenbank.
+
+**Die Leitfrage der Tabelle** ist nicht „darf der Aufrufer das?" — das ist überall gleich und überall dicht (jede Funktion ist `security definer`, von `public`/`anon`/`authenticated` entzogen und nur für `service_role` ausführbar; das Profil stammt ausnahmslos aus `getUser()`, nie aus einem mitgeschickten Feld). Die Leitfrage ist: **„woher weiß der Server, welche Runde der Aufrufer meint?"** An genau dieser Frage ist BUG-120 gescheitert.
+
+### Die acht Übergänge
+
+| # | Übergang | Eintritt (Server Action) | DB-Funktion | Bindung an die Runde | Race-Garantie | Befund |
+|---|---|---|---|---|---|---|
+| 1 | **Runde starten** | `startRoundAction()` — ohne Argument | `start_round(profile, …)` | **keine nötig** — erzeugt die Runde, Profil aus der Sitzung | ❌ `delete` und `insert` sind **getrennte Anweisungen** ohne `on conflict` (`0009:68-84`) | **BUG-123** — gleichzeitige Starts → HTTP 500 `active_runs_pkey` |
+| 2 | **Antwort prüfen** | `answerAction({token, choice})` | `submit_answer(profile, token, choice)` | ✅ **Frage-Token** — `where current_token = p_token` (`0009:232-237`) | ✅ `for update` + Token wird im selben Schritt geleert → jeder zweite Aufruf läuft ins Leere | — (EC-1, EC-15 halten) |
+| 3 | **Nächste Frage vorbereiten** | `prepareNextQuestionAction()` — **ohne Argument** | `get_round_snapshot(profile)` → `set_prepared_question(profile, …)`, bei leerem Vorrat `finish_round(profile, snapshot.roundId)` | ❌ **nur das Profil** — der Aufrufer nennt seine Runde nirgends | ⚠️ letzter Schreiber gewinnt | **BUG-130** |
+| 4 | **Vorbereitete Frage ersetzen** | `replacePreparedQuestionAction()` — **ohne Argument** | `discard_prepared_question(profile)` + `set_prepared_question(profile, …)` | ❌ **nur das Profil** | ⚠️ letzter Schreiber gewinnt | **BUG-130** |
+| 5 | **Vorbereitete Frage befördern** | `promoteQuestionAction(token)` | `promote_prepared_question(profile, token)` | ✅ **Frage-Token**, zusätzlich `and current_token is null` — eine angezeigte Frage ist nicht verdrängbar (`0009:180-190`) | ✅ bedingtes Update in einer Anweisung | — (EC-12 hält) |
+| 6 | **Runde beenden** | `endRoundAction(roundId)` | `finish_round(profile, roundId)` | ✅ **Runden-Kennung** — `and a.round_id = p_round_id` (`0012`) | ✅ `for update` + `runs.round_id UNIQUE` + `on conflict … do nothing` | — (BUG-120 geschlossen) |
+| 7 | **Bildzugriff** | `GET /api/question/[token]/image` | `resolve_question_image(profile, token)` | ✅ **Frage-Token**, nur für die eigene laufende Runde; fremd/erfunden/abgelaufen → 404 | n/a — `stable`, nur lesend | — (AC-32 hält) |
+| 8 | **Ergebnis lesen** | `getRunByRoundIdAction(roundId)`, `getPersonalBest()` | keine — PostgREST über die **Nutzersitzung** | ✅ Runden-Kennung **plus** RLS `runs_select_own` | n/a | — (AC-14 hält) |
+
+**Was die Tabelle als Muster zeigt:** Drei Bindungsarten sind im Einsatz — Frage-**Token** (2, 5, 7), Runden-**Kennung** (6, 8), und **gar nichts** (3, 4). Übergang 1 braucht keine, weil er die Runde erzeugt. Die beiden Zeilen ohne Bindung sind exakt der Zustand, in dem `finish_round` vor Migration `0012` war.
+
+### Die drei Tabellen darunter
+
+| Tabelle | RLS | Policies | Tabellenrechte `anon` / `authenticated` | Bewertung |
+|---|---|---|---|---|
+| `active_runs` | an | **keine** — bewusst, denn die Zeile enthält die Lösung | **keine** (`revoke all`, `0007:109`) | ✅ **Das Vorbild:** zwei Schichten, beide zu |
+| `runs` | an | nur `runs_select_own` (SELECT) | `rDxtm` = SELECT + **TRUNCATE** + TRIGGER + REFERENCES | **BUG-122** — `0011:36` entzieht nur `insert, update, delete` |
+| `profiles` | an | nur `profiles_select_authenticated` (SELECT) | **`arwdDxtm` = alle Rechte** | ⚠️ **Hält allein durch RLS.** Gemessen: `PATCH`/`DELETE` auf eigene und fremde Zeilen → HTTP 204 mit **0 betroffenen Zeilen**, Trainername unverändert, Profilzahl unverändert (133). Einschichtig statt zweischichtig — dieselbe Klasse wie BUG-122, gehört zu PROJ-1 |
+
+### BUG-130: Zwei Übergänge kennen die Runde nicht, die sie verändern
+
+- **Severity:** Medium
+- **Berührt:** AC-36, EC-15, AC-10, AC-35
+- **Klasse:** identisch mit BUG-120 — dort war es das Rundenende, hier sind es Vorbereiten und Ersetzen
+- **Warum es BUG-120s Fix überlebt hat:** `0012` hat die Runden-Kennung nur bei `finish_round` nachgezogen. `set_prepared_question` und `discard_prepared_question` nehmen weiterhin nur `p_profile`, und die zugehörigen Server Actions nehmen **überhaupt kein Argument** — ein veralteter Tab ist für den Server von einem aktuellen nicht unterscheidbar, weil er seine Runde gar nicht nennen kann
+
+**Messung 1 — der veraltete Tab verändert die laufende Runde** (Runde A gestartet, Runde B gestartet und A damit verdrängt, dann der Aufruf, den Tab A auslöst):
+
+```
+B VORHER   round_id 48f32e60…  prepared_answer_id 151  prepared_token 62960415…  seen_ids {150,151}
+   → discard_prepared_question(profile) + set_prepared_question(profile, 300, 1, {301,302})
+B NACHHER  round_id 48f32e60…  prepared_answer_id 300  prepared_token 4a3fbb79…  seen_ids {150,151,301,302,300}
+```
+
+Die vorbereitete Frage der **laufenden** Runde ist ausgetauscht, ihr Token gewechselt, ihr Ziehungsvorrat um drei Nummern verkürzt. Der Tab, der gerade spielt, hat das Bild zu `62960415…` vorgeladen — das ist jetzt wertlos, und die nächste Frage kommt mit sichtbarem Ladezustand statt vorgeladen (**AC-10**).
+
+**Messung 2 — der veraltete Tab kann die laufende Runde beenden** (Runde B auf „Vorrat erschöpft, keine Frage offen" gesetzt, dann der `pool-empty`-Zweig aus `question-action.ts:120-143`):
+
+```
+B VOR DEM ENDE   round_id 48f32e60…  streak 9  keine_frage_offen t   runs 0
+   → finish_round(profile, snapshot.roundId)     ← die Kennung stammt vom SERVER, nicht vom Aufrufer
+ENDE             round_id 48f32e60…  streak 9  duration_ms 0  written t
+                 runs 1   active_runs 0
+```
+
+Die Runden-Kennung, die `0012` als Schutz eingeführt hat, wird hier **serverseitig aus der gerade laufenden Runde abgeleitet** — der Schutz ist damit auf diesem Pfad wirkungslos. Voraussetzung ist ein erschöpfter Ziehungsvorrat ohne offene Frage; das ist selten, aber es ist derselbe Konstruktionsfehler.
+
+- **Was es nicht ist:** kein Sicherheitsproblem über Kontogrenzen hinweg. Ein Spieler kann ausschließlich seine **eigenen** Runden so beeinflussen — fremde Profile sind an jeder Stelle durch `getUser()` und RLS getrennt (Übergang 8 und die Tabelle darüber)
+- **Der Fix, in derselben Form wie `0012`:** `prepareNextQuestionAction` und `replacePreparedQuestionAction` nehmen die Runden-Kennung entgegen, `set_prepared_question` und `discard_prepared_question` bekommen `p_round_id` und ein `and a.round_id = p_round_id`; passt sie nicht, geschieht nichts. Im `pool-empty`-Zweig wird die Kennung des Aufrufers gegen `snapshot.roundId` geprüft, statt Letztere zu verwenden
+
+### Antwort auf die Gate-Frage
+
+**Nein — BUG-122, BUG-123 und BUG-124 waren nicht die letzten offenen Lücken.** Die Übersicht hat mit **BUG-130** eine vierte gefunden, und zwar genau dort, wo die Tabelle eine Lücke im Muster zeigt: zwei von acht Übergängen binden sich an keine Runde. Ohne die zusammenhängende Betrachtung wäre sie stehen geblieben, weil jeder Einzelbefund für sich harmlos aussah.
+
+**Alle vier gehören in denselben `/build`-Durchgang** — sie sitzen in denselben zwei Dateien (`supabase/migrations/*`, `src/lib/quiz/*`), und BUG-123 und BUG-130 fassen beide `start_round` bzw. die Vorbereitungs-Funktionen an.
+
+### Nachtrag zum Verdikt — Entscheidung des Nutzers, 2026-09-07
+
+**BUG-112 (AC-25, fehlende Skelettfläche) und BUG-125 (AC-34 Satz 2) blockieren die „production ready"-Bewertung nicht länger.** Entscheidung des Nutzers, ausdrücklich begründet: Beide tragen **kein Sicherheits- und kein Datenrisiko**. Sie werden getrennt weitergeführt — BUG-112 als gewöhnlicher Task im nächsten `/build`, BUG-125 als `/refine PROJ-2` am Vertrag.
+
+Das ändert die Bewertung des dritten Laufs **nicht rückwirkend**, es ändert den Maßstab für den nächsten: Ein `NEIN` wird ab jetzt nur noch von Befunden getragen, die Verhalten, Daten oder Sicherheit betreffen — nicht von einer fehlenden Ladefläche und nicht von einem Satz im Vertrag, der dem gebauten Verhalten hinterherhinkt.
+
+**Der Stand nach diesem Nachtrag ist trotzdem `NEIN`** — aber aus einem anderen Grund als im Bericht oben: Die Autoritäts-Übersicht hat mit **BUG-130** eine Lücke gefunden, die Verhalten betrifft (die laufende Runde wird von einem veralteten Tab verändert und im Randfall beendet). Zusammen mit BUG-122, BUG-123 und BUG-124 sind das vier Befunde für den nächsten `/build`.
