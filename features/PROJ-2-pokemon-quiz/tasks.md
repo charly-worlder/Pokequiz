@@ -1,6 +1,129 @@
 # PROJ-2 Tasks
 
-> ⚠️ **Veraltet seit dem 2026-09-06.** `/refine PROJ-2` hat die Runde auf **serverseitige Autorität** umgestellt: Der Server vergibt die Fragen, prüft jede Antwort, zählt die Serie und misst die Zeit; der Browser erfährt weder die Pokémon-Nummer noch die richtige Option (AC-32 bis AC-41 in `spec.md`). Dieser Bauplan stammt aus dem abgelösten Entwurf und deckt die neuen Kriterien nicht ab. **Nicht danach bauen — erst `/architecture PROJ-2`, dann `/tasks PROJ-2` neu erzeugen.**
+> Erzeugt von `/tasks` aus `spec.md` + `design.md`. Der geordnete, nachvollziehbare Bauplan — die Brücke zwischen dem Vertrag (WAS) und dem Bau (WIE).
+> `[P]` = parallelisierbar: Die Dateien dieser Aufgabe sind disjunkt zu jeder anderen `[P]`-Aufgabe derselben Ebene, `/build` kann sie also in einen eigenen Unteragenten geben.
+> Ebenen laufen **nacheinander** (jede ist eine Schranke). Innerhalb einer Ebene läuft parallel, was `[P]` trägt. Jede Aufgabe verweist auf die AC-IDs aus `spec.md`, die sie erfüllt — das ist die Kette AC → Task → Test.
+> `[user]` = eine Einstellung, die nur der Nutzer vornehmen kann: `where:` statt `files:`, nie `[P]`, wird vom Nutzer abgehakt — `/build` reicht sie weiter, `/deploy` liefert nicht aus, solange eine offen ist.
+> Der Status lebt ausschließlich in `features/INDEX.md`.
+>
+> **Neu erstellt am 2026-09-06** nach `/architecture PROJ-2` (serverseitig geführte Runde). Der abgelöste Bauplan T1–T31 steht vollständig unter „Historie" am Ende; **die Nummerierung läuft deshalb bei T32 weiter**, damit die Verweise in `qa-report.md` und in den Bug-Notizen eindeutig bleiben.
+
+## Level 1 — Datenschicht
+
+<!-- Fundament. Beide Migrationen sind voneinander unabhängig und berühren verschiedene Dateien. -->
+
+- [ ] T32 [P]  Migration `active_runs`: Profil-ID als Primärschlüssel mit Löschkaskade (macht „höchstens eine laufende Runde je Spieler" zur Eigenschaft der Tabelle), Runden-Kennzeichen eindeutig, gezogene Nummern, Serienstand, aufsummierte Zeit, die vier Felder der aktuellen Frage, die drei Felder der vorbereiteten nächsten Frage, Zeitpunkt der letzten Berührung; Wertebereiche als Datenbankregeln; **RLS eingeschaltet und bewusst ohne jede Policy**, mit der Begründung als Kommentar — die Zeile enthält die Lösung, eine Eigentümer-Policy würde AC-32 auf der Datenebene brechen  · files: supabase/migrations/0007_active_runs.sql  · → AC-36, AC-38, AC-40
+- [ ] T33 [P]  Migration `runs` nachziehen: `client_round_id` heißt `round_id` (der Server vergibt es jetzt), Constraint `runs_duration_plausible` entfällt — AC-12 hat die 0,5-Sekunden-Regel abgeschafft, weil AC-34 sie ablöst. Die übrigen Grenzen und alle Policies bleiben  · files: supabase/migrations/0008_runs_round_id.sql  · → AC-12, EC-4
+
+## Level 2 — Regeln in der Datenbank
+
+<!-- Setzt Level 1 voraus. Die beiden Migrationen sind untereinander unabhängig. Die [user]-Aufgaben stehen hier, weil der Aufräum-Lauf aus T35 sie braucht. -->
+
+- [ ] T34 [P]  Migration mit den Funktionen der Runde, alle `security definer` mit festem `search_path`, `revoke` von `public`/`anon`/`authenticated`, `grant execute` nur für `service_role` (Muster wie `0003` und `0006`): Runde starten und eine vorhandene dabei ersetzen · vorbereitete Frage setzen · **Antwort prüfen als bedingte Änderung auf das Frage-Token** — in einem Schritt Intervall messen und aufsummieren, mit der gespeicherten richtigen Position vergleichen, Serie erhöhen, die vorbereitete Frage nachrücken lassen und ihren Ausgabezeitpunkt setzen · vorbereitete Frage ersetzen, ohne die aktuelle anzufassen · Runde beenden, `runs`-Zeile aus dem Zustand schreiben und den Zustand löschen · Frage-Token zur Pokémon-Nummer auflösen, nur für die eigene laufende Runde  · files: supabase/migrations/0009_round_functions.sql  · → AC-33, AC-34, AC-35, AC-36, AC-39, EC-1, EC-2, EC-4, EC-12, EC-15
+- [ ] T35 [P]  Migration Aufbewahrung: `pg_cron` einschalten und einen Lauf **alle 5 Minuten** einrichten, der alles löscht, was länger als **110 Minuten** unberührt ist. Takt und Schwelle zusammen bleiben damit unter den zwei Stunden aus AC-41 — ein stündlicher Takt gegen eine 2-Stunden-Schwelle ergäbe bis zu drei Stunden Verweildauer  · files: supabase/migrations/0010_active_runs_retention.sql  · → AC-41
+- [ ] T36 [user]  Supabase: `pg_cron` einschalten — **nur nötig, falls das gehostete Projekt es der Migration aus T35 verweigert**  · where: Dashboard → Database → Extensions → `pg_cron` · Wert: eingeschaltet  · → AC-41
+- [ ] T37 [user]  Supabase: prüfen, dass das Projekt nicht wegen Inaktivität pausiert ist — ein pausiertes Projekt führt keine zeitgesteuerten Läufe aus  · where: Dashboard → Project Settings · Wert: Projekt aktiv  · → AC-41
+
+## Level 3 — Server-Bausteine
+
+<!-- Drei disjunkte Dateien, keine importiert eine andere. -->
+
+- [ ] T38 [P]  Prüfschemata umbauen: Frage-Token als UUID, gewählte Position als ganze Zahl 0–3. `seenIdsSchema` und `MIN_MS_PER_ANSWER` entfallen ersatzlos — der Browser schickt weder eine Ausschlussliste noch ein Ergebnis, es gibt also nichts mehr zu plausibilisieren  · files: src/lib/validation/quiz.ts, src/lib/validation/quiz.test.ts  · → AC-12, AC-33
+- [ ] T39 [P]  Zugang zum Rundenzustand: dünne Schicht über die Funktionen aus T34, ausschließlich über den vorhandenen Administrationszugang (`src/lib/supabase/admin.ts`). Die Profil-ID stammt immer aus der Sitzung und wird nie aus einem Aufrufparameter übernommen  · files: src/lib/quiz/round-state.ts, src/lib/quiz/round-state.test.ts  · → AC-14, AC-33, AC-34, AC-35, AC-36, AC-39
+- [ ] T40 [P]  PokeAPI-Client erweitern: Sprite-Bytes serverseitig holen und über die CDN-Adresse — also über die Pokémon-Nummer — zwischenspeichern, mit derselben ausdrücklich erzwungenen Zwischenspeicherung wie die Namen. `spriteUrlFor` wird modulintern, damit die Adresse nicht versehentlich wieder nach außen gerät  · files: src/lib/pokeapi/client.ts, src/lib/pokeapi/client.test.ts  · → AC-31, AC-37
+
+## Level 4 — Server-Schnittstellen
+
+<!-- Setzt Level 3 voraus. Drei disjunkte Dateimengen. -->
+
+- [ ] T41 [P]  Server Actions neu schneiden: Runde starten (zieht erste und vorbereitete Frage, liefert nur Optionen und Token) · Antwort abgeben (Token + Position, liefert Urteil, richtige Position, Serienstand, bei Rundenende Ergebnis und Bestleistungs-Hinweis) · vorbereitete Frage ersetzen · Runde beenden. **`saveRun` entfällt ersatzlos** — es gibt keine Schnittstelle mehr, die ein fertiges Ergebnis entgegennimmt; `getPersonalBest` bleibt unverändert  · files: src/lib/quiz/question-action.ts, src/lib/quiz/question-action.test.ts, src/lib/quiz/run-actions.ts, src/lib/quiz/run-actions.test.ts  · → AC-2, AC-3, AC-5, AC-8, AC-11, AC-12, AC-14, AC-18, AC-33, AC-35, EC-2, EC-3, EC-5, EC-7, EC-9
+- [ ] T42 [P]  Bild-Route `/api/question/[token]/image`: löst das Token über T34 zur Nummer auf, aber nur für die laufende Runde dieses Nutzers — sonst 404. Holt die Bytes über T40 und reicht sie durch, mit `Cache-Control: private, max-age=3600, immutable`, damit das vorgeladene Bild beim Anzeigen ein Treffer im Browser-Cache ist  · files: src/app/api/question/[token]/image/route.ts, src/app/api/question/[token]/image/route.test.ts  · → AC-20, AC-28, AC-32, AC-37
+- [ ] T43 [P]  `remotePatterns` für den Sprite-Host aus der Framework-Konfiguration entfernen. Ohne das bleibt die alte, nummernsichtbare Bildadresse über die Bild-Optimierung bedienbar — AC-32 wäre über einen zweiten, unbewachten Weg umgehbar  · files: next.config.ts  · → AC-20, AC-32
+
+## Level 5 — Oberfläche
+
+<!-- T44 legt die Schnittstellen der drei anderen fest und läuft deshalb allein, obwohl seine Dateien disjunkt wären. -->
+
+- [ ] T44  QuizScreen auf reine Anzeige umbauen: neuer Zustand „wartet" zwischen Klick und Urteil, Serie und Zeit kommen vom Server, die angezeigte Uhr ist nur noch Anzeige, Vorladen der vorbereiteten Frage über deren Token, Fehlerpfade auf die Ersetzen-Aktion aus T41. Die Verwurfsgrenze aus EC-10 zählt weiterhin, und eine bereits **angezeigte** Frage wird nicht mehr ersetzt (EC-12)  · files: src/components/quiz/quiz-screen.tsx, src/components/quiz/quiz-screen.test.tsx, src/components/quiz/quiz-screen.error-states.test.tsx, src/components/quiz/quiz-screen.wrong-answer.test.tsx  · → AC-4, AC-6, AC-9, AC-10, AC-16, AC-17, AC-19, EC-1, EC-6, EC-10, EC-12, EC-15
+- [ ] T45 [P]  Frageansicht und Antwortoption: gedrückter Zwischenzustand während „wartet" (der Klick darf nicht ins Leere zu gehen scheinen), Färbung erst nach dem Urteil des Servers — nie aus einer im Browser bekannten Lösung  · files: src/components/quiz/question-view.tsx, src/components/quiz/answer-option.tsx  · → AC-4, AC-6
+- [ ] T46 [P]  Pokémon-Bild und Vorlade-Sonde auf die Token-Adresse umstellen, ohne die Bild-Optimierung des Frameworks; Skelettfläche in Bildgröße und die 5-Sekunden-Grenze mit genau einem stillen zweiten Versuch bleiben  · files: src/components/quiz/pokemon-image.tsx  · → AC-15, AC-20, AC-25, AC-32, EC-6
+- [ ] T47 [P]  Ergebnisansicht: zeigt die **servergemessene** Zeit, nicht den Stand der Anzeigeuhr; der erneute Versuch nach einem fehlgeschlagenen Speichern läuft über „Runde beenden" und schreibt aus dem Rundenzustand  · files: src/components/quiz/result-view.tsx  · → AC-7, AC-8, EC-3
+
+## Level 6 — Absicherung
+
+- [ ] T48  Manipulations-Tests, jeder gegen den wiederhergestellten Fehler rot geprüft: Es gibt keinen Weg mehr, ein fertiges Ergebnis einzureichen · ein fremdes, abgelaufenes oder erfundenes Frage-Token wird abgewiesen · der zweite Klick auf dieselbe Frage bleibt wirkungslos · eine Antwort aus einem verwaisten zweiten Tab wird abgewiesen · weder Bildadresse noch ausgeliefertes Markup verraten die Pokémon-Nummer oder die richtige Option · eine Antwort ohne Sitzung führt auf `/login`  · files: tests/PROJ-2-round-authority.spec.ts  · → AC-12, AC-14, AC-32, AC-33, EC-1, EC-7, EC-15
+- [ ] T49 [P]  Bestehende E2E-Suite auf den neuen Ablauf nachziehen: Antworten warten jetzt auf das Urteil des Servers, das Quizbild kommt von der eigenen Route. Dabei bleibt die Aussage jedes Tests gleich — nur das Vehikel ändert sich  · files: tests/PROJ-2-quiz-round.spec.ts, tests/PROJ-2-personal-best.spec.ts, tests/PROJ-2-access-guard.spec.ts, tests/PROJ-2-no-third-party.spec.ts  · → AC-1, AC-8, AC-9, AC-11, AC-13, AC-20, AC-29, AC-30
+
+## Parallelization
+
+- **Ebenen sind Schranken.** Eine Ebene beginnt erst, wenn die vorige vollständig integriert und gegen ihre AC-IDs geprüft ist. Das hält den Datenvertrag vor der Oberfläche: Schema (L1) → Datenbankregeln (L2) → Server-Bausteine (L3) → Schnittstellen (L4) → Oberfläche (L5) → Absicherung (L6).
+- **`[P]` verlangt disjunkte Dateien.** Keine zwei `[P]`-Aufgaben derselben Ebene nennen denselben Pfad unter `files:` — geprüft für L1 (2 Aufgaben), L2 (2), L3 (3), L4 (3), L5 (3 neben T44), L6 (1 neben T48).
+- **T44 trägt bewusst kein `[P]`.** Seine Dateien wären disjunkt, aber er legt die Schnittstellen von T45–T47 fest; parallel gebaut, würden die vier aneinander vorbeireden.
+- **`[user]`-Aufgaben sind nie parallel und werden nie gebaut.** Sie stehen in der Ebene, deren Code auf ihnen aufsetzt; `/build` reicht sie weiter und macht ohne sie weiter, das Kästchen bleibt offen, bis der Nutzer es abhakt.
+
+## AC-Abdeckung
+
+Jede AC und jede gültige EC ist zugeordnet. „Unverändert" heißt: bereits gebaut (Aufgaben T1–T31 in der Historie), von diesem Umbau nicht berührt und durch **T49** dagegen abgesichert.
+
+| Kriterium | Aufgaben |
+| --- | --- |
+| AC-1 | T44, T49 (Ansicht unverändert) |
+| AC-2 | T41, T44 |
+| AC-3 | T41 |
+| AC-4 | T44, T45 |
+| AC-5 | T34, T41 |
+| AC-6 | T44, T45 |
+| AC-7 | T47 |
+| AC-8 | T41, T47 |
+| AC-9 | T44 |
+| AC-10 | T44, T46 |
+| AC-11 | T34, T41 |
+| AC-12 | T33, T38, T41, T48 |
+| AC-13 | unverändert (Routenschutz aus PROJ-1), T49 |
+| AC-14 | T39, T41, T48 |
+| AC-15 | T40, T46 |
+| AC-16, AC-17 | T44 |
+| AC-18 | T34, T41, T44 |
+| AC-19 | T44 |
+| AC-20 | T42, T43, T46, T49 |
+| AC-21 – AC-25 | unverändert (App-Shell), T49 |
+| AC-26, AC-27 | unverändert (`runs` aus Migration `0002`); T33 nur für die Umbenennung |
+| AC-28 | T32, T42 |
+| AC-29, AC-30 | unverändert, T49 |
+| AC-31 | T40 |
+| AC-32 | T41, T42, T43, T46, T48 |
+| AC-33 | T34, T38, T39, T41, T48 |
+| AC-34 | T34, T39 |
+| AC-35 | T34, T41 |
+| AC-36 | T32, T34 |
+| AC-37 | T40, T42 |
+| AC-38 | T32 |
+| AC-39 | T34 |
+| AC-40 | T32 |
+| AC-41 | T35, T36, T37 |
+| EC-1 | T34, T44, T48 |
+| EC-2 | T34, T41 |
+| EC-3 | T41, T47 |
+| EC-4 | T33, T34 |
+| EC-5 | T41 |
+| EC-6 | T44, T46 |
+| EC-7 | T41, T48 |
+| EC-8 | unverändert (T40 erbt das Verhalten) |
+| EC-9 | T41 |
+| EC-10 | T44 |
+| EC-11 | entfallen am 2026-09-04 |
+| EC-12 | T34, T44 |
+| EC-13, EC-14 | **keine Bauaufgabe** — bewusst akzeptierte Restrisiken, im Vertrag benannt und in `design.md` begründet |
+| EC-15 | T34, T44, T48 |
+
+---
+
+## Historie — der abgelöste Bauplan (T1–T31, 2026-09-01 bis 2026-09-05)
+
+> Der Bauplan des **clientseitig geführten** Entwurfs, abgelöst am 2026-09-06. Er bleibt vollständig stehen, weil `qa-report.md` und die Bug-Notizen auf seine T-Nummern verweisen — deshalb beginnt der neue Plan oben bei T32 statt wieder bei T1.
+>
+> Abgehakte Kästchen hier bedeuten „damals gebaut", nicht „gilt weiter". Was tatsächlich weiterlebt: die App-Shell (T7), die Quiz-Ansichten als Bausteine (T8), Bewegung und Zugänglichkeit (T9), der Wächter über die Server Actions (T24, T25) und der Routenschutz (T23, T26).
+
 
 
 > Erzeugt von `/tasks` aus `spec.md` + `design.md`. Dies ist der geordnete, nachvollziehbare Bauplan — die Brücke zwischen dem Vertrag (WAS) und dem Bau (WIE).
@@ -10,13 +133,13 @@
 
 **Keine `[user]`-Aufgaben.** `design.md` → Settings the user makes ist leer: Dieses Feature braucht keine Einstellung in einem Anbieter-Dashboard.
 
-## Level 1 — Datenschicht
+### Level 1 — Datenschicht
 
 <!-- Fundament. Läuft zuerst, weil alles Weitere auf dem Datenvertrag aufsetzt. -->
 
 - [x] T1  Migration `runs`: Tabelle (Profil-Verweis mit Löschkaskade, Serie, Dauer, Runden-Kennzeichen, Zeitstempel), Grenzwerte als Datenbankregeln (Serie 0–386, Dauer ≥ 0, Dauer ≥ 500 × Serie), eindeutiges Runden-Kennzeichen, RLS (lesen nur eigene, anlegen nur für sich selbst, kein Ändern/Löschen), zusammengesetzter Index über Profil + Serie absteigend + Dauer aufsteigend  · files: supabase/migrations/0002_runs.sql  · → AC-11, AC-12, AC-14, AC-26, AC-27, EC-4
 
-## Level 2 — Server-Bausteine
+### Level 2 — Server-Bausteine
 
 <!-- Drei voneinander unabhängige Bausteine, drei verschiedene Dateien → alle [P]. -->
 
@@ -24,14 +147,14 @@
 - [x] T3 [P]  Prüfschema für Rundenergebnisse: Serie ganzzahlig 0–386, Dauer ganzzahlig ≥ 0, Dauer ≥ 500 × Serie, Runden-Kennzeichen als UUID  · files: src/lib/validation/quiz.ts  · → AC-12
 - [x] T4 [P]  Bild-Auslieferung und Beobachtbarkeit konfigurieren: Bild-Host für die Sprites freischalten (damit der Browser nur die eigene Domain anfragt), Zwischenspeicher-Dauer für optimierte Bilder setzen, `fetch`-Protokollierung für den Entwicklungsmodus aktivieren (macht Cache-Treffer für `/qa` überhaupt sichtbar, siehe Prüfhinweise unten)  · files: next.config.ts  · → AC-20, AC-28, AC-31
 
-## Level 3 — Server Actions
+### Level 3 — Server Actions
 
 <!-- Setzen auf Level 2 auf. Zwei verschiedene Dateien → beide [P]. -->
 
 - [x] T5 [P]  Server Action „nächste Frage": nimmt die Liste der bereits gezeigten Nummern entgegen, zieht eine neue Lösung plus drei verschiedene falsche Optionen aus 1–386, holt alle vier deutschen Namen, mischt die Reihenfolge, verwirft ein Pokémon ohne deutschen Namen serverseitig und zieht neu, meldet „Pool leer" wenn alle 386 verbraucht sind, weist Aufrufe ohne gültige Sitzung ab  · files: src/lib/quiz/question-action.ts  · → AC-3, AC-5, AC-15, EC-2, EC-5, EC-6, EC-7, EC-11
 - [x] T6 [P]  Server Action „Runde speichern" (prüft serverseitig gegen das Schema aus T3, schreibt immer für das Profil aus der Sitzung, zweite Einreichung desselben Runden-Kennzeichens erzeugt keine zweite Zeile und meldet trotzdem Erfolg) plus Lesefunktion für die persönliche Bestleistung  · files: src/lib/quiz/run-actions.ts  · → AC-8, AC-11, AC-12, AC-14, AC-27, EC-3, EC-4, EC-7
 
-## Level 4 — UI-Bausteine
+### Level 4 — UI-Bausteine
 
 <!-- Reine Darstellung, keine Zustandslogik. Drei disjunkte Dateimengen → alle [P]. -->
 
@@ -39,7 +162,7 @@
 - [x] T8 [P]  Quiz-Ansichten ohne Zustandslogik: Antwortoption mit vier Zuständen (unbeantwortet, richtig, falsch, nicht gewählt), Statusleiste mit Serie und Uhr in gleichbreiten Ziffern, Pokémon-Bild mit Skelettfläche in Bildgröße, Startansicht, Ergebnisansicht (Serie, Zeit, Bestleistungs-Hinweis, Gewinner-Meldung bei leerem Pool, Hinweis auf fehlgeschlagenes Speichern), Fehlerkarte innerhalb der Quiz-Karte, Frageansicht  · files: src/components/quiz/answer-option.tsx, src/components/quiz/status-bar.tsx, src/components/quiz/pokemon-image.tsx, src/components/quiz/start-view.tsx, src/components/quiz/result-view.tsx, src/components/quiz/load-error-card.tsx, src/components/quiz/question-view.tsx  · → AC-1, AC-6, AC-7, AC-8, AC-16, AC-25
 - [x] T9 [P]  Bewegung und Zugänglichkeit: Keyframes `in`, `pop`, `nudge`, `float`, durchgehende Beachtung von `prefers-reduced-motion` (Zustandswechsel bleiben, Bewegung entfällt), sichtbare Fokus-Ringe auf allen interaktiven Elementen  · files: src/app/globals.css  · → AC-4, AC-6, AC-8, AC-25
 
-## Level 5 — Zusammenbau
+### Level 5 — Zusammenbau
 
 <!-- Eine Aufgabe: Zustandsmaschine und Seite hängen zu eng zusammen, um sie ohne gemeinsame Datei zu trennen. -->
 
@@ -62,7 +185,7 @@
 - [x] T12  Ergebnis-Screen: „Zur Bestenliste" erscheint nur, wenn `/leaderboard` existiert. Den Schalter dabei aus `site-header.tsx` in ein gemeinsames Modul ziehen, das beide Stellen importieren — PROJ-3 legt dann **einen** Schalter um statt zwei, und keiner kann vergessen werden  · files: src/lib/site-pages.ts, src/components/shell/site-header.tsx, src/components/quiz/result-view.tsx  · → AC-7, AC-21
 - [x] T11  Kopfzeile: Der Zugang zur Bestenliste erscheint nur, wenn `/leaderboard` existiert — bis dahin gar nicht statt als toter Link. Nach demselben Muster wie `LEGAL_PAGES` in `site-footer.tsx`, damit PROJ-3 eine erkennbare Stelle zum Freischalten hat  · files: src/components/shell/site-header.tsx  · → AC-21
 
-## Level 6 — Fixes aus dem QA-Lauf vom 2026-09-04
+### Level 6 — Fixes aus dem QA-Lauf vom 2026-09-04
 
 <!-- Nachgetragen am 2026-09-04. Anlass: der vollständige Sweep in qa-report.md
      (2 High, 3 Medium, 2 Low). T13-T15 decken die vom Nutzer beauftragten
@@ -82,7 +205,7 @@
 - **BUG-11** (Low, AC-25) — keine Skelettfläche beim Rundenstart
 - **BUG-12** (Low) — `getNextQuestion` validiert seine Eingabe nicht (kein Zod-Schema wie `saveRun`)
 
-## Level 7 — Fixes aus dem QA-Lauf vom 2026-09-04 (zweiter des Tages)
+### Level 7 — Fixes aus dem QA-Lauf vom 2026-09-04 (zweiter des Tages)
 
 - [x] T17  E2E-Suite auf das neue AC-9-Verhalten nachziehen (BUG-14). `PROJ-2-personal-best.spec.ts` prüft jetzt **positiv**, dass nach „Nochmal spielen" von selbst eine offene Frage erscheint; die Bestleistung wird über `/` geprüft, so wie AC-1 sie festmacht. `PROJ-2-quiz-round.spec.ts` tauscht nur das Vehikel (`goto('/')` statt Knopf), die Aussage zu AC-11 bleibt unverändert  · files: tests/PROJ-2-personal-best.spec.ts, tests/PROJ-2-quiz-round.spec.ts  · → AC-1, AC-8, AC-9, AC-11
 
@@ -97,7 +220,7 @@
 - [x] T23  Abgelaufene Sitzung führt wieder auf `/login` (BUG-9, EC-7): Der Proxy leitet **Server-Action-POSTs** nicht mehr um. Next.js kodiert das `redirect()` einer Action in-band (Status 200 plus `x-action-redirect`), gerade damit der Browser keiner 307 folgt — eine gewöhnliche Weiterleitung darauf ist für den Action-Handler ein Protokollbruch, und der `unauthenticated`-Zweig der Actions war dadurch **unerreichbar**. Vom Nutzer ausdrücklich genehmigt (Auth-Fluss, `.claude/rules/security.md`)  · files: src/proxy.ts, src/proxy.test.ts  · → EC-7
 - [x] T24  Wächter über alle Server Actions: findet per TypeScript-AST **jede** aus einer `'use server'`-Datei exportierte Funktion und verlangt entweder eine Sitzungsprüfung oder einen begründeten Eintrag in `PUBLIC_ACTIONS`. Macht die Zusicherung aus T23 strukturell statt einmalig  · files: src/lib/actions/server-actions.guard.test.ts  · → EC-7, AC-13, AC-14
 
-## Level 8 — Fixes aus dem QA-Lauf vom 2026-09-05
+### Level 8 — Fixes aus dem QA-Lauf vom 2026-09-05
 
 - [x] T25  Der Wächter über die Server Actions hält jetzt, was er verspricht (BUG-20): Die Erkennungslogik zieht in ein eigenes Modul `server-actions.guard.ts`, erfasst Inline-`'use server'` in jedem Funktionsrumpf, lehnt Re-Exporte und destrukturierte Exporte als nicht analysierbar **ab** statt sie zu überspringen, erfasst anonyme Default-Exporte und entscheidet die Sitzungsprüfung am **AST** statt am Text. Dazu ein Selbsttest, der jede der fünf Lücken einzeln festnagelt  · files: src/lib/actions/server-actions.guard.ts, src/lib/actions/server-actions.guard.test.ts, src/lib/actions/server-actions.guard.self.test.ts  · → EC-7, AC-13, AC-14
 - [x] T26  Die Proxy-Ausnahme für Server-Action-POSTs ist auf die Pfade eingegrenzt, die sie brauchen — derzeit nur `/` (BUG-21). PROJ-1s Credential-Actions laufen damit nicht mehr unter jedem Pfad, und eine pfadbasierte Abwehr beim Deploy lässt sich nicht mehr umgehen  · files: src/proxy.ts, src/proxy.test.ts  · → AC-13, EC-7
@@ -117,7 +240,7 @@
 
 Es ist also **Kontention im Messaufbau, kein Produktfehler** — passend dazu trat derselbe Flake schon vor den Fixes auf (gegen `4709193` gemessen: ebenfalls 5 von 24 rot). Deshalb T20: Bei 4 Workern läuft `npm run test:e2e` reproduzierbar 24/24, dreimal in Folge bestätigt. Das deckt BUG-15 auch nicht zu — der hat mit T19 seinen eigenen, rot geprüften Abnahmetest auf Unit-Ebene.
 
-## Level 9 — Fixes aus dem QA-Lauf vom 2026-09-05 (zweiter)
+### Level 9 — Fixes aus dem QA-Lauf vom 2026-09-05 (zweiter)
 
 - [x] T30  Off-by-one auf dem Pfad „Pool leer" behoben (BUG-33): `answer` plant `advance` aus dem Render **vor** `setStreak`, das eingefangene `fetchQuestion` hielt die alte Serie in seiner Closure. Ein `streakRef` wird neben `setStreak` gesetzt und ist zum Zeitpunkt des Timeouts aktuell; `streak` fällt dadurch aus den Abhängigkeiten von `fetchQuestion`, dessen Identität über eine ganze Runde stabil bleibt — das war die eigentliche Ursache, nicht die eine Zeile  · files: src/components/quiz/quiz-screen.tsx, src/components/quiz/quiz-screen.error-states.test.tsx  · → EC-2, AC-11
 - [x] T31  Die Zusage über den Wächter auf das gestutzt, was er wirklich leistet (BUG-32, BUG-34, BUG-35, BUG-36 — **bewusst nicht durch Erweiterung**): `design.md` führt Können **und** Grenzen samt Messung auf, benennt die Aufgabenteilung mit dem Code-Review und sagt, worauf ein Review bei einer neuen Action konkret achten muss. Die Kommentare in `proxy.ts` und `server-actions.guard.ts`, die sich auf die zu große Zusage stützten, sind korrigiert — inklusive der Fehlermeldung, die ein Entwickler zu lesen bekommt  · files: features/PROJ-2-pokemon-quiz/design.md, src/proxy.ts, src/lib/actions/server-actions.guard.ts, src/lib/actions/server-actions.guard.test.ts  · → EC-7
@@ -150,7 +273,7 @@ Es ist also **Kontention im Messaufbau, kein Produktfehler** — passend dazu tr
 
 **Entscheidungen und ihr Preis** stehen in `features/PROJ-1-user-login/design.md` → „Drosselung der Zugangsdaten-Pfade": Postgres statt Upstash (kein zweiter externer Blocker neben SMTP), Service-Role statt Browser-Schlüssel (sonst Aussperr-Waffe), fail-closed statt fail-open, und ein bewusst weiter gefasster Konto-Zähler, weil ein enger ohne CAPTCHA jedes Konto aussperrbar machen würde.
 
-## Backlog — bewusst offen
+### Backlog — bewusst offen
 
 Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht. Diese Punkte haben **kein Acceptance Criterion**; sie werden erst dann Aufgaben, wenn jemand sie ausdrücklich in die Spec holt (`/refine PROJ-2`).
 
@@ -166,7 +289,7 @@ Nicht Teil dieser Lieferung, aber festgehalten, damit es nicht nur im Chat steht
   **Wann es akut wird:** wenn die App öffentlich läuft und Lastspitzen den Rückstand schneller aufbauen, als der Abbau je Versuch ihn abträgt — oder wenn eine feste Höchstfrist zugesagt werden soll. `docs/privacy.md` sagt heute bewusst **keine** harte Frist zu.
   **Nächster Schritt, wenn es angegangen wird:** `pg_cron` im gehosteten Projekt einschalten und `prune_auth_throttle()` regelmäßig aufrufen. Das war beim Bau von `0005` bereits die erwogene Alternative und wurde verworfen, weil es eine Erweiterung braucht, die im Dashboard eingeschaltet werden muss — also eine Aufgabe von Hand, die vergessen werden kann. Beim Deploy ist dieser Einwand kleiner, weil dort ohnehin am Dashboard gearbeitet wird.
 
-## Prüfhinweise für `/qa`
+### Prüfhinweise für `/qa`
 
 Zwei Kriterien sind **unsichtbar, wenn sie fehlen** — bei allen anderen fällt der Fehler beim Anschauen auf. Sie brauchen deshalb eine bestimmte Methode, nicht nur Aufmerksamkeit:
 
@@ -185,7 +308,7 @@ Die Rückfallebene ist ersatzlos entfallen (T18, `spec.md` → EC-11). An ihre S
 
 Der Verwurf hängt am `onError` eines `<img>`. Ein Test, der das Ereignis in einer Schleife von Hand nachfeuert, prüft den interessanten Fall weg: Genau das tut der Browser nämlich nicht. Der ursprüngliche Abnahmetest zu BUG-8 war deshalb **auch gegen den kaputten Code grün** und musste umgeschrieben werden. Einmal feuern, dann verlangen, dass die Runde von selbst weiterzieht.
 
-## Parallelization
+### Parallelization
 
 - **Ebenen sind Schranken.** Eine Ebene startet erst, wenn die vorige vollständig integriert und gegen ihre AC-IDs geprüft ist. Das hält den Datenvertrag vor der Oberfläche: Schema (L1) → Server-Bausteine (L2) → Server Actions (L3) → UI-Bausteine (L4) → Zusammenbau (L5).
 - **`[P]` verlangt disjunkte Dateien.** Zwei `[P]`-Aufgaben derselben Ebene nennen nie denselben Pfad unter `files:`. Geprüft: L2 (drei Dateien), L3 (zwei Dateien) und L4 (drei Dateimengen) sind jeweils überschneidungsfrei.
