@@ -1909,3 +1909,230 @@ Mit BUG-61 als Deploy-Blocker und BUG-62 als korrigierter Zusage bleibt **kein C
 3. **Was nie geprüft wurde, bleibt ungeprüft.** Kein Browser, kein Viewport: das gesamte optische Verhalten, AC-24, der Netzwerk-Mitschnitt zu AC-20 und der echte Ausfall der PokeAPI (AC-15/EC-8). `/e2e-tests` deckt davon die kritischen Journeys ab, nicht alles.
 
 **Status in `features/INDEX.md`: Approved.**
+
+---
+
+## QA-Lauf — 2026-09-07, nach dem Umbau auf die serverseitig geführte Runde
+
+**Anlass:** `/refine PROJ-2` (2026-09-06) hat die Runde serverseitig autoritativ gemacht (AC-32 bis AC-41), `/architecture` und `/tasks` haben sie neu entworfen und geplant, `/build` hat sie in den Commits `6acd8a9` und `7a7c1de` umgesetzt. Dieser Lauf prüft den **gesamten Vertrag** neu — alle 41 AC und alle 14 gültigen EC —, statt frühere Häkchen zu übernehmen.
+
+**Umgebung:** `npm run dev` auf `http://localhost:3000`, lokale Supabase-Instanz in Docker (Migrationen 0001–0010 angewandt), Branch `feat/PROJ-2-server-authoritative-round`.
+
+**Wie geprüft wurde — und warum das hier zählt.** Die Verifikation lief in **drei `qa-engineer`-Lanes mit getrennten Aufgabenbereichen**, von denen keine den Bau gesehen hat: Lane 1 Abnahme, Lane 2 Security-Red-Team, Lane 3 Regression. Jede bekam nur den Feature-Ordner, die AC-Liste, ihren Prüfschritt und die URL. Diese Sitzung ist der eine Eigentümer: Sie führt zusammen, entscheidet bei Widersprüchen und trägt die Bewertung. **Das war diesmal ausschlaggebend** — siehe BUG-110.
+
+> Legende: `[x]` in **diesem** Lauf verifiziert (Nachweis auf derselben Zeile) · `[ ] BUG` als defekt verifiziert · `[!] NICHT VERIFIZIERT` mit Grund.
+
+### Die vier Prüfungen — einzeln gelaufen, einzeln genannt
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **239/239 grün**, 22 Dateien |
+| Lint | `npm run lint` | **Exit 0**, keine Befunde |
+| Build | `npm run build` | **Exit 0**, 6 Routen inkl. `/api/question/[token]/image` |
+| E2E | `npx playwright test` | **57/57 grün** in drei Engines (Chromium, Firefox, Mobile Safari) |
+
+Alle vier von Lane 3 unabhängig nachgefahren; die Zahlen decken sich mit denen im Commit `6acd8a9`.
+
+### Acceptance Criteria
+
+#### Spielablauf
+
+- [x] **AC-1** Startbildschirm mit Wortmarke, Regelsatz, Primär-Aktion und Bestleistung — Nachweis: `curl` gegen `/` mit Sitzung (Bestleistung „Serie 1 · 1:50"), `tests/PROJ-2-quiz-round.spec.ts`
+- [x] **AC-2** Erste Frage unter 3 s, Uhr startet am sichtbaren Bild — Nachweis: E2E misst < 3000 ms (19/19 Chromium); `startRoundAction` 0,138 s; `pokemon-image.tsx:59-62` + `quiz-screen.tsx:450-452`. **Lokal gemessen** — siehe „Nicht verifiziert"
+- [x] **AC-3** Vier verschiedene deutsche Namen, gemischt, aus 1–386 — Nachweis: Startantwort `["Raichu","Ditto","Pandir","Kramurx"]`, DB `current_answer_id=132`/`correct_index=1`; `draw-question.ts:38-54`
+- [x] **AC-4** Richtige Antwort: grün, Serie +1, nächste Frage ohne Uhrenstopp — Nachweis: `answerAction` → `{correct:true, streak:1}`; `answer-option.tsx:50`; `quiz-screen.test.tsx:90`
+- [x] **AC-5** Kein Pokémon zweimal als Lösung — Nachweis: 40 Ziehungen in Folge → `seen_ids` 43 Einträge, **0 Duplikate** (psql `unnest`/`group by`)
+- [x] **AC-6** Falsche Antwort: rot + nudge, richtige grün, Uhr stoppt, Auflösung bleibt stehen — Nachweis: Antwort `{"correct":false,"correctIndex":2}` erst mit dem Urteil; `question-view.tsx:85-98`; `quiz-screen.tsx:384`
+- [x] **AC-7** Ergebnis-Screen mit Serie, Zeit, „Nochmal spielen"; kein toter Bestenlisten-Link — Nachweis: `result-view.tsx:37-77`, `site-pages.ts:24` (`LEADERBOARD_PAGE_EXISTS=false`)
+- [x] **AC-8** Persönliche Bestleistung mit `pop` — Nachweis: Runde 1 (Serie 1/110034 ms) `isPersonalBest:true`, die schlechtere dritte `false`; `result-view.tsx:60-64`; `tests/PROJ-2-personal-best.spec.ts`
+- [x] **AC-9** „Nochmal spielen" startet unmittelbar eine neue Runde — Nachweis: `quiz-screen.tsx:284-321`; Server legt neue Runde mit `streak 0` an
+- [x] **AC-10** Nächste Frage vorgeladen, ohne sichtbaren Ladezustand — Nachweis: Startantwort enthält Token + Optionen der vorbereiteten Frage; `GET /api/question/<prepared-token>/image` → 200; `quiz-screen.test.tsx:77,90`
+
+#### Speicherung und Schutz des Ergebnisses
+
+- [x] **AC-11** Ergebnis automatisch gespeichert, auch bei Serie 0 — Nachweis: `runs` id=37 (Serie 1, 110034 ms) ohne Zutun; `endRoundAction` schrieb auch eine Serie-0-Zeile
+- [ ] **BUG — AC-12** „Es existiert keine Schnittstelle, über die ein Aufrufer ein fertiges Ergebnis einreichen könnte" — **gebrochen**, siehe **BUG-110**. Die Server Action hält (mitgeschickte `streak:300` wurde ignoriert, Antwort `streak:1`), die Datenschnittstelle nicht.
+- [x] **AC-13** Ohne Anmeldung kein Zugang zu `/` — Nachweis: `curl -i /` ohne Cookie → 307 → `/login`; zweite Prüfung `src/app/page.tsx:20`; `tests/PROJ-2-access-guard.spec.ts`
+- [x] **AC-14** Nur Runden für das eigene Konto — Nachweis: mitgeschickte `profileId` wirkungslos; PostgREST-Insert mit **fremdem** `profile_id` → `42501 row-level security`; fremde Runden lesen → `[]`
+
+#### Serverseitig geführte Runde
+
+- [x] **AC-32** Weder Nummer noch richtige Option ableitbar — Nachweis: Startantwort ohne beides; Bildadresse ist ein UUID-Token; `active_runs` für `authenticated` nicht lesbar (`42501`, Migration `0007:103-109`); `submit_answer`/`resolve_question_image` nicht ausführbar (`42501`); fremdes Token → 404
+- [x] **AC-33** Server urteilt und führt die Serie — Nachweis: behauptete Serie 300 → Server antwortet `streak:1`; Urteil aus `current_correct_index` (`0009_round_functions.sql:247`)
+- [x] **AC-34** Server misst Ausgabe → Antwort-Eingang und summiert — Nachweis: gemessene 65939 ms bzw. 110034 ms entsprachen der realen Wartezeit; DB-Uhr (`0009:245`); Fehlerwartezeit zählt nicht (`0009:288-296`)
+- [x] **AC-35** Ergebnis geschrieben, bevor geantwortet wird — Nachweis: `runs`-Zeile lag unmittelbar nach der Antwort vor; Insert vor dem `RETURN` in derselben Transaktion (`0009:256-267`)
+- [x] **AC-36** Genau eine laufende Runde je Spieler — Nachweis: 5 parallele `startRoundAction` → **1** Zeile in `active_runs`, keine zusätzliche `runs`-Zeile; Antwort auf das verdrängte Token → `{"status":"stale"}`
+- [x] **AC-37** Zwischenspeicher über die Nummer, nicht über das Token — Nachweis: zwei verschiedene Token auf dasselbe Pokémon → erster Abruf legt einen Cache-Eintrag an (688 → 689), der zweite keinen (689 → 689); Cache-Schlüssel enthält `official-artwork/380.png`
+
+#### Fehlerverhalten der externen Datenquelle
+
+- [x] **AC-15** (Serverhälfte) 5-Sekunden-Grenze mit genau einem stillen Versuch — Nachweis: `withTimeoutAndOneRetry`, `src/lib/pokeapi/client.test.ts:100-127`. **Client-Hälfte nicht verifiziert** (siehe unten) und **für die erste Frage einer Runde gar nicht vorhanden** → BUG-111
+- [ ] **BUG — AC-16** Fehlerkarte innerhalb der Karte, Uhr steht still — im Regelfall erfüllt (`load-error-card.tsx`, `quiz-screen.error-states.test.tsx:105,163`), aber **für die erste Frage einer Runde nie erreichbar** (BUG-111) und im Transportfehler-Fall widerspricht die Aussage „die Uhr steht still" der Messung (BUG-113)
+- [x] **AC-17** Unbegrenzt wiederholbar, Serie und Uhr unangetastet — Nachweis: `quiz-screen.error-states.test.tsx:163`; `quiz-screen.tsx:140-150`
+- [x] **AC-18** „Runde beenden" wertet und speichert normal — Nachweis: `endRoundAction` → `{"status":"ended","result":{"streak":0,"durationMs":0}}` + `runs`-Zeile; `run-actions.test.ts:170`
+- [x] **AC-19** Warnung erst ab Serie 1, verlassene Runde wird nicht gespeichert — Nachweis: `quiz-screen.tsx:168-179`; `quiz-screen.error-states.test.tsx:218`. Der Browser-Dialog selbst: ohne Browser nicht prüfbar
+
+#### Bild-Auslieferung
+
+- [x] **AC-20** Nur die eigene Domain — Nachweis: ausgeliefertes HTML von `/` und `/login` enthält **null** externe URLs (grep auf `https?://`); Bild über `/api/question/<token>/image`; `tests/PROJ-2-no-third-party.spec.ts` in drei Engines
+
+#### App-Rahmen
+
+- [x] **AC-21** Kopfzeile angemeldet — Nachweis: gerendertes HTML zeigt Wortmarke, Chip „Q qalane1a", „Abmelden"; kein Bestenlisten-Zugang (Schalter aus)
+- [x] **AC-22** Kopfzeile ausgeloggt — Nachweis: `/login` und `/reset-password` zeigen „Deutsche Namen · Serie · Weltrangliste"
+- [x] **AC-23** Fußzeile überall, ohne toten Link — Nachweis: auf `/`, `/login`, `/reset-password`; `LEGAL_PAGES` leer (`site-footer.tsx:11,20`)
+- [!] **AC-24** Kein Burger-Menü, Chip reduziert sich unter 640 px — **NICHT VERIFIZIERT**: kein Viewport. Code spricht dafür (`site-header.tsx:64`, `hidden … sm:inline`), gerendert wurde es nicht
+- [ ] **BUG — AC-25** Skelettfläche statt Spinner — für das Quizbild erfüllt (`pokemon-image.tsx:50`), **beim Rundenstart nicht**: dort steht nur eine Textzeile → BUG-112
+
+#### Umgang mit der externen Datenquelle
+
+- [x] **AC-31** Bereits Abgerufenes wird nicht erneut angefragt — Nachweis: Fetch-Cache mit 386 Einträgen zu `pokemon-species/` und 295 zu `official-artwork/`; ein ungecachtes Pokémon 688 → 689, jeder weitere Abruf 689
+
+#### Datenschutz
+
+- [x] **AC-26** Profillöschung nimmt die Runden mit — Nachweis: `delete from auth.users` → `runs` des Profils 1 → 0; FK `runs_profile_id_fkey … ON DELETE CASCADE`
+- [x] **AC-27** Runden-Zeile enthält nur Serie, Zeit, Zeitpunkt, Profilbezug — Nachweis: psql `\x`: `id, profile_id, streak, duration_ms, round_id, created_at`
+- [x] **AC-28** Keine dauerhafte nutzerbezogene Bild-Historie — Nachweis: `active_runs` nach Rundenende leer; Fetch-Cache ohne Nutzerbezug (0 Einträge mit `api/question/`); `.next/dev/logs` ohne Bildzeilen
+- [x] **AC-29** Nur betriebsnotwendige Cookies, kein Tracking, kein Banner — Nachweis: kein `Set-Cookie` bei anonymen Aufrufen; grep auf `gtag|GTM|plausible|posthog|sentry|matomo` → 0
+- [x] **AC-30** Schriften von der eigenen Domain — Nachweis: `next/font/google` zur Bauzeit (`layout.tsx:2-12`), `preload` auf `/_next/static/media/…woff2`, `@font-face` ohne externe URL
+- [x] **AC-38** Rundenzustand enthält nur das Nötige — Nachweis: Spaltenliste von `active_runs` deckt sich Feld für Feld mit AC-38 (psql `\x`), inkl. vorbereiteter Frage ohne Zeitpunkt und `touched_at`; keine IP-, Geräte- oder Verlaufsspalte
+- [x] **AC-39** Löschung am Rundenende, im selben Vorgang — Nachweis: `count(active_runs)=0` danach; `0009:260-267`
+- [x] **AC-40** Löschung mit dem Profil über Fremdschlüssel — Nachweis: `delete from auth.users` → `active_runs` 1 → 0; `active_runs_profile_id_fkey … ON DELETE CASCADE`
+- [x] **AC-41** Verfall nach spätestens zwei Stunden, zeitgesteuert — Nachweis (**lokal**): `cron.job` = `*/5 * * * *`, `delete … touched_at < now() - interval '110 minutes'`, `active=t`, 6 erfolgreiche Läufe in `cron.job_run_details`; eine Zeile mit `touched_at −111 min` wurde gelöscht. Schlimmstenfalls ~115 min < 2 h. **Im gehosteten Projekt nicht verifiziert** (T36/T37 offen)
+
+### Edge Cases
+
+- [x] **EC-1** Zweiter Klick wirkungslos — Nachweis: zweiter Aufruf mit demselben Token → `{"status":"stale"}`. **Garantie geprüft:** bedingtes UPDATE auf `current_token` unter Zeilensperre (`0009:232-242`); `quiz-screen.wrong-answer.test.tsx:103`
+- [ ] **BUG — EC-2** Pool erschöpft → Gewinner-Meldung und Wertung — bei Serie 386 erfüllt, bei **erschöpftem Ziehungsvorrat unterhalb 386 hängt die Runde und wird nie gespeichert** → BUG-114
+- [x] **EC-3** Ergebnis bleibt sichtbar, Speichern wiederholbar — Nachweis: `getRunByRoundIdAction` → `{"streak":1,"durationMs":110034}`, unbekannte Kennung → `null`. **Garantie geprüft:** Insert und Delete in einer Transaktion (`0009:256-267`); `quiz-screen.error-states.test.tsx:185`
+- [x] **EC-4** Zweimaliges Rundenende erzeugt eine Zeile — Nachweis: zweiter `endRoundAction` → `{"status":"gone"}`, weiterhin 2 Zeilen. **Garantie geprüft:** `UNIQUE (round_id)` + `on conflict on constraint runs_round_id_key do nothing` (`0009:265,342`)
+- [x] **EC-5** Pokémon ohne deutschen Namen wird verworfen — Nachweis: `draw-question.ts:77-82`; `client.test.ts:62`, `question-action.test.ts:76`. Zur Laufzeit nicht auslösbar: alle 386 Spezies haben einen deutschen Namen (nachgezählt)
+- [x] **EC-6** Nicht ladbares Bild → Frage verwerfen — Nachweis: `replacePreparedQuestionAction` ersetzte die vorbereitete Frage (96 → 277), verworfene Nummer bleibt in `seen_ids`; `question-action.test.ts:99`. **Gilt nicht für die erste Frage** → BUG-111
+- [x] **EC-7** Sitzung weg → `/login`, Runde keinem fremden Konto — Nachweis: Server Action ohne Cookie → `{"status":"unauthenticated"}`; Bildroute ohne Sitzung → 307; `tests/PROJ-2-round-authority.spec.ts:169`
+- [x] **EC-8** Rate-Limit/Serverfehler der PokeAPI wie ein Ausfall — Nachweis: `question-action.ts:57,61` → `unavailable` → Fehlerkarte. **Nebenwirkung** → BUG-115
+- [x] **EC-9** Mehrfachklick startet eine Runde — Nachweis: 5 parallele Startaufrufe → 1 laufende Runde; `quiz-screen.tsx:285`; `quiz-screen.test.tsx:149`
+- [x] **EC-10** Drei Verwürfe → Fehlerzustand — Nachweis: `MAX_CONSECUTIVE_DISCARDS=3`, `quiz-screen.error-states.test.tsx:105`. Drei **echte** Bildausfälle nicht erzeugbar
+- **EC-11** — entfallen laut `spec.md`, nichts zu prüfen
+- [x] **EC-12** Angezeigte Frage nicht verwerfbar — Nachweis: nach `replacePreparedQuestionAction` blieben `current_token` und `current_answer_id` unverändert (psql vorher/nachher). **Garantie geprüft:** `discard_prepared_question` rührt nur die `prepared_*`-Spalten an (`0009:126-138`); Beförderung bei offener Frage → `{"promoted":false}`
+- [x] **EC-13** Netzlatenz zählt mit — Nachweis: die gemessenen 65939/110034 ms enthalten die volle Warte- und Netzzeit; keine vom Browser gemeldete Zeit im Datenpfad
+- [x] **EC-14** Bilderkennungs-Bot bleibt möglich — Nachweis: nichts im Ausgelieferten reduziert den Aufwand (keine Nummer, keine markierte Option, Token-Bild). Bewusst getragen
+- [x] **EC-15** Verwaister Tab wird abgewiesen und sagt es — Nachweis: Antwort aus der verdrängten Runde → `{"status":"stale"}`; Meldung `quiz-screen.tsx:56`, `load-error-card.tsx:39`; `tests/PROJ-2-round-authority.spec.ts:133`
+
+### Security Audit
+
+- [ ] **BUG — Autorisierung / Einreiche-Schnittstelle:** ein angemeldeter Nutzer kann über PostgREST beliebige Runden für sein **eigenes** Profil schreiben → **BUG-110 (Critical)**
+- [x] Authentifizierung: kein Zugriff ohne Anmeldung — Nachweis: `/` → 307 `/login`; Bildroute ohne Sitzung → 307; Server Actions → `{"status":"unauthenticated"}`
+- [x] Autorisierung über Konten hinweg: dicht — Nachweis: Insert mit fremdem `profile_id` → `403/42501`; fremde Runden lesen → `[]`; anon lesen → `[]`, anon schreiben → `403`
+- [x] Rundenzustand nicht lesbar: die Lösung verlässt den Server nicht — Nachweis: `GET /rest/v1/active_runs` mit gültigem JWT → `403 permission denied for table active_runs`
+- [x] RPC-Schicht verriegelt — Nachweis: alle acht Runden-Funktionen → `authenticated: 403`, `anon: 404`; `0009:378-394`
+- [x] Eingabevalidierung: keine ausnutzbare Fläche gefunden — Nachweis: alle `runs`-Spalten streng typisiert, PostgREST parametrisiert, `trainer_name` per DB-Check begrenzt; Positionen 0–3 und Token als UUID an der Grenze geprüft
+- [x] Unveränderlichkeit der Runden — Nachweis: `PATCH`/`DELETE` auf eigene Zeilen wirkungslos (keine Policy), Zeile unverändert
+- [x] Keine Geheimnisse im Client-Bundle — Nachweis: 0 Treffer für anon-Key, `54321`-URL und Service-Role-Key in `.next/static`; `admin.ts` ohne `NEXT_PUBLIC_`-Präfix, mit `import 'server-only'`
+- [x] Keine Zugangsdaten in der URL — Nachweis: alle vier Auth-Formulare mit `method="post"` (server-gerendertes HTML geprüft)
+- [x] Brute-Force auf Zugangsdaten (PROJ-1, als Regression) — Nachweis: 5 Fehlversuche je Verbindung, der 6. abgewiesen; 20 Versuche gegen ein Konto von 20 Verbindungen, der 21. abgewiesen; Erstattung nach Erfolg belegt (Zählerstand 0)
+- [x] Keine Kontoexistenz-Preisgabe (PROJ-1, als Regression) — Nachweis: falsches Passwort und unbekannte Adresse wortgleich; Reset-Antwort **byte-identisch** (470 Byte, `diff` leer), kein `Set-Cookie` in beiden Fällen
+- [ ] **BUG — Security-Header fehlen** (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, HSTS, CSP) → **BUG-116 (Medium)**, deckt sich mit dem bekannten BUG-12
+- [!] Ratenbegrenzung der PROJ-2-Server-Actions — **NICHT VERIFIZIERT — nicht implementiert (für MVP optional)**. Keine Zugangsdaten-Pfade; ein Flut-Aufruf von `startRoundAction` erzeugt PokeAPI- und DB-Last
+
+### E2E Tests
+
+- [x] Kernschleife bis zum gespeicherten Ergebnis (AC-1 bis AC-7, AC-11, EC-1) — `tests/PROJ-2-quiz-round.spec.ts` — grün in drei Engines
+- [x] Persönliche Bestleistung über zwei Runden (AC-1, AC-8, AC-9) — `tests/PROJ-2-personal-best.spec.ts` — grün
+- [x] Routenschutz (AC-13) — `tests/PROJ-2-access-guard.spec.ts` — grün
+- [x] Keine Anfrage an einen fremden Host (AC-20, AC-29, AC-30) — `tests/PROJ-2-no-third-party.spec.ts` — grün
+- [x] Serverseitige Autorität (AC-12, AC-14, AC-32, AC-33, EC-1, EC-7, EC-15) — `tests/PROJ-2-round-authority.spec.ts` — grün. **Deckt die Lücke aus BUG-110 nicht ab**, siehe dort
+- [x] PROJ-1 als Regression — `PROJ-1-password-reset`, `PROJ-1-reset-response`, `PROJ-1-throttle` — grün
+
+### Nicht verifiziert in diesem Lauf
+
+- [!] **Cross-Browser-Darstellung** — `/qa` hat keinen Browser. Die E2E-Suite lief zwar in drei Engines, das ist aber ein Funktions- und kein Darstellungsnachweis
+- [!] **Responsive Layout** bei 375 / 768 / 1440 px (**AC-24**, AC-25 visuell) — kein Viewport
+- [!] **Browser-Konsole / Netzwerk-Tab** — keine DevTools
+- [!] **AC-15, Client-Hälfte** — die 5-Sekunden-Frist der Bildsonde und ihr stiller zweiter Versuch: kein Test deckt sie ab, ein echter Bildausfall war ohne Netzsperre nicht auslösbar
+- [!] **EC-10 mit echten Ausfällen** — belegt ist nur der Unit-Test mit gestellten Fehlschlägen
+- [!] **AC-2 unter realen Bedingungen** — lokal gegen einen warmen Zwischenspeicher gemessen, nicht über eine echte Leitung mit kaltem Cache
+- [!] **AC-41 im gehosteten Projekt** — lokal vollständig belegt; die beiden `[user]`-Aufgaben **T36** (`pg_cron` im Dashboard) und **T37** (Projekt nicht pausiert) sind **offen** (`tasks.md:24-25`). Kein Zugangsdaten-Pfad, aber ohne sie ist die Frist in Produktion eine Absichtserklärung
+- [!] **Wirksamkeit der IP-Drosselung gegen rotierende Header** — die Messungen von Lane 3 isolieren sich über einen selbst gesetzten `x-forwarded-for`-Header, was lokal nur funktioniert, **weil** der Client-Wert ungeprüft übernommen wird (bekannter Deploy-Blocker BUG-61). Belegt ist, dass die Zähler zählen — nicht, dass sie gegen einen Angreifer mit rotierendem Header halten
+- [!] **Visuelle Regressionen an der geteilten Shell** — geprüft ist nur die Markup-Struktur; die Suite enthält keine Screenshot-Vergleiche
+
+### Gefundene Bugs
+
+#### BUG-110: Rundenergebnisse lassen sich direkt in die Datenbank schreiben — die Runde ist umgehbar
+- **Severity:** **Critical**
+- **Bricht:** AC-12, AC-11
+- **Schritte zur Reproduktion:**
+  1. Konto anlegen und über `POST /auth/v1/token?grant_type=password` ein Zugangstoken holen (öffentlicher anon-Key genügt)
+  2. `POST http://127.0.0.1:54321/rest/v1/runs` mit `{"profile_id":"<eigene uid>","streak":386,"duration_ms":0,"round_id":"<uuid>"}`
+  3. Erwartet: Abweisung — AC-12 sagt, es gebe **keine** Schnittstelle für ein fertiges Ergebnis
+  4. Tatsächlich: **HTTP 201 Created**, die Zeile steht in `runs`. In einer einzigen Anfrage lassen sich 50 gefälschte Runden schreiben
+- **Vom Eigentümer dieses Berichts unabhängig nachgemessen** (nicht nur von der Lane): eigenes Konto, eigener Insert, `201`, Zeile vorhanden
+- **Ursache:** Die Policy `runs_insert_own` aus `supabase/migrations/0002_runs.sql:48-51` stammt aus dem abgelösten Entwurf, in dem der Browser das Ergebnis einreichte. Sie ist beim Umbau stehengeblieben. **Für den legitimen Ablauf ist sie tot**: Kein Anwendungscode schreibt `runs` über die Nutzersitzung (`src/lib/quiz/run-actions.ts:64,103` lesen nur); geschrieben wird ausschließlich in den `security definer`-Funktionen (`0009:260,337`), die als Eigentümer laufen und RLS ohnehin umgehen
+- **Warum es niemand vorher sah:** Die Prüfungen des Baus fragen die Anwendung durch ihre eigene Oberfläche — `tests/PROJ-2-round-authority.spec.ts` belegt, dass der **Browser** kein Ergebnis schickt. Dieser Angriff geht am Browser-Code vorbei. Das ist genau die Klasse von Lücke, für die die unabhängige Prüf-Lane existiert
+- **Wirkung:** Die Rangliste aus PROJ-3 liest `runs`. Ein einziger Aufruf trägt Serie 386 in 0 ms ein — der Zustand, den `/refine PROJ-2` verhindern sollte
+- **Priorität:** Vor dem Deploy beheben
+
+#### BUG-111: Die erste Frage einer Runde hat keine Absicherung gegen ein nicht ladbares Bild
+- **Severity:** Medium
+- **Bricht:** AC-15 (Client-Hälfte), AC-16, EC-6 — jeweils für diese eine Frage
+- **Schritte zur Reproduktion:**
+  1. Runde starten, während `/api/question/<current-token>/image` keine Bytes liefert (CDN-Ausfall oder einzelnes kaputtes Sprite)
+  2. Erwartet: ein stiller zweiter Versuch (AC-15), danach die Fehlerkarte mit „Erneut versuchen" und „Runde beenden" (AC-16)
+  3. Tatsächlich: Die Skelettfläche bleibt dauerhaft stehen. Kein zweiter Versuch, keine Fehlerkarte, die Anzeigeuhr bleibt bei 0:00 (`onReady` feuert nie), die vier Optionen bleiben klickbar — der Spieler rät blind. Ausweg nur durch Neuladen
+- **Ursache:** `startRound` setzt die erste Frage direkt als aktuelle (`quiz-screen.tsx:313-316`); die Sonde `ImageProbe` läuft nur über die **vorbereitete** Frage. Das sichtbare Bild hat weder `onError` noch eine Zeitgrenze (`pokemon-image.tsx:52-64` — nur `onLoad`)
+- **Nicht zur Laufzeit provoziert** (keine Netzsperre); der Befund steht auf dem Code, nicht auf einer Vermutung über ihn
+- **Priorität:** Vor dem Deploy beheben
+
+#### BUG-114: Erschöpfter Ziehungsvorrat unterhalb Serie 386 lässt die Runde hängen; das Ergebnis geht verloren
+- **Severity:** Medium
+- **Bricht:** EC-2
+- **Schritte zur Reproduktion:**
+  1. Rundenzustand mit `seen_ids` = 1..386 und Serie 5 herstellen, nichts vorbereitet
+  2. Richtig antworten → `{"correct":true,"streak":6,"result":null}`
+  3. `prepareNextQuestionAction` → `{"status":"pool-empty"}`
+  4. Erwartet: Die Runde endet, wird gewertet und gespeichert (EC-2)
+  5. Tatsächlich: keine neue `runs`-Zeile; der Client behandelt „pool-empty" als „nichts weiter vorzubereiten" und kehrt kommentarlos zurück (`quiz-screen.tsx:228`) — Bildschirm dauerhaft „Runde wird vorbereitet …", keine Fehlerkarte, kein „Runde beenden". Der Zustand verfällt nach 110 Minuten, die Runde ist verloren
+- **Ursache:** Das Rundenende hängt allein an `v_streak >= 386` (`0009:252`), nicht am erschöpften Vorrat — und `seen_ids` enthält laut EC-5/EC-6 auch **verworfene** Nummern, kann also vor der Serie voll sein
+- **Erreichbarkeit gering** (~380 Fragen), trifft aber genau den Fall, den EC-2 definiert, und kostet die bestmögliche Runde
+- **Priorität:** Vor dem Deploy beheben
+
+#### BUG-116: Security-Header fehlen
+- **Severity:** Medium
+- **Nachweis:** `curl -I http://localhost:3000/login` liefert nur `X-Powered-By: Next.js`; `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Strict-Transport-Security` und CSP fehlen auf jeder Route, auch auf der Bild-Route
+- **Einordnung:** identisch mit dem projektweit bekannten **BUG-12** aus PROJ-1, in `features/INDEX.md` bereits als Deploy-Blocker geführt. Wird beim Host konfiguriert und gegen die Live-URL geprüft
+- **Priorität:** Beim Deploy
+
+#### BUG-112: Kein Skelett beim Rundenstart
+- **Severity:** Low
+- **Bricht:** AC-25
+- **Nachweis:** Zwischen „Runde starten" und der ersten Frage (laut AC-2 bis zu 3 s) zeigt der Inhaltsbereich nur die zentrierte Textzeile „Runde wird vorbereitet …" (`quiz-screen.tsx:496-505`) statt einer Skelettfläche in Größe des erwarteten Inhalts; das Layout springt beim Eintreffen der Frage. Für das Bild selbst ist das Skelett korrekt vorhanden (`pokemon-image.tsx:50`)
+- **Priorität:** Nächster Durchgang
+
+#### BUG-113: Die Fehlerkarte behauptet eine stehende Uhr, die servergemessene Zeit läuft weiter
+- **Severity:** Low
+- **Widerspruch zu:** AC-16, AC-34
+- **Nachweis:** Reißt der Transport beim Absenden einer Antwort ab, geht der Client in den Fehlerzustand (`quiz-screen.tsx:373-377`), obwohl die Frage serverseitig offen bleibt. Die Anzeigeuhr pausiert, die maßgebliche Messung nicht: `submit_answer` rechnet beim Wiederholungsversuch `now() - current_issued_at` (`0009:245`) und schreibt die Wartezeit vor der Fehlerkarte in die Rundenzeit. Der Kartentext „die Uhr steht so lange still" (`load-error-card.tsx:44-47`) stimmt dann nicht
+- **Wirkt nur zuungunsten des Spielers** (Tie-Breaker). Nicht provoziert; dass die Serveruhr bei offener Frage Wanduhrzeit zählt, ist gemessen (65939 ms reine Wartezeit)
+- **Priorität:** Nächster Durchgang
+
+#### BUG-115: Ein 429/500 der PokeAPI verbrennt eine Pokémon-Nummer dauerhaft für die laufende Runde
+- **Severity:** Low
+- **Nebenwirkung zu:** EC-8, EC-5
+- **Nachweis:** `fetchGermanName` liefert bei jeder Fehlerantwort `null` (`client.ts:71`), und der Aufrufer wertet das als „hat keinen deutschen Namen": Die Nummer wandert in `alsoSeen` und damit in `seen_ids`, wird also nie wieder gezogen (`draw-question.ts:77-82`). Ein vorübergehender Serverfehler schrumpft so den Fragenvorrat — bis zu drei Nummern je Ziehversuch. Verstärkt BUG-114
+- **Priorität:** Nächster Durchgang
+
+#### BUG-117: Die Dokumente dieses Umbaus tragen durchgehend das Datum 2026-09-06, entstanden sind sie am 2026-09-07
+- **Severity:** Low
+- **Nachweis:** `spec.md`, `design.md`, `tasks.md` und die Migrationskommentare datieren den Refine, den Entwurf und den Bau auf den 2026-09-06; die Commits `6fa42ba` bis `7a7c1de` sind vom 2026-09-07. Ein Datum, das um einen Tag danebenliegt, ist in einem Entscheidungsprotokoll kein Schönheitsfehler: Es ist die Spur, an der später jemand die Reihenfolge von Entscheidungen rekonstruiert
+- **Nicht blind zu korrigieren:** Ältere, echte Verweise auf den 2026-09-06 (PROJ-1s Abschluss) müssen stehenbleiben — eine pauschale Ersetzung würde sie mit verfälschen
+- **Priorität:** Nächster Durchgang
+
+### Zusammenfassung
+
+- **Acceptance Criteria:** **37 von 41 bestanden**, 3 gebrochen (AC-12, AC-16, AC-25), 1 nicht verifiziert (AC-24)
+- **Edge Cases:** **13 von 14 gültigen bestanden**, 1 gebrochen (EC-2); EC-11 ist entfallen
+- **Gefundene Bugs:** **7** — 1 Critical, 0 High, 3 Medium, 3 Low
+- **Security:** 11 Prüfungen verifiziert, 1 als **Critical-Bug** gefallen (BUG-110), 1 nicht verifiziert (Ratenbegrenzung der Spiel-Endpunkte — nicht implementiert, für ein MVP vertretbar)
+- **Production Ready:** **NEIN**
+- **Empfehlung:** BUG-110 zuerst — er entwertet genau das, wofür dieser ganze Umbau gemacht wurde. Danach BUG-111 und BUG-114, die beide dazu führen, dass eine laufende Runde ohne Ausweg hängenbleibt. Der Rest kann in einen späteren Durchgang.
+
+> „Production Ready: NEIN" heißt hier: ein Critical. Die Liste unter „Nicht verifiziert" bleibt unabhängig davon offen — insbesondere Darstellung und Responsive-Verhalten hat in diesem Lauf **niemand** gesehen.
