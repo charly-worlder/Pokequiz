@@ -150,6 +150,95 @@ test('Ein Ergebnis lässt sich nicht an der Runde vorbei einreichen (AC-12, BUG-
   })
   expect(read.status(), 'Eigene Runden bleiben lesbar (AC-8, EC-3)').toBe(200)
 })
+
+/**
+ * **Die zweite Schicht, nicht nur die erste (BUG-122, BUG-131).**
+ *
+ * Der Test oben belegt, dass ein Schreibversuch abgewiesen wird — aber nicht,
+ * **wodurch**. Genau das war die Lücke: `0011` hatte auf `runs` nur
+ * `insert, update, delete` entzogen und TRUNCATE, TRIGGER und REFERENCES stehen
+ * lassen; `profiles` gewährte `anon` und `authenticated` sogar alle Rechte und
+ * hielt allein durch Row Level Security. Beides war nicht ausnutzbar, und beides
+ * wäre von einer einzigen versehentlich hinzugefügten Policy geöffnet worden.
+ *
+ * Unterscheidbar sind die zwei Schichten am **Wortlaut der Abweisung**: Fehlt
+ * das Tabellenrecht, sagt Postgres `permission denied for table`; greift nur die
+ * Policy, sagt es `violates row-level security policy`. Der Test pinnt deshalb
+ * die Meldung, nicht den Statuscode — ein wiederhergestelltes `grant` bliebe
+ * sonst unbemerkt, weil die Policy den Versuch weiterhin abfinge.
+ *
+ * `.claude/rules/security.md`: „Two independent checks, because sooner or later
+ * one of them gets bypassed."
+ */
+test('Schreibrechte auf runs und profiles fehlen schon vor der Policy (BUG-122, BUG-131)', async ({
+  page,
+  request,
+}) => {
+  const { trainer, email } = await register(page, 'e2eGrants')
+  const profileId = await profileIdFor(trainer)
+
+  const auth = await request.post(SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+    headers: { apikey: ANON_KEY },
+    data: { email, password: PASSWORD },
+  })
+  const jwt = (await auth.json()).access_token as string
+  const asUser = { apikey: ANON_KEY, Authorization: `Bearer ${jwt}` }
+
+  const schreibversuche = [
+    {
+      was: 'INSERT auf profiles',
+      antwort: await request.post(SUPABASE_URL + '/rest/v1/profiles', {
+        headers: asUser,
+        data: { id: '00000000-0000-4000-8000-0000000000ff', trainer_name: 'Schmuggel' },
+      }),
+    },
+    {
+      was: 'UPDATE auf profiles',
+      antwort: await request.patch(SUPABASE_URL + `/rest/v1/profiles?id=eq.${profileId}`, {
+        headers: asUser,
+        data: { trainer_name: 'Uebernommen' },
+      }),
+    },
+    {
+      was: 'DELETE auf profiles',
+      antwort: await request.delete(SUPABASE_URL + `/rest/v1/profiles?id=eq.${profileId}`, {
+        headers: asUser,
+      }),
+    },
+    {
+      was: 'UPDATE auf runs',
+      antwort: await request.patch(SUPABASE_URL + `/rest/v1/runs?profile_id=eq.${profileId}`, {
+        headers: asUser,
+        data: { streak: 386 },
+      }),
+    },
+  ]
+
+  for (const { was, antwort } of schreibversuche) {
+    expect(antwort.status(), `${was} muss abgewiesen werden`).toBe(403)
+    expect(
+      await antwort.text(),
+      `${was} muss am Tabellenrecht scheitern, nicht erst an der Policy`
+    ).toContain('permission denied for table')
+  }
+
+  // Der Trainername ist unverändert — nicht nur die Antwort war ein Nein.
+  const { data: unversehrt } = await admin
+    .from('profiles')
+    .select('trainer_name')
+    .eq('id', profileId)
+    .single()
+  expect(unversehrt?.trainer_name, 'Der Trainername steht unverändert (AC-2)').toBe(trainer)
+
+  // Gegenprobe: Lesen bleibt erlaubt — die Kopfzeile zeigt den eigenen
+  // Trainernamen über genau diesen Weg (AC-21).
+  const gelesen = await request.get(
+    SUPABASE_URL + `/rest/v1/profiles?id=eq.${profileId}&select=trainer_name`,
+    { headers: asUser }
+  )
+  expect(gelesen.status(), 'Das eigene Profil bleibt lesbar (AC-21)').toBe(200)
+  expect(await gelesen.text()).toContain(trainer)
+})
 test('Der Rundenzustand ist nach dem Rundenende gelöscht (AC-39)', async ({ page }) => {
   const { trainer } = await register(page, 'e2eState')
   const profileId = await profileIdFor(trainer)
