@@ -76,6 +76,8 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [starting, setStarting] = useState(false)
+  /** Erhöht sich bei „Erneut versuchen" und fordert das Bild der offenen Frage neu an. */
+  const [imageEpoch, setImageEpoch] = useState(0)
 
   /**
    * Spiegelt `current` **synchron**.
@@ -128,6 +130,13 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
    * „Erneut versuchen" die Antwort statt eine Frage nachzuladen (EC-3).
    */
   const pendingAnswerRef = useRef<{ token: string; choice: number } | null>(null)
+  /**
+   * `prepareNext` muss die Runde beenden können (EC-2), wird von `endRound` aber
+   * nicht benutzt — die Reihenfolge der Definitionen lässt sich nicht auflösen,
+   * ohne eine der beiden künstlich zu verschieben. Ein Ref ist hier ehrlicher
+   * als eine Umsortierung, die niemand mehr versteht.
+   */
+  const endRoundRef = useRef<() => Promise<void>>(async () => {})
 
   // --- Uhr: reine Anzeige ---------------------------------------------------
   // Gewertet wird die servergemessene Zeit (AC-34, EC-13); diese hier läuft nur,
@@ -223,9 +232,19 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
           setProbingQuestion(result.prepared)
           return
         }
-        // „Pool leer" heißt hier nur: nichts mehr vorzubereiten. Die Runde endet
-        // erst, wenn der Server sie auf die letzte richtige Antwort hin beendet.
-        if (result.status === 'pool-empty') return
+        // **Kein Vorrat mehr.** Wartet der Spieler gerade auf eine Frage, ist die
+        // Runde damit zu Ende und wird gewertet (EC-2). Vorher blieb der Bildschirm
+        // hier stumm auf „Runde wird vorbereitet …" stehen, das Ergebnis ging
+        // verloren und der Zustand verfiel nach 110 Minuten (BUG-114, QA 2026-09-07).
+        // Steht noch eine Frage offen, passiert nichts: Der Spieler beantwortet sie,
+        // und der Fall trifft danach zu.
+        //
+        // Die Gewinner-Meldung hängt weiterhin an der Serie, nicht am leeren Vorrat —
+        // `seen_ids` enthält auch verworfene Nummern (EC-5, EC-6).
+        if (result.status === 'pool-empty') {
+          if (!currentRef.current) void endRoundRef.current()
+          return
+        }
         if (!currentRef.current) goToError(null)
       } finally {
         preparingRef.current = false
@@ -424,6 +443,15 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
           await submit(pending.token, pending.choice)
           return
         }
+
+        // Die Frage steht noch — es war ihr Bild, das nicht kam (BUG-111). Erneut
+        // anfordern, ohne eine neue Frage zu ziehen: Die alte bleibt gültig, und
+        // ein Bildfehler darf kein Überspringen werden (EC-12).
+        if (currentRef.current) {
+          setImageEpoch((epoch) => epoch + 1)
+          setPhase('open')
+          return
+        }
         setPhase('loading')
         await prepareNext()
         // Nichts vorbereitet bekommen: zurück in die Fehlerkarte.
@@ -445,6 +473,18 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     if (stored) return showResult(stored)
     goToError(STALE_MESSAGE)
   }, [bailToLogin, goToError, showResult])
+
+  useEffect(() => {
+    endRoundRef.current = endRound
+  }, [endRound])
+
+  /**
+   * spec.md AC-15, AC-16 — das Bild der **angezeigten** Frage kam auch nach dem
+   * stillen zweiten Versuch nicht. Die Frage bleibt, was sie ist: Sie wird nicht
+   * ersetzt (EC-12), der Spieler bekommt aber einen Ausweg statt einer
+   * Skelettfläche, die für immer stehenbleibt (BUG-111).
+   */
+  const onImageFailed = useCallback(() => goToError(null), [goToError])
 
   /** spec.md AC-2 — die angezeigte Uhr läuft ab dem ersten sichtbaren Bild. */
   const onPictureVisible = useCallback(() => {
@@ -514,6 +554,8 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         chosenIndex={chosenIndex}
         correctIndex={correctIndex}
         waiting={phase === 'waiting'}
+        imageEpoch={imageEpoch}
+        onImageFailed={onImageFailed}
         onAnswer={answer}
         onContinue={() => result && showResult(result)}
         onPictureVisible={onPictureVisible}

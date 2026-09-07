@@ -4,6 +4,7 @@ import {
   answerWrongly,
   currentToken,
   questionImage,
+  PASSWORD,
   register,
   waitForQuestion,
 } from './helpers'
@@ -28,8 +29,13 @@ function envFromLocalFile(key: string): string {
   return (line?.slice(key.length + 1).trim() ?? '') as string
 }
 
+const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? envFromLocalFile('NEXT_PUBLIC_SUPABASE_URL')
+const ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? envFromLocalFile('NEXT_PUBLIC_SUPABASE_ANON_KEY')
+
 const admin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL ?? envFromLocalFile('NEXT_PUBLIC_SUPABASE_URL'),
+  SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? envFromLocalFile('SUPABASE_SERVICE_ROLE_KEY'),
   { auth: { persistSession: false, autoRefreshToken: false } }
 )
@@ -81,6 +87,59 @@ test('Der Browser schickt kein Ergebnis — er kann keines schicken (AC-12, AC-3
   expect(runs?.[0].duration_ms, 'Die Zeit misst der Server (AC-34)').toBeGreaterThan(0)
 })
 
+/**
+ * spec.md AC-12 — **die Prüfung, die dem Bau gefehlt hat.**
+ *
+ * Die übrigen Tests dieser Datei fragen die Anwendung durch ihre eigene
+ * Oberfläche: Sie belegen, dass der *Browser* kein Ergebnis schickt. Der Angriff
+ * aus BUG-110 geht daran vorbei — er redet direkt mit der Datenschnittstelle,
+ * mit dem öffentlichen Zugangsschlüssel und einer gewöhnlichen Sitzung. Ein Test,
+ * der die App nur durch ihre Vordertür befragt, kann eine offene Seitentür nicht
+ * sehen; deshalb setzt dieser hier ausdrücklich von außen an.
+ */
+test('Ein Ergebnis lässt sich nicht an der Runde vorbei einreichen (AC-12, BUG-110)', async ({
+  page,
+  request,
+}) => {
+  const { trainer, email } = await register(page, 'e2eForge')
+  const profileId = await profileIdFor(trainer)
+
+  // Zugangstoken holen, wie ein Angreifer es täte: öffentlicher Schlüssel,
+  // eigenes Konto, kein Umweg über die Anwendung.
+  const auth = await request.post(SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+    headers: { apikey: ANON_KEY },
+    data: { email, password: PASSWORD },
+  })
+  expect(auth.status(), 'Anmeldung an der Datenschnittstelle').toBe(200)
+  const jwt = (await auth.json()).access_token as string
+
+  // Der Einreichversuch: eine perfekte Runde, in null Millisekunden.
+  const forged = await request.post(SUPABASE_URL + '/rest/v1/runs', {
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${jwt}` },
+    data: {
+      profile_id: profileId,
+      streak: 386,
+      duration_ms: 0,
+      round_id: '11111111-2222-4333-8444-555555555555',
+    },
+  })
+
+  expect(
+    forged.status(),
+    'Ein fertiges Ergebnis darf über keine Schnittstelle hereinkommen (AC-12)'
+  ).toBe(403)
+
+  // Und es darf auch nichts angekommen sein.
+  const { data } = await admin.from('runs').select('streak').eq('profile_id', profileId)
+  expect(data, 'Keine Zeile aus dem Einreichversuch').toHaveLength(0)
+
+  // Gegenprobe: Lesen muss weiterhin gehen — die persönliche Bestleistung (AC-8)
+  // und das Nachlesen eines verlorenen Ergebnisses (EC-3) hängen daran.
+  const read = await request.get(SUPABASE_URL + '/rest/v1/runs?select=streak', {
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${jwt}` },
+  })
+  expect(read.status(), 'Eigene Runden bleiben lesbar (AC-8, EC-3)').toBe(200)
+})
 test('Der Rundenzustand ist nach dem Rundenende gelöscht (AC-39)', async ({ page }) => {
   const { trainer } = await register(page, 'e2eState')
   const profileId = await profileIdFor(trainer)

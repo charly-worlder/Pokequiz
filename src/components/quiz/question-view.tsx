@@ -22,7 +22,9 @@ export function QuestionView({
   chosenIndex,
   correctIndex,
   waiting,
+  imageEpoch,
   onAnswer,
+  onImageFailed,
   onContinue,
   onPictureVisible,
 }: {
@@ -34,6 +36,10 @@ export function QuestionView({
   correctIndex: number | null
   /** Der Klick ist abgeschickt, das Urteil steht aus. */
   waiting: boolean
+  /** Wird beim „Erneut versuchen" erhöht und fordert das Bild neu an (AC-17). */
+  imageEpoch: number
+  /** Das Bild kam auch nach dem stillen zweiten Versuch nicht (AC-15, AC-16). */
+  onImageFailed: () => void
   onAnswer: (index: number) => void
   onContinue: () => void
   /** spec.md AC-2 — die angezeigte Uhr startet mit dem sichtbaren Bild. */
@@ -59,9 +65,11 @@ export function QuestionView({
 
       <div className="rounded-[var(--radius-card-value)] border border-border bg-card p-6 shadow-[0_18px_46px_-26px_rgb(23_28_44_/_0.5)]">
         <PokemonImage
+          key={question.token + "#" + imageEpoch}
           src={questionImageUrl(question.token)}
           alt="Welches Pokémon ist das?"
           onReady={onPictureVisible}
+          onFailed={onImageFailed}
         />
       </div>
 

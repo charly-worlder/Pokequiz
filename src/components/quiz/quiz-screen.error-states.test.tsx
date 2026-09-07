@@ -134,6 +134,79 @@ describe('QuizScreen — Bildausfall', () => {
   })
 })
 
+function visibleImage() {
+  return Array.from(document.querySelectorAll('img')).find(
+    (img) => img.getAttribute('alt') !== ''
+  )
+}
+
+describe('QuizScreen — das Bild der angezeigten Frage (BUG-111)', () => {
+  it('zeigt die Fehlerkarte, wenn das Bild auch beim zweiten Versuch nicht kommt (AC-15, AC-16)', async () => {
+    await openRound()
+
+    // Erster Fehlschlag: stiller zweiter Versuch, noch keine Fehlerkarte (AC-15).
+    fireEvent.error(visibleImage()!)
+    expect(screen.queryByText('Die nächste Frage lädt gerade nicht')).not.toBeInTheDocument()
+
+    // Zweiter Fehlschlag: jetzt ist Schluss.
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument()
+    )
+  })
+
+  it('holt beim erneuten Versuch dieselbe Frage zurück, statt eine neue zu ziehen (AC-17, EC-12)', async () => {
+    await openRound()
+    fireEvent.error(visibleImage()!)
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument()
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
+
+    // Dieselbe Frage, dieselben Optionen — kein Überspringen durch einen Bildfehler.
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(visibleImage()?.getAttribute('src')).toBe('/api/question/t-1/image')
+    expect(actions.replacePreparedQuestionAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('QuizScreen — erschöpfter Ziehungsvorrat (BUG-114)', () => {
+  it('beendet die Runde und wertet sie, statt hängenzubleiben (EC-2)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 5,
+      result: null,
+    })
+    actions.prepareNextQuestionAction.mockResolvedValue({ status: 'pool-empty' })
+    actions.endRoundAction.mockResolvedValue({
+      status: 'ended',
+      result: { streak: 5, durationMs: 42_000, isPersonalBest: false },
+    })
+
+    await openRound()
+
+    // Die vorbereitete Frage als geprüft melden, damit sie nachrücken kann …
+    fireEvent.load(probeImage()!)
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+    await waitFor(() => expect(screen.getByText('Bisasam')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+
+    // … danach ist der Vorrat leer, und der Spieler wartet auf eine Frage,
+    // die es nicht mehr gibt.
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Bisasam' }))
+
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(actions.endRoundAction).toHaveBeenCalled()
+    expect(screen.queryByText('Runde wird vorbereitet …')).not.toBeInTheDocument()
+  })
+})
 describe('QuizScreen — Fehlerkarte', () => {
   async function reachErrorCard() {
     actions.answerAction.mockResolvedValue({

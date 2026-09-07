@@ -33,24 +33,74 @@ export function questionImageUrl(token: string): string {
  * 110 KB statt eines verkleinerten WebP; auf dem kritischen Pfad liegt davon nur
  * die erste Frage einer Runde, alle weiteren sind vorgeladen (AC-10).
  */
+/**
+ * spec.md AC-15 — ein Bild, das hierin nicht lädt, gilt als Fehlschlag.
+ * Dieselben 5 Sekunden, die der Server der Fragezusammenstellung gibt, damit
+ * eine langsame Runde **ein** Budget hat statt zweier. Gilt für die angezeigte
+ * Frage wie für die vorgeladene.
+ */
+const IMAGE_TIMEOUT_MS = 5_000
+
 export function PokemonImage({
   src,
   alt,
   onReady,
+  onFailed,
 }: {
   src: string
   alt: string
   /** spec.md AC-2 — die angezeigte Uhr startet mit dem sichtbaren Bild. */
   onReady?: () => void
+  /**
+   * spec.md AC-15, AC-16 — das Bild ist auch nach dem stillen zweiten Versuch
+   * nicht da. Der Aufrufer zeigt daraufhin die Fehlerkarte.
+   *
+   * **Warum das hier gebraucht wird (BUG-110-Runde, QA vom 2026-09-07).** Die
+   * Bildprüfung lief bis dahin nur über die *vorbereitete* Frage. Die erste
+   * Frage einer Runde wird aber direkt angezeigt, ohne je durch die Sonde
+   * gegangen zu sein — lud ihr Bild nicht, blieb die Skelettfläche für immer
+   * stehen: kein zweiter Versuch, keine Fehlerkarte, keine Uhr, und vier
+   * anklickbare Optionen zu einem Bild, das niemand sieht.
+   */
+  onFailed?: () => void
 }) {
   const [loaded, setLoaded] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+
+  const onFailedRef = useRef(onFailed)
+  useEffect(() => {
+    onFailedRef.current = onFailed
+  })
+
+  /**
+   * Dieselbe Frist wie bei der Sonde und beim Server: `onLoad` und `onError`
+   * decken ein Bild ab, das ankommt, und eines, das abgelehnt wird — nicht
+   * eines, das gar nicht antwortet.
+   */
+  useEffect(() => {
+    if (loaded) return
+    const timer = window.setTimeout(() => {
+      if (attempt === 0) setAttempt(1)
+      else onFailedRef.current?.()
+    }, IMAGE_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [attempt, loaded])
+
+  function handleError() {
+    if (attempt === 0) setAttempt(1)
+    else onFailedRef.current?.()
+  }
 
   return (
     <div className="relative mx-auto aspect-square w-full max-w-[280px]">
       {!loaded && <Skeleton className="absolute inset-0 rounded-[var(--radius-card-value)]" />}
       {/* eslint-disable-next-line @next/next/no-img-element -- bewusst kein next/image: siehe oben (AC-32) */}
       <img
-        key={src}
+        // Der Versuch ist der Schlüssel, nie Teil der Adresse: Ein geänderter
+        // Schlüssel lässt den Browser erneut anfragen, während die Adresse
+        // zeichengleich bleibt — der zweite Versuch trifft damit weiterhin den
+        // Zwischenspeicher (AC-31, AC-37) und geht an die eigene Domain (AC-20).
+        key={`${src}#${attempt}`}
         src={src}
         alt={alt}
         width={280}
@@ -60,19 +110,12 @@ export function PokemonImage({
           setLoaded(true)
           onReady?.()
         }}
+        onError={handleError}
         className="absolute inset-0 size-full object-contain"
       />
     </div>
   )
 }
-
-/**
- * spec.md AC-15 — ein Bild, das hierin nicht lädt, gilt als Fehlschlag.
- * Dieselben 5 Sekunden, die der Server der Fragezusammenstellung gibt, damit
- * eine langsame Runde **ein** Budget hat statt zweier.
- */
-const PROBE_TIMEOUT_MS = 5_000
-
 /**
  * Lädt das Bild der **vorbereiteten** Frage, während die aktuelle auf dem
  * Bildschirm steht (spec.md AC-10), und ist der Ort, an dem ein kaputtes Bild
@@ -125,7 +168,7 @@ function ProbeAttempts({
     const timer = window.setTimeout(() => {
       if (attempt === 0) setAttempt(1)
       else onFailRef.current()
-    }, PROBE_TIMEOUT_MS)
+    }, IMAGE_TIMEOUT_MS)
     return () => window.clearTimeout(timer)
   }, [attempt])
 

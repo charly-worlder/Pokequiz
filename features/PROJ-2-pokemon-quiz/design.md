@@ -282,6 +282,26 @@ Fünf Abweichungen bzw. Präzisierungen gegenüber dem genehmigten Entwurf, alle
 
 ---
 
+## Notizen aus dem Fix-Lauf (2026-09-07)
+
+Drei Befunde des ersten unabhängigen QA-Laufs, behoben. Der erste ist der wichtige.
+
+**BUG-110 — die Lücke lag nicht im Neuen, sondern im Alten, das stehenblieb.** Der Umbau hat die Server Action `saveRun` ersatzlos entfernt und damit die Einreiche-Schnittstelle geschlossen, die AC-12 verbietet. Übersehen wurde, dass dieselbe Schnittstelle noch ein zweites Mal existierte: als Insert-Policy auf `runs` aus Migration `0002`, geschrieben für den Entwurf, in dem der Browser das Ergebnis einreichte. Über PostgREST war sie mit dem öffentlichen Schlüssel und einer gewöhnlichen Sitzung bedienbar — Serie 386 in 0 ms, HTTP 201.
+
+Die Lehre steht schon in der Historie dieses Features: Bei BUG-22 überlebte eine `remotePatterns`-Freigabe den Code, für den sie angelegt worden war. Hier war es eine Policy. **Wer einen Schreibweg entfernt, muss die Rechte mitentfernen, die ihn erlaubt haben** — der Code verschwindet aus dem Diff, die Berechtigung nicht.
+
+Warum es keiner der eigenen Prüfungen auffiel: Sie befragen die Anwendung durch ihre eigene Oberfläche. `tests/PROJ-2-round-authority.spec.ts` belegte, dass der **Browser** kein Ergebnis schickt — der Angriff redet gar nicht mit dem Browser. Der neue Test setzt deshalb ausdrücklich an der Datenschnittstelle an.
+
+**BUG-111 — die erste Frage war nie durch die Sonde gegangen.** `ImageProbe` prüft die *vorbereitete* Frage; die erste einer Runde wird direkt angezeigt. Ihr Bild hatte weder `onError` noch Zeitgrenze, ein Ausfall blieb also als Skelettfläche stehen — ohne zweiten Versuch, ohne Fehlerkarte, mit vier klickbaren Optionen zu einem unsichtbaren Bild. `PokemonImage` trägt die Frist jetzt selbst; die Frage wird dabei **nicht** ersetzt, sonst wäre aus einem Bildfehler ein Überspringen-Knopf geworden (EC-12).
+
+**BUG-114 — „Pool leer" war ein stiller Rückweg.** Der Client behandelte die Meldung als „nichts weiter vorzubereiten" und kehrte kommentarlos zurück; wartete der Spieler gerade, blieb der Bildschirm auf „Runde wird vorbereitet …" stehen und die Runde verfiel nach 110 Minuten. Jetzt endet sie und wird gewertet. Die Gewinner-Meldung hängt weiterhin an der Serie und nicht am leeren Vorrat — `seen_ids` enthält auch verworfene Nummern, das war schon BUG-17/BUG-23.
+
+### Verifikation
+
+- `npm test` **242/242**, `npm run lint` **0**, `npm run build` **Exit 0**, `npx playwright test` **60/60** in drei Engines
+- Rot-Gegenprobe je Fix: Policy wiederhergestellt → E2E rot · `onFailed` abgeklemmt → beide Unit-Tests rot · Rundenende bei leerem Vorrat entfernt → Unit-Test rot; nach Rücknahme jeweils wieder grün
+- Schreibweg direkt gemessen: `POST /rest/v1/runs` → **403 permission denied**, Lesen weiterhin **200**
+
 ## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)
 
 > Alles ab hier beschreibt den **clientseitig geführten** Entwurf, den `/refine PROJ-2` am 2026-09-06 abgelöst hat. Er bleibt vollständig stehen, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde und Bug-Nummern verweisen — und weil die Begründungen zeigen, welche Überlegung damals wozu geführt hat.
