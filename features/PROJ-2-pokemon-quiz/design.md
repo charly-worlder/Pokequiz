@@ -176,6 +176,18 @@ Vorbereitete Frage ersetzen (Server Action)
 - Nach drei Ersetzungen in Folge ohne Erfolg meldet der Server „nicht ladbar",
   und der Browser zeigt die Fehlerkarte (EC-10, AC-16).
 
+Vorbereitete Frage zur aktuellen machen (Server Action)
+- Gebraucht, wenn der Spieler wartet: Nach einer richtigen Antwort lag keine
+  vorbereitete Frage bereit, der Zustand hat also gerade keine offene Frage.
+  Sobald der Browser eine neue vorbereitet und ihr Bild geprueft hat, rueckt sie
+  nach — und **erst dann** beginnt ihr Ausgabezeitpunkt (AC-34).
+- Befoerdert nur, wenn keine Frage offen ist: Eine angezeigte laesst sich damit
+  nicht verdraengen. Idempotent, weil `submit_answer` bereits selbst befoerdert,
+  wenn eine vorbereitete bereitlag.
+- Der Grund, warum das ein eigener Schritt ist und keine Abkuerzung beim
+  Vorbereiten: Eine Frage, die sofort als aktuelle entstuende, waere nach EC-12
+  nicht mehr verwerfbar — laedt ihr Bild nicht, saesse die Runde fest.
+
 Runde beenden (Server Action)
 - Aus der Fehlerkarte heraus (AC-18): schreibt die runs-Zeile aus dem Zustand
   und loescht ihn. Idempotent — ein zweiter Aufruf meldet dasselbe Ergebnis
