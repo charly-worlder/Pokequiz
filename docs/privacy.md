@@ -56,7 +56,7 @@
 ## Offene Punkte
 
 - [ ] AVV mit Supabase abschließen (Checkbox im Dashboard)
-- [ ] **Zeitgesteuerten Lauf für den Rundenzustand einrichten** (pg_cron, stündlich) — er ist die Zusage hinter der 2-Stunden-Frist aus PROJ-2, AC-41. Ohne ihn bleibt die Frist eine Absichtserklärung, genau wie beim verkehrsgetriebenen Abbau von `auth_throttle`
+- [ ] **Zeitgesteuerten Lauf für den Rundenzustand einrichten** (pg_cron, alle 5 Minuten, löscht alles länger als 110 Minuten Unberührte) — er ist die Zusage hinter der 2-Stunden-Frist aus PROJ-2, AC-41. Takt **und** Schwelle zusammen müssen unter zwei Stunden bleiben; ein stündlicher Takt gegen eine 2-Stunden-Schwelle ergäbe bis zu drei Stunden Verweildauer. Ohne ihn bleibt die Frist eine Absichtserklärung, genau wie beim verkehrsgetriebenen Abbau von `auth_throttle`
 - [ ] **SMTP-Anbieter wird ein weiterer Auftragsverarbeiter.** Der eingebaute Supabase-Versand reicht für den Produktivbetrieb nicht (nur Team-Adressen, 2 Mails/Stunde) — siehe `docs/PRD.md` → Rahmenbedingungen. Der gewählte Anbieter (Resend, Brevo o. a.) verarbeitet E-Mail-Adressen der Nutzer und braucht daher einen AVV, einen Eintrag in der Verarbeiter-Tabelle oben und eine Prüfung, ob er außerhalb der angemessenen Länder sitzt. Vor dem Livegang zu klären, zusammen mit der Absender-Domain
 - [ ] Hosting-Anbieter (Vercel/Hostinger) bei `/deploy` festlegen und hier als Verarbeiter nachtragen
 - [ ] Verantwortlicher (Name/Anschrift) bei PROJ-4 ergänzen

@@ -13,7 +13,7 @@ _Jede Entität ist eine Art von Ding, das die App speichert. Ein Satz zum Zweck,
 | Entität | Was sie darstellt | Wem sie gehört / wer sie sieht |
 |---------|-------------------|-------------------------------|
 | `profiles` | Das Trainerprofil zu einem Konto — trägt den eindeutigen, öffentlichen Trainernamen | Gehört dem Nutzer. Der Trainername ist für alle angemeldeten Nutzer lesbar, die E-Mail bleibt beim Auth-System und wird nie öffentlich |
-| `active_runs` | Der Zustand einer **laufenden** Runde — die in ihr gezogenen Nummern, die aktuelle Lösung mit ihrem Frage-Token, der Ausgabezeitpunkt, die aufsummierte Zeit und der Serienstand. Existiert nur, solange gespielt wird | Gehört dem Spieler; **nur er** liest und schreibt. Gelöscht am Rundenende, spätestens zwei Stunden nach dem letzten Lebenszeichen, und zusammen mit dem Profil (PROJ-2, AC-38 bis AC-41) |
+| `active_runs` | Der Zustand einer **laufenden** Runde — die in ihr gezogenen Nummern, die aktuelle Lösung mit ihrem Frage-Token, die bereits vorbereitete nächste Frage, der Ausgabezeitpunkt, die aufsummierte Zeit und der Serienstand. Existiert nur, solange gespielt wird | Gehört dem Spieler; **nur er** liest und schreibt. Gelöscht am Rundenende, spätestens zwei Stunden nach dem letzten Lebenszeichen, und zusammen mit dem Profil (PROJ-2, AC-38 bis AC-41) |
 | `runs` | Eine abgeschlossene Quiz-Runde — erreichte Serie und benötigte Zeit | Gehört dem Spieler, der sie gespielt hat. **Nur der Eigentümer liest und schreibt seine Runden**; verändert oder einzeln gelöscht werden sie von niemandem. Die Rangliste greift nicht auf die Tabelle zu, sondern auf eine Abfrage, die pro Spieler ausschließlich den besten Lauf herausgibt (PROJ-3) |
 
 ## Beziehungen
