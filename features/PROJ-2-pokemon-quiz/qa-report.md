@@ -2136,3 +2136,110 @@ Alle vier von Lane 3 unabhängig nachgefahren; die Zahlen decken sich mit denen 
 - **Empfehlung:** BUG-110 zuerst — er entwertet genau das, wofür dieser ganze Umbau gemacht wurde. Danach BUG-111 und BUG-114, die beide dazu führen, dass eine laufende Runde ohne Ausweg hängenbleibt. Der Rest kann in einen späteren Durchgang.
 
 > „Production Ready: NEIN" heißt hier: ein Critical. Die Liste unter „Nicht verifiziert" bleibt unabhängig davon offen — insbesondere Darstellung und Responsive-Verhalten hat in diesem Lauf **niemand** gesehen.
+
+---
+
+## QA-Nachlauf — 2026-09-07, nach den Fixes für BUG-110, BUG-111 und BUG-114
+
+**Anlass:** Der Lauf vom selben Tag fand einen Critical und zwei Medium. Commit `dd361c3` behauptet, sie behoben zu haben. Dieser Lauf prüft nach.
+
+**Umgebung:** `npm run dev` auf `http://localhost:3000`, lokale Supabase-Instanz (Migrationen 0001–**0011** angewandt), Branch `feat/PROJ-2-server-authoritative-round`.
+
+**Wie geprüft wurde:** Wieder **drei `qa-engineer`-Lanes ohne Kenntnis des Fixes** — A (Nachprüfung der drei Befunde und der Kriterien an denselben Stellen), B (Security-Red-Team, vollständige Angriffsliste), C (Regression). Lane B und C bekamen ausdrücklich den Auftrag, den Fix **nicht** zu glauben: B sollte den geschlossenen Weg erneut angreifen und nach Varianten suchen, C darauf achten, ob der Rechte-Entzug etwas Legitimes zerbrochen hat. Diese Sitzung führt zusammen und bewertet.
+
+> Legende: `[x]` in **diesem** Lauf verifiziert (Nachweis auf derselben Zeile) · `[ ] BUG` als defekt verifiziert · `[!] NICHT VERIFIZIERT` mit Grund.
+
+### Die vier Prüfungen
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **242/242 grün**, 22 Dateien |
+| Lint | `npm run lint` | **Exit 0** |
+| Build | `npm run build` | **Exit 0**, 6 Routen |
+| E2E | `npx playwright test` | **60/60 grün** in drei Engines |
+
+Von Lane C unabhängig nachgefahren.
+
+### Die drei Befunde des Vorlaufs
+
+- [x] **BUG-110 (Critical) — behoben, an der Wurzel.** Der Repro-Schritt aus dem Vorbericht 1:1 nachgestellt: `POST /rest/v1/runs` mit eigenem JWT und `streak:386, duration_ms:0` → **403 `42501 permission denied for table runs`** (vorher 201). Ebenso abgewiesen: Bulk-Insert, Upsert über `Prefer: resolution=merge-duplicates`, `PATCH`, `DELETE`, anon-Insert, alle Runden-RPCs als `authenticated`. **Mit Kontrollmessung**, damit das 403 nicht an einem kaputten Rumpf liegt: derselbe Rumpf mit `service_role` → **201**, Kontrollzeile danach entfernt. Ursache-Ebene bestätigt: auf `runs` existiert nur noch `runs_select_own`, `authenticated` hat nur `SELECT` (Migration `0011:30,36`)
+- [x] **BUG-110, Gegenprobe: der legitime Weg lebt.** `AC-8` — gerendertes HTML von `/` mit Sitzung zeigt „Deine Bestleistung Serie 1 · 0:22"; `EC-3` — `getRunByRoundIdAction` liefert das Ergebnis, bei fremder Sitzung `null`; `AC-11` — echte Runde gespielt, Zeile geschrieben, auch mit Serie 0; der Schreibweg über die `security definer`-Funktionen ist unberührt (`runs` wuchs im Lauf von 20 auf 34 Zeilen)
+- [ ] **BUG-111 (Medium) — im Code behoben, Wirkung nur zur Hälfte belegt.** Die angezeigte Frage hat jetzt Frist und Fehlerpfad (`pokemon-image.tsx:42,80-92` → `question-view.tsx:67-72` → `quiz-screen.tsx:487`), und die Optionen sind während des Fehlers nicht mehr blind klickbar (`quiz-screen.tsx:424`). Belegt ist der **`onError`-Pfad** (`quiz-screen.error-states.test.tsx:144-156`). **Die 5-Sekunden-Frist pinnt kein Test** und war ohne Browser nicht provozierbar → siehe „Nicht verifiziert" und BUG-118
+- [ ] **BUG-114 (Medium) — nur zur Hälfte behoben.** Der Client beendet die Runde jetzt (`quiz-screen.tsx:244-247`, Unit-Test `quiz-screen.error-states.test.tsx:175-208`), und zur Laufzeit schreibt der ausgelöste `endRoundAction` sie korrekt. **Der Server tut es weiterhin nicht:** Nach `pool-empty` stand `active_runs` mit Serie 6 unverändert, bis der Prüfer `endRoundAction` selbst aufrief → **BUG-119**
+
+### Erneut geprüfte Kriterien
+
+- [x] **AC-12** — kein Einreichweg mehr, in allen von Lane B durchprobierten Varianten (Verben, Tabellen, RPC, `Prefer`-Kopfzeilen, Auth-Schnittstelle, fremdes Konto). Mitgeschmuggelte `streak:300`, `durationMs:1`, `profileId:<fremd>` bleiben wirkungslos → Antwort `streak:1`
+- [x] **AC-14** — Sitzung von Konto 1 sieht 2 von 32 Zeilen, davon 0 fremde; Antwort von Konto 2 auf ein fremdes Token → `{"status":"stale"}`
+- [x] **AC-17** — „Erneut versuchen" holt dieselbe Frage zurück, statt eine neue zu ziehen (`quiz-screen.tsx:450-453`; Test belegt `replacePreparedQuestionAction` **nicht** aufgerufen). Laufzeit-Gegenprobe: `promoteQuestionAction` auf eine offene Frage → `{"promoted":false}`
+- [x] **AC-18 / EC-4** — `endRoundAction` → `{"status":"ended", …}` + Zeile; zweiter Aufruf → `{"status":"gone"}`, keine zweite Zeile
+- [x] **AC-26 / AC-40** — nach `DELETE /auth/v1/admin/users/<uid>`: `runs` 1 → 0, `active_runs` 1 → 0. Der Revoke hat die Kaskade nicht angefasst
+- [x] **AC-32 / AC-36 / EC-1 / EC-6 / EC-12 / EC-15** — `active_runs` für `authenticated` weder les- noch schreibbar (403); Ersetzen der vorbereiteten Frage lässt `current_token` und `current_answer_id` unverändert (90/`ab99fe30…`); wiederverwendetes Token → `stale`; Bild fremder Sitzung → 404, ohne Sitzung → 307, erfundene UUID → 404
+- [x] **EC-2, Vollständigkeitsfall** — Serie 385 → richtig → `{"streak":386, …}`, Zeile geschrieben, `active_runs` 0, Gewinner-Meldung an der Serie
+- [x] **Regression PROJ-1** — vollständig eigenständig nachgefahren: AC-1 bis AC-8, AC-10, AC-13, AC-16, AC-17, AC-19, EC-2, EC-3, EC-5 gegen die laufende Anwendung; beide Drosselungs-Hälften mit exakt gemessenen Grenzen (ab dem 6. Versuch je Verbindung, ab dem 21. je Konto). App-Shell, Routenschutz und das POST-Abmeldeformular unverändert
+
+### Neue Bugs
+
+#### BUG-119: Bei erschöpftem Ziehungsvorrat wertet der **Browser** die Runde, nicht der Server
+- **Severity:** Medium
+- **Bricht:** AC-35
+- **Nachweis:** Repro-Schritte aus BUG-114 exakt nachgestellt (`seen_ids` 1..386, Serie 5): richtige Antwort → `{"correct":true,"streak":6,"result":null}`; `prepareNextQuestionAction` → `pool-empty`, **keine `runs`-Zeile, `active_runs` steht weiter**. Erst der zusätzliche Aufruf von `endRoundAction` schreibt sie
+- **Warum das ein eigener Befund ist:** AC-35 nennt „weil der Pool erschöpft ist" ausdrücklich als eine der **drei** Endbedingungen, bei denen **der Server** das Ergebnis schreibt, „bevor er dem Browser antwortet". Der Fix für BUG-114 hat den sichtbaren Hänger beseitigt, aber die Wertung an den Browser gehängt: Bleibt sein Aufruf aus (Tab geschlossen, Verbindung weg, JS-Fehler), ist das Ergebnis genau wie vorher verloren und der Zustand verfällt nach 110 Minuten
+- **Wo es hingehört:** `src/lib/quiz/question-action.ts:107` erkennt die Erschöpfung und antwortet nur; die Runde müsste dort enden
+- **Priorität:** Vor dem Deploy beheben
+
+#### BUG-120: „Runde beenden" aus einem veralteten Tab beendet die **laufende** Runde des anderen Tabs
+- **Severity:** Medium
+- **Berührt:** AC-36, AC-18, EC-15
+- **Schritte zur Reproduktion (zur Laufzeit gemessen):**
+  1. Runde A starten (`roundId 36ebcbd3…`)
+  2. Runde B starten (`roundId b24eeddc…`) — verdrängt A nach AC-36
+  3. In B eine Frage richtig beantworten (Serie 1)
+  4. `endRoundAction` aufrufen — der Aufruf, den Tab A auslöst
+  5. Erwartet: A ist gegenstandslos, B läuft weiter
+  6. Tatsächlich: `{"status":"ended","result":{"streak":1,…}}`, geschriebene Zeile trägt `round_id = b24eeddc…` (**Runde B**), `active_runs` danach 0. Tab A beendet die laufende Runde von Tab B und bekommt deren Ergebnis angezeigt
+- **Ursache:** `endRoundAction` trägt keine Runden-Kennung; `finish_round(p_profile)` beendet, was gerade aktiv ist (`0009_round_functions.sql:316-346`). **Antworten** sind token-geprüft — dort halten AC-36 und EC-15 —, das Rundenende ist es nicht
+- **Warum es jetzt auffällt:** Der Weg in die Fehlerkarte eines veralteten Tabs ist durch den BUG-111-Fix neu. Das Bild des verdrängten Tokens liefert 404 (gemessen: vorher 200), zwei Fehlschläge ergeben die Fehlerkarte — und dort steht „Runde beenden". Ein Fix hat einen bestehenden Konstruktionsfehler erreichbar gemacht
+- **Priorität:** Vor dem Deploy beheben
+
+#### BUG-118: Die 5-Sekunden-Frist des angezeigten Bildes ist von keinem Test gepinnt
+- **Severity:** Low
+- **Nachweis:** `grep FakeTimers|advanceTimers|5_000` findet nur `src/lib/pokeapi/client.test.ts:123` (Server-Hälfte). Für `pokemon-image.tsx` ist ausschließlich der `onError`-Pfad getestet; die Frist selbst könnte ein späterer Umbau entfernen, ohne dass etwas rot wird
+- **Priorität:** Nächster Durchgang
+
+#### BUG-121: Die Fehlerkarte betitelt den Fremdrunden-Fall falsch
+- **Severity:** Low
+- **Nachweis:** Erreicht ein veralteter Tab die Karte über den Bildfehler (404 des verdrängten Tokens), steht dort „Die nächste Frage lädt gerade nicht" statt der vorhandenen EC-15-Meldung „Diese Runde ist nicht mehr offen" (`load-error-card.tsx:39`). Der Text spricht außerdem von der *nächsten* Frage, obwohl es die angezeigte ist
+- **Priorität:** Nächster Durchgang
+
+#### BUG-113 (aus dem Vorlauf) — jetzt auf dem Normalpfad erreichbar
+- **Severity:** von Low auf **Medium** heraufgestuft
+- **Nachweis:** Die Fehlerkarte behauptet „die Uhr steht so lange still" (`load-error-card.tsx:44-47`); für die **angezeigte** Frage läuft die Serveruhr weiter — gemessen **10525 ms nach genau 10 s Wartezeit**. Beim „Runde beenden" folgenlos, auf dem AC-17-Pfad wird die Wartezeit dem Spieler angerechnet
+- **Warum die Heraufstufung:** Im Vorlauf war der Fall nur bei einem Transportabriss erreichbar. Der BUG-111-Fix macht ihn zum Normalpfad — jeder Bildausfall der angezeigten Frage führt jetzt dorthin
+- **Priorität:** Zusammen mit BUG-119/BUG-120
+
+### Nicht verifiziert in diesem Lauf
+
+- [!] **BUG-111 als Laufzeit-Reproduktion** — der Originalbefund („die Skelettfläche bleibt stehen") ist ohne Browser weder vorher noch nachher beobachtbar. Beleg für den Fix sind Code und Unit-Test, nicht eigene Beobachtung
+- [!] **AC-15, Client-Hälfte (5-Sekunden-Frist)** — ohne Netzsperre und ohne Rendering nicht provozierbar; zusätzlich von keinem Test gepinnt (BUG-118)
+- [!] **AC-16 / AC-17 als sichtbares Verhalten** — Fehlerkarte, Skelettfläche, stehende Anzeigeuhr, `nudge`/`pop`: kein Browser, kein Viewport
+- [!] **AC-24, Responsive** — kein Viewport
+- [!] **EC-6 / EC-10 mit echten Bildausfällen** — nicht provozierbar
+- [!] **EC-2 als Client-Ablauf im Browser** — nur durch den jsdom-Test belegt
+- [!] **AC-41 im gehosteten Projekt** — lokal vollständig belegt (`pg_cron`, Job `active-runs-retention`, Fenster 110 min); **T36 und T37 sind weiterhin offene `[user]`-Aufgaben**
+- [!] **Drosselung der Spiel-Endpunkte** — nicht implementiert (kein Zugangsdaten-Pfad, für ein MVP vertretbar)
+- [!] **Migration 0011 auf frischer Datenbank** — Lane C konnte keinen `db reset` fahren, ohne die Parallel-Lanes zu zerstören. Vom Berichtseigentümer separat abgedeckt: `supabase db reset` über 0001–0011 lief vor dem Gesamtdurchlauf durch, und der E2E-Test, der den Schreibversuch mit 403 festnagelt, war danach grün. Ein eigener Rohmesswert unmittelbar nach diesem Reset liegt nicht vor
+- [!] **Visuelle Regressionen** — keine Screenshot-Vergleiche in der Suite
+- [!] **Wirksamkeit der IP-Drosselung gegen rotierende Header** — die Messungen setzen den Header selbst; das ist der bekannte Deploy-Blocker BUG-61
+
+### Zusammenfassung
+
+- **Der Critical ist weg.** BUG-110 ist an der Wurzel behoben, in allen durchprobierten Varianten dicht, mit Kontrollmessung abgesichert, und der legitime Lesepfad ist unbeschädigt
+- **Keine Regression:** 242/242, Lint 0, Build 0, 60/60 E2E in drei Engines; PROJ-1 vollständig eigenständig nachgefahren
+- **Zwei der drei Fixes sind nicht ganz fertig:** BUG-114 hat die Wertung an den Browser gehängt (**BUG-119**, bricht AC-35), und der BUG-111-Fix hat zwei bestehende Schwächen erreichbar gemacht (**BUG-120** und die Heraufstufung von **BUG-113**)
+- **Gefundene Bugs:** **5** — 0 Critical, 0 High, **3 Medium** (BUG-119, BUG-120, BUG-113), 2 Low (BUG-118, BUG-121)
+- **Acceptance Criteria:** **AC-35 gefallen**; AC-15 und AC-16 nur teilweise belegt (kein Browser); alle übrigen in diesem Lauf geprüften bestanden
+- **Production Ready:** **NEIN** — nicht wegen der Severity, sondern weil mit **AC-35 ein Kriterium des Vertrags nachweislich nicht erfüllt** ist. Nach der reinen Bug-Regel („kein Critical, kein High") wäre die Antwort JA; das wäre hier irreführend
+- **Empfehlung:** BUG-119 und BUG-120 zusammen beheben — beide sitzen an derselben Stelle (das Rundenende gehört auf den Server und braucht eine Runden-Kennung), beide sind klein. BUG-113 fällt dabei mit ab, wenn die Fehlerkarte ehrlich formuliert wird. Die zwei Low können warten.
+
+> „Production Ready: NEIN" heißt hier: ein gebrochenes Kriterium, keine offene Sicherheitslücke. Die Liste unter „Nicht verifiziert" bleibt unabhängig davon offen — Darstellung und Responsive-Verhalten hat auch in diesem Lauf **niemand** gesehen.
