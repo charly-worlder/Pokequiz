@@ -35,16 +35,20 @@ export const REQUEST_TIMEOUT_MS = 5_000
 /**
  * The sprite address, constructed from the Pokémon number (design.md →
  * Technical Decisions). Deliberately not verified here: checking it server-side
- * would cost a request per question in the normal case, and next/image fetches
- * the image anyway. The browser is what discovers a broken address, and a broken
+ * would cost a request per question in the normal case, and the image route
+ * fetches it anyway. A sprite that does not come back is what makes a question
  * address means the question is discarded (spec.md EC-6).
  *
  * **This is the only image source.** Until 2026-09-04 a second one sat behind it
  * (`resolveOfficialImageUrl`, spec.md EC-11), reading the officially documented
  * address from `/pokemon/{id}`. It was removed once it was measured that the
  * official address is character-for-character the one built here — see BUG-16.
+ *
+ * **Not exported since 2026-09-06.** The address carries the Pokémon number,
+ * and that number must not reach the browser (spec.md AC-32). The only caller
+ * left is `fetchSpriteBytes` below, which hands out bytes instead of an address.
  */
-export function spriteUrlFor(id: number): string {
+function spriteUrlFor(id: number): string {
   return `${SPRITE_BASE}/${id}.png`
 }
 
@@ -95,4 +99,31 @@ export async function withTimeoutAndOneRetry<T>(
     }
   }
   return null
+}
+
+/**
+ * The sprite's bytes, fetched server-side and cached by its CDN address — which
+ * is to say, by the Pokémon number (spec.md AC-37).
+ *
+ * That distinction is the whole point. The browser asks for the picture under a
+ * per-question token (AC-32), so a cache keyed on the *inbound* address would
+ * miss every single time and re-fetch the same picture from the CDN for every
+ * question of every player — precisely what AC-31 and the fair use policy ask us
+ * not to do. The key here is the outbound URL, so the second player to be shown
+ * Pikachu is served from the cache.
+ *
+ * Returns null when the sprite is not retrievable; the caller answers 404 and the
+ * round discards that question (spec.md EC-6).
+ */
+export async function fetchSpriteBytes(
+  id: number,
+  signal: AbortSignal
+): Promise<{ body: ArrayBuffer; contentType: string } | null> {
+  const res = await cachedFetch(spriteUrlFor(id), signal)
+  if (!res.ok) return null
+
+  return {
+    body: await res.arrayBuffer(),
+    contentType: res.headers.get('content-type') ?? 'image/png',
+  }
 }

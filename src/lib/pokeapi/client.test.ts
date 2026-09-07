@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import {
   fetchGermanName,
-  spriteUrlFor,
+  fetchSpriteBytes,
   withTimeoutAndOneRetry,
   REQUEST_TIMEOUT_MS,
 } from './client'
@@ -73,11 +73,27 @@ describe('fetchGermanName', () => {
   })
 })
 
-describe('spriteUrlFor', () => {
-  it('bildet die Adresse aus der Pokémon-Nummer', () => {
-    expect(spriteUrlFor(25)).toBe(
+describe('fetchSpriteBytes (AC-37)', () => {
+  it('holt das Bild über die aus der Nummer gebildete CDN-Adresse, damit der Zwischenspeicher an der Nummer hängt und nicht am Frage-Token', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } })
+      )
+
+    const result = await fetchSpriteBytes(25, AbortSignal.timeout(1000))
+
+    expect(fetchMock.mock.calls.at(-1)![0]).toBe(
       'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png'
     )
+    expect(fetchMock.mock.calls.at(-1)![1]).toMatchObject({ cache: 'force-cache' })
+    expect(result?.contentType).toBe('image/png')
+    expect(new Uint8Array(result!.body)).toEqual(new Uint8Array([137, 80, 78, 71]))
+  })
+
+  it('meldet null, wenn das Bild nicht abrufbar ist (EC-6)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }))
+    expect(await fetchSpriteBytes(9999, AbortSignal.timeout(1000))).toBeNull()
   })
 })
 

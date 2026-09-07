@@ -1,6 +1,400 @@
 # PROJ-2 — Tech Design
 
+> Der technische Entwurf (das WIE). Zwei Leser: der Produktverantwortliche, der ihn abnimmt, und `/build`, das dagegen baut. Kein Code — aber genau genug, dass niemand raten muss.
+> Der Vertrag (das WAS) steht in `spec.md`, die Aufgabenliste in `tasks.md`. Der Status lebt ausschließlich in `features/INDEX.md`.
+>
+> **Neu entworfen am 2026-09-06** nach `/refine PROJ-2` (serverseitig geführte Runde, AC-32 bis AC-41). Der abgelöste Entwurf vom 2026-09-01 steht vollständig unter „Historie" am Ende — er wird nicht gelöscht, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde verweisen.
+
 ## Component Structure
+
+```
+Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
++-- PageFrame                     Kopfzeile + Inhalt + Fußzeile, umschließt jede Route
+    +-- SiteHeader                unverändert (AC-21, AC-22, AC-24)
+    +-- {children}
+    +-- SiteFooter                unverändert (AC-23)
+
+/ (Route „Spiel", nur angemeldet)
++-- page.tsx (Server-Komponente)  lädt die persönliche Bestleistung und reicht sie hinein
+    +-- QuizScreen (Client-Komponente — hält ab jetzt NUR NOCH ANZEIGE-Zustand)
+        +-- StartView                              Zustand „bereit" (AC-1)
+        +-- QuestionView                           Zustände „offen" / „wartet" / „aufgelöst"
+        |   +-- StatusBar: StreakBadge (zeigt den vom Server gemeldeten Stand)
+        |   |               + RoundClock (reine Anzeigeuhr, siehe unten)
+        |   +-- PokemonImage  → /api/question/{token}/image   (AC-20, AC-32)
+        |   +-- AnswerOption x4  — Färbung erst, wenn das Urteil des Servers da ist
+        |   +-- „Weiter zum Ergebnis" nach der Auflösung (AC-6)
+        +-- NextQuestionPreloader                  unsichtbar; lädt das Bild der
+        |                                          vorbereiteten Frage (AC-10)
+        +-- LoadErrorCard                          Fehlerzustand (AC-16, EC-10)
+        +-- ResultView                             Ergebnis (AC-7, AC-8, EC-2, EC-3)
+```
+
+**Was sich gegenüber dem alten Aufbau ändert:** `QuizScreen` besaß bisher die Wahrheit — Serie, Uhr, Lösung. Ab jetzt besitzt er nur noch die **Darstellung**. Serie, Zeit und richtige Antwort kommen mit jeder Serverantwort mit; der Browser hält sie, um sie anzuzeigen, nicht um sie zu berechnen.
+
+**Zustandsmaschine der Anzeige** — ein Zustand ist neu (`wartet`):
+
+```
+bereit --„Runde starten"--> lädt --Frage + Bild da--> offen
+offen --Klick auf eine Option--> wartet
+wartet --Urteil „richtig"--> offen        (nächste Frage lag vorgeladen bereit)
+wartet --Urteil „richtig", keine nächste Frage--> fehler
+wartet --Urteil „falsch"--> aufgelöst --Klick--> beendet
+wartet --Urteil „Pool leer"--> beendet    (Gewinner-Meldung, EC-2)
+lädt   --nichts ladbar--> fehler
+fehler --„Erneut versuchen" erfolgreich--> offen
+fehler --„Runde beenden"--> beendet
+beendet --„Nochmal spielen"--> lädt       (direkt in die neue Runde, AC-9)
+```
+
+`wartet` dauert einen Roundtrip zum eigenen Server — keine PokeAPI-Anfrage, die Lösung liegt im Rundenzustand. In diesem Zustand ist die geklickte Option optisch gedrückt, aber **noch nicht gefärbt**: Die Farbe ist die Antwort des Servers, nicht eine Vermutung des Browsers.
+
+**Die angezeigte Uhr ist Anzeige, nicht Messung** (AC-2, AC-34). Sie läuft lokal weiter, damit sie flüssig aussieht, und hält an, wenn keine Frage offen ist. Auf dem Ergebnis-Screen steht die **servergemessene** Zeit — die beiden dürfen um die Netzlatenz auseinanderliegen (EC-13), und der Ergebnis-Screen zeigt die maßgebliche.
+
+## Data Model
+
+### Neue Tabelle: `active_runs` — der laufende Rundenzustand
+
+```
+Jede laufende Runde hat:
+- Gehört zu / Primärschlüssel   die Profil-ID (Verweis auf profiles.id).
+                                Profil-ID IST der Primärschlüssel — dadurch ist
+                                „höchstens eine laufende Runde je Spieler" (AC-36)
+                                eine Eigenschaft der Tabelle und keine Prüfung im
+                                Code, die man vergessen kann.
+                                Wird das Profil geloescht, verschwindet die Zeile
+                                mit (AC-40, ON DELETE CASCADE).
+- Runden-Kennzeichen            UUID, Pflicht, eindeutig. Vom SERVER erzeugt
+                                (frueher vom Browser). Wandert beim Rundenende in
+                                die runs-Zeile und macht das Schreiben
+                                wiederholbar (EC-3, EC-4).
+- Gezogene Nummern              Liste kleiner Ganzzahlen, Pflicht, hoechstens 386
+                                Eintraege, jeder Wert 1..386. Enthaelt jede Nummer,
+                                die in dieser Runde schon Loesung war (AC-5) oder
+                                verworfen wurde (EC-5, EC-6).
+- Serienstand                   kleine Ganzzahl, Pflicht, 0..386, Start 0.
+- Aufsummierte Zeit             Ganzzahl in Millisekunden, Pflicht, >= 0, Start 0.
+                                Waechst bei jeder angenommenen Antwort um das
+                                gemessene Intervall (AC-34).
+- Aktuelle Frage (vier Felder, immer gemeinsam gesetzt oder gemeinsam leer):
+    Loesung                     kleine Ganzzahl 1..386
+    Richtige Position           kleine Ganzzahl 0..3 — welche der vier Optionen
+    Frage-Token                 UUID, eindeutig — die einzige Kennung, die der
+                                Browser von dieser Frage kennt (AC-32)
+    Ausgabezeitpunkt            Zeitstempel — Startpunkt der Messung (AC-34)
+                                Alle vier leer = gerade ist keine Frage offen
+                                (Fehlerzustand AC-16; die Uhr steht dann von
+                                selbst, weil kein Intervall laeuft).
+- Vorbereitete naechste Frage (drei Felder, gemeinsam gesetzt oder gemeinsam leer):
+    Loesung, Richtige Position, Frage-Token — wie oben, aber OHNE Zeitpunkt:
+    Sie zaehlt erst, wenn sie aktuell wird. Sie existiert, damit der Browser ihr
+    Bild vorladen kann, ohne etwas zu erfahren (AC-10, AC-32).
+- Zuletzt beruehrt              Zeitstempel, bei jeder Aenderung neu gesetzt.
+                                Grundlage der 2-Stunden-Frist (AC-41).
+
+Besitz: gehoert dem Spieler, dessen Profil-ID der Primaerschluessel ist.
+
+Zugriff — der wichtigste Punkt dieses Entwurfs:
+- Row Level Security ist eingeschaltet und es gibt KEINE EINZIGE POLICY.
+  Damit ist die Tabelle ueber die oeffentliche Datenschnittstelle fuer niemanden
+  les- oder schreibbar — auch nicht fuer ihren eigenen Besitzer.
+- Erreichbar ist sie ausschliesslich ueber Datenbankfunktionen mit erhoehten
+  Rechten, die nur `service_role` ausfuehren darf; der Server ruft sie mit dem
+  vorhandenen Administrationszugang (src/lib/supabase/admin.ts).
+- Grund: Die Zeile enthaelt die Loesung. Duerfte der Spieler „nur seine eigene"
+  Zeile lesen, koennte er mit dem oeffentlichen Zugangsschluessel und seiner
+  eigenen Sitzung die Antwort abfragen, bevor er klickt — AC-32 waere auf der
+  Datenebene gebrochen, waehrend die Anwendung sie brav verschweigt.
+  Dasselbe Muster nutzt bereits `auth_throttle` (Migration 0003).
+
+Aufbewahrung: drei unabhaengige Loeschwege — Rundenende (AC-39), 2 Stunden ohne
+Beruehrung (AC-41), Profilloeschung (AC-40). Kein vierter Weg noetig, keiner der
+drei haengt am Verkehr anderer Spieler.
+```
+
+### Änderungen an `runs`
+
+```
+- Spalte `client_round_id` heisst kuenftig `round_id`. Der Name war eine Aussage
+  ueber die Herkunft („vom Client erzeugt") und die stimmt nicht mehr. Eindeutig
+  bleibt sie — das ist weiterhin die Garantie hinter EC-4.
+- Der Constraint `runs_duration_plausible` (Dauer >= Serie x 500 ms) FAELLT.
+  AC-12 hat ihn abgeschafft, weil AC-34 ihn abloest: Er wuerde jetzt nur noch
+  eine echt gespielte, schnelle Runde abweisen. Die beiden anderen Constraints
+  (Serie 0..386, Dauer >= 0) bleiben als zweite, unabhaengige Schranke.
+- Sonst unveraendert: Besitz, Index, Policies (AC-14 bleibt zweifach abgesichert).
+```
+
+### Unverändert
+
+`profiles` und `auth.users` bleiben, wie PROJ-1 sie angelegt hat. Es entsteht weiterhin keine Pokémon-Entität — Bilder und Namen bleiben externe Daten mit einem verwerfbaren Zwischenspeicher davor (AC-31, AC-37).
+
+## Behaviors & Access
+
+Alle Vorgänge verlangen eine gültige Sitzung; ohne sie werden sie abgewiesen und der Browser landet auf `/login` (EC-7). Die Profil-ID stammt **immer** aus der Sitzung, nie aus einem Aufrufparameter (AC-14).
+
+```
+Runde starten (Server Action)
+- Legt den Rundenzustand fuer dieses Profil an und ERSETZT einen vorhandenen.
+  Die alte Runde ist damit weg und wurde nicht gespeichert (AC-36, EC-9, EC-15).
+- Zieht die erste Frage: eine Loesung aus 1..386, drei verschiedene Distraktoren,
+  holt die vier deutschen Namen, mischt sie (AC-3), erzeugt ein Frage-Token,
+  setzt den Ausgabezeitpunkt.
+- Bereitet ausserdem gleich die zweite Frage vor (ohne Zeitpunkt).
+- Gibt zurueck: die vier Optionen und das Frage-Token der ersten Frage, dazu
+  Optionen und Token der vorbereiteten zweiten. NICHT die Pokemon-Nummer und
+  NICHT, welche Option richtig ist (AC-32).
+- Fehlt fuer ein gezogenes Pokemon der deutsche Name, zieht der Server intern
+  neu, ohne dass der Browser davon erfaehrt (EC-5).
+- Sind alle 386 verbraucht: „Pool leer" (EC-2).
+
+Antwort abgeben (Server Action) — der Kern
+- Bekommt: das Frage-Token und die gewaehlte Position (0..3). Sonst nichts.
+- Die Datenbank fuehrt in EINEM Schritt aus:
+    * findet die Zeile dieses Profils, DEREN aktuelles Token genau das
+      uebergebene ist. Passt es nicht, ist die Antwort wirkungslos — das ist
+      zugleich die Garantie fuer EC-1 (zweiter Klick) und EC-15 (zweiter Tab).
+    * misst das Intervall Ausgabezeitpunkt -> jetzt und addiert es auf die
+      Summe (AC-34). Gemessen wird mit der Uhr der Datenbank, nicht mit der
+      des Anwendungsservers — eine Uhr statt zweier.
+    * vergleicht Position mit der gespeicherten richtigen Position (AC-33).
+    * richtig: Serie + 1; die vorbereitete Frage rueckt nach und bekommt JETZT
+      ihren Ausgabezeitpunkt; die aktuelle Frage wird geleert.
+    * falsch oder Pool leer: schreibt die runs-Zeile aus Serie und Zeitsumme
+      des Zustands (AC-11, AC-35) und meldet das Ergebnis zurueck.
+- Gibt zurueck: richtig/falsch, die richtige Position (jetzt darf der Browser
+  sie erfahren — AC-6), den neuen Serienstand, und bei Rundenende Serie, Zeit
+  und ob es eine persoenliche Bestleistung ist (AC-8).
+- Abgelehnt, wenn: keine Sitzung (EC-7) · Token passt nicht (EC-1, EC-15) ·
+  Position ausserhalb 0..3 (Pruefung an der Grenze, wie ueberall).
+
+Vorbereitete Frage ersetzen (Server Action)
+- Der Browser meldet: „das Bild der vorbereiteten Frage laedt nicht" (EC-6).
+- Der Server verwirft die vorbereitete Frage, merkt ihre Nummer als gezogen vor
+  und bereitet eine neue vor. Die AKTUELLE Frage wird dabei nie angefasst —
+  das ist die Umsetzung von EC-12 (kein Ueberspringen).
+- Nach drei Ersetzungen in Folge ohne Erfolg meldet der Server „nicht ladbar",
+  und der Browser zeigt die Fehlerkarte (EC-10, AC-16).
+
+Vorbereitete Frage zur aktuellen machen (Server Action)
+- Gebraucht, wenn der Spieler wartet: Nach einer richtigen Antwort lag keine
+  vorbereitete Frage bereit, der Zustand hat also gerade keine offene Frage.
+  Sobald der Browser eine neue vorbereitet und ihr Bild geprueft hat, rueckt sie
+  nach — und **erst dann** beginnt ihr Ausgabezeitpunkt (AC-34).
+- Befoerdert nur, wenn keine Frage offen ist: Eine angezeigte laesst sich damit
+  nicht verdraengen. Idempotent, weil `submit_answer` bereits selbst befoerdert,
+  wenn eine vorbereitete bereitlag.
+- Der Grund, warum das ein eigener Schritt ist und keine Abkuerzung beim
+  Vorbereiten: Eine Frage, die sofort als aktuelle entstuende, waere nach EC-12
+  nicht mehr verwerfbar — laedt ihr Bild nicht, saesse die Runde fest.
+
+Runde beenden (Server Action)
+- Aus der Fehlerkarte heraus (AC-18): schreibt die runs-Zeile aus dem Zustand
+  und loescht ihn. Idempotent — ein zweiter Aufruf meldet dasselbe Ergebnis
+  und legt keine zweite Zeile an (EC-4).
+
+Bild ausliefern (Route Handler, GET /api/question/{token}/image)
+- Loest das Token ueber eine Datenbankfunktion zur Pokemon-Nummer auf, und zwar
+  nur, wenn das Token zur laufenden Runde DIESES Nutzers gehoert — aktuelle
+  oder vorbereitete Frage. Sonst 404.
+- Holt das Sprite und reicht die Bytes durch. Der Browser sieht ausschliesslich
+  die eigene Domain (AC-20), die Pokemon-Nummer taucht in keiner Adresse auf
+  (AC-32).
+- Antwort traegt `Cache-Control: private, max-age=3600, immutable`, damit das
+  vorgeladene Bild beim Anzeigen ein Treffer im Browser-Cache ist und nicht
+  zweimal uebertragen wird.
+- Serverseitig wird das Sprite ueber SEINE CDN-Adresse zwischengespeichert,
+  also ueber die Pokemon-Nummer — nicht ueber das wechselnde Token (AC-37).
+  Dafuer dient derselbe Mechanismus, den die Namensabfragen schon nutzen.
+
+Persoenliche Bestleistung lesen (Server-Komponente)
+- Unveraendert: bester eigener Lauf, hoechste Serie, bei Gleichstand kuerzeste
+  Zeit; liest ausschliesslich eigene Runden (AC-8).
+```
+
+**Was der Browser über eine Frage weiß:** vier Namen, ein Token, und nach seiner Antwort das Urteil. Nicht die Nummer, nicht die Lösung, nicht den Zusammenhang zwischen Token und Nummer.
+
+## Dependencies
+
+**Keine neuen Pakete.** Alles Nötige ist vorhanden:
+
+- `@supabase/ssr` — Sitzung und Datenbankzugriff (bereits im Einsatz)
+- der vorhandene Administrationszugang `src/lib/supabase/admin.ts` und `SUPABASE_SERVICE_ROLE_KEY` — bereits für die Anmelde-Drosselung in Gebrauch und in `.env.local.example` dokumentiert. **Keine neue Umgebungsvariable.**
+- `zod` — Prüfung von Token und gewählter Position an der Grenze
+- shadcn/ui `Button`, `Card`, `Skeleton`, `Avatar`, `Badge` — unverändert
+- **Nicht mehr benutzt:** `next/image` für das Quizbild (Begründung in den Technical Decisions). Für alle anderen Bilder bleibt es.
+
+## Settings the user makes
+
+| Setting | Where | Value | Why | → AC |
+| --- | --- | --- | --- | --- |
+| `pg_cron` einschalten | Supabase → Database → Extensions → `pg_cron` | eingeschaltet | Ohne die Erweiterung läuft der Aufräum-Lauf nicht, und die Frist aus AC-41 wäre eine Absichtserklärung statt einer Zusage | AC-41 |
+| Prüfen, dass das Projekt nicht wegen Inaktivität pausiert ist | Supabase → Project Settings | Projekt aktiv | Ein pausiertes Projekt führt keine zeitgesteuerten Läufe aus; Supabase pausiert ein Free-Tier-Projekt nach einer Woche ohne Nutzung. Praktisch harmlos — wer nicht spielt, hinterlässt auch keinen Rundenzustand —, aber es gehört benannt statt angenommen | AC-41 |
+
+**Zur ersten Zeile:** `/build` schaltet die Erweiterung per Migration ein. Nur falls das gehostete Projekt das dem Migrationslauf verweigert, wird daraus eine Handarbeit im Dashboard — deshalb steht sie hier. `/deploy` prüft gegen das echte Projekt, ob die Erweiterung vorhanden und der Job eingerichtet ist, und zwar unabhängig davon, welcher der beiden Wege ihn angelegt hat.
+
+## Technical Decisions
+
+| Decision | Rationale | Alternative considered | Trade-off | Date |
+| --- | --- | --- | --- | --- |
+| **Der Rundenzustand liegt in einer Tabelle, nicht in einem signierten Token beim Client** | Ein Token laesst sich zurueckspielen: falsch antworten, aus dem Urteil die Loesung lernen, den alten Stand erneut senden. Jede Abwehr dagegen braucht eine serverseitige Marke je Runde — dann kann man auch gleich den Zustand dort halten | Verschluesseltes, signiertes Zustands-Token beim Browser | Eine Tabelle mehr, drei Loeschwege statt keinem. Dafuer ist die Runde nicht zurueckspielbar | 2026-09-06 |
+| **`active_runs` bekommt keine einzige RLS-Policy; Zugriff nur ueber Funktionen mit erhoehten Rechten, ausfuehrbar allein fuer `service_role`** | Die Zeile enthaelt die Loesung. Eine „nur der Eigentuemer liest seine Zeile"-Policy — der uebliche und hier falsche Reflex — gibt dem Spieler die Antwort, bevor er klickt: Der oeffentliche Zugangsschluessel plus seine eigene Sitzung genuegen. Dann waere AC-32 auf der Datenebene gebrochen, waehrend die Oberflaeche sie einhaelt. Das Projekt hat dieses Muster schon (`auth_throttle`, 0003; `is_trainer_name_taken`, 0006) | Eigentuemer-Policy wie bei `runs`; oder Spaltenrechte, die nur die Loesung verbergen | Die Spielzuege laufen ueber Datenbankfunktionen statt ueber Abfragen im Anwendungscode. Das ist mehr SQL — und zugleich der Ort, an dem die Regeln nicht durch einen spaeteren Umbau der Server Action verlorengehen | 2026-09-06 |
+| **Die Profil-ID ist der Primaerschluessel von `active_runs`** | Macht „hoechstens eine laufende Runde je Spieler" (AC-36) zu einer Eigenschaft der Tabelle statt zu einer Pruefung, die man vergessen kann. Deckt damit EC-9 (Doppelklick) und EC-15 (zweiter Tab) mit ab, ohne eigene Logik | Eigener Schluessel plus eindeutiger Index auf die Profil-ID | Die Runden-ID ist nicht der Schluessel, sondern ein eindeutiges Nebenfeld. Fuer die Zugriffe hier ohne Bedeutung | 2026-09-06 |
+| **Antwort pruefen = eine bedingte Aenderung auf das Frage-Token, in einem Schritt in der Datenbank** | Nennt die Garantie hinter drei Edge Cases auf einmal: Nur der erste Aufruf mit dem passenden Token findet die Zeile, weil derselbe Schritt das Token leert — jeder zweite Klick (EC-1) und jeder Aufruf aus einem verwaisten Tab (EC-15) laeuft ins Leere. Ein Pruefen-dann-Schreiben im Anwendungscode haette dazwischen eine Luecke | Lesen, im Server Action entscheiden, dann schreiben | Die Spielregel steht in einer Datenbankfunktion und nicht neben dem Rest der Spiellogik. Dafuer haelt sie auch unter gleichzeitigen Anfragen | 2026-09-06 |
+| **Die Zeit misst die Datenbank (`jetzt` minus Ausgabezeitpunkt), nicht der Anwendungsserver** | Beide Enden des Intervalls kommen damit von derselben Uhr. Bei zwei Servern mit leicht verschiedener Zeit waeren Messfehler moeglich, die genau in der Groessenordnung des Tie-Breakers liegen | Zeitstempel in Node bilden | Die Messung ist an die Datenbank gebunden; sie ist ohnehin an jedem Schritt beteiligt | 2026-09-06 |
+| **Die naechste Frage wird im Zustand vorbereitet, damit ihr Bild vorgeladen werden kann** | AC-10 verlangt die naechste Frage ohne sichtbaren Ladezustand, und mit verdeckter Adresse (AC-32) verraet das Vorladen nichts. Der Preis sind drei Felder mehr in der Zeile | Naechste Frage erst mit dem Urteil ausliefern | AC-10 waere gebrochen: nach jeder richtigen Antwort ein Skelett, waehrend das Bild laedt. **Nebenwirkung: Die Aufzaehlung in AC-38 kennt diese drei Felder noch nicht** — siehe Open Questions | 2026-09-06 |
+| **Das Quizbild kommt aus einem eigenen Route Handler, roh, ohne die Bild-Optimierung des Frameworks** | Der Optimierer speichert nach Quell-Adresse zwischen. Die ist jetzt pro Frage verschieden, der Zwischenspeicher liefe also immer daneben — und auf manchen Tarifen wird je einmaliger Quell-Adresse abgerechnet, womit aus der bisherigen Obergrenze „386 Bilder insgesamt" eine je Frage wuerde. Die Wiederverwendung sichert stattdessen der serverseitige Zwischenspeicher auf die CDN-Adresse, also auf die Pokemon-Nummer (AC-37) | Bild-Optimierung mit eigenem Lader auf die Token-Adresse | Das Bild geht als PNG mit rund 110 KB an den Browser statt als verkleinertes WebP mit etwa 30 KB. Auf dem kritischen Pfad liegt nur die erste Frage einer Runde (AC-2), alle weiteren sind vorgeladen. Wenn AC-2 messbar leidet, ist der Hebel eine serverseitige Verkleinerung — siehe Open Questions | 2026-09-06 |
+| **Die Bildantwort traegt `private, max-age=3600, immutable`** | Das vorgeladene Bild soll beim Anzeigen aus dem Browser-Cache kommen, nicht ein zweites Mal durch die Leitung. `private`, weil die Adresse an eine Sitzung gebunden ist und in keinem gemeinsamen Zwischenspeicher landen darf | Ohne Cache-Header ausliefern | Das Bild bleibt bis zu einer Stunde im Browser, obwohl das Token serverseitig schon tot ist. Harmlos: Der Spieler hat genau dieses Bild ohnehin gesehen | 2026-09-06 |
+| **Die Byte-Laenge des Bildes bleibt ein Erkennungsmerkmal — bewusst nicht kaschiert** | Jedes Sprite hat eine eigene Groesse; wer die 386 Bilder besitzt, kann daran die Nummer erraten, ohne das Bild anzusehen. Das setzt aber genau dieselbe Vorarbeit voraus wie EC-14 (Bilderkennung) und macht den Angriff nicht billiger. Auffuellen auf eine Einheitsgroesse wuerde jede Frage verteuern und nur einen bereits akzeptierten Weg verschliessen | Alle Bilder auf gleiche Laenge auffuellen | Ein Seitenkanal bleibt offen — derselbe, den EC-14 bereits benennt und traegt | 2026-09-06 |
+| **Der Aufraeum-Lauf ist ein zeitgesteuerter Datenbank-Job (pg_cron, alle 5 Minuten, Schwelle 110 Minuten), kein Aufraeumen beim naechsten Rundenstart** | Aus PROJ-1 gelernt: Beim verkehrsgetriebenen Abbau von `auth_throttle` muss `docs/privacy.md` einraeumen, dass er „keine feste Hoechstfrist zusagt". Ein Spieler, der nie zurueckkommt, erzeugt keinen Ausloeser. AC-41 verspricht eine Frist, also braucht es etwas, das ohne Verkehr laeuft. **Takt und Schwelle muessen zusammen unter zwei Stunden bleiben** — das ist der Punkt, an dem die erste Fassung dieses Entwurfs falsch war: Ein stuendlicher Takt gegen eine 2-Stunden-Schwelle laesst eine Zeile bis zu **drei** Stunden liegen (zwei bis sie faellig wird, bis zu eine weitere bis der naechste Lauf sie sieht) und haette AC-41 gebrochen. Gewaehlt: **alle 5 Minuten loeschen, was laenger als 110 Minuten unberuehrt ist** — schlimmster Fall rund 1 Stunde 55 Minuten, also innerhalb der Zusage, mit etwas Luft fuer einen ueberlangen Lauf. Der Lauf ist ein Loeschbefehl auf eine Tabelle mit hoechstens so vielen Zeilen wie gerade Spieler spielen; 288 Ausfuehrungen am Tag sind dafuer belanglos | Stuendlich mit 2-Stunden-Schwelle (verletzt AC-41); oder stuendlich mit 60-Minuten-Schwelle (haelt die Zusage, wirft aber eine pausierte Runde schon nach einer Stunde weg) | Ein Spieler, der eine Runde offen liegen laesst und nach mehr als 110 Minuten weiterklickt, findet sie geloescht vor. Das ist derselbe Fall, den AC-19 ohnehin beschreibt — die Runde ist dann verloren, nicht falsch gewertet | 2026-09-06 |
+| **`runs.client_round_id` wird zu `runs.round_id`, und `runs_duration_plausible` faellt** | Der alte Name behauptet eine Herkunft, die nicht mehr stimmt (der Server vergibt das Kennzeichen). Der Constraint setzt die 0,5-Sekunden-Regel durch, die AC-12 abgeschafft hat — er wuerde jetzt nur noch echte schnelle Runden abweisen | Namen lassen, Constraint lassen | Eine Migration, die eine Spalte umbenennt und einen Constraint entfernt. Da noch nichts in Produktion laeuft, ist das folgenlos | 2026-09-06 |
+| **Der Browser bekommt die richtige Position erst mit dem Urteil** | AC-4 und AC-6 verlangen die farbliche Rueckmeldung am Ort der Handlung; sie kommt jetzt einen Roundtrip spaeter. Kein PokeAPI-Aufruf noetig, die Loesung liegt im Zustand — der Weg ist so kurz, wie er sein kann | Loesung vorab mitschicken wie bisher | Die Faerbung folgt der Netzlatenz statt sofort zu erscheinen. Der geklickte Zustand wird deshalb sofort dargestellt, damit der Klick nicht ins Leere zu gehen scheint | 2026-09-06 |
+
+## Open Questions
+
+- [ ] **AC-38 zaehlt den Rundenzustand abschliessend auf und kennt die vorbereitete naechste Frage noch nicht** (drei Felder: Loesung, richtige Position, Token) sowie das Feld „zuletzt beruehrt", an dem AC-41 haengt. Beides folgt zwingend aus AC-10 und AC-41, ist also kein Zusatz, sondern eine Luecke im Wortlaut. **Vor `/build` per `/refine PROJ-2` nachziehen** — sonst baut `/build` etwas, das der Vertrag nicht deckt, und `/qa` faellt darueber.
+- [ ] Ob das gehostete Projekt `create extension pg_cron` aus einer Migration heraus zulaesst, ist erst am echten Projekt zu sehen. Faellt es durch, greift die Dashboard-Zeile aus „Settings the user makes".
+- [ ] Ob die 110 KB des rohen PNG die 3-Sekunden-Zusage aus AC-2 gefaehrden, ist eine Messung wert, sobald die erste Runde laeuft. Hebel waere eine serverseitige Verkleinerung im Route Handler; sie kostet Rechenzeit je Pokemon einmalig und liesse sich neben den Zwischenspeicher legen.
+
+## Notizen aus dem Bau (2026-09-06)
+
+Fünf Abweichungen bzw. Präzisierungen gegenüber dem genehmigten Entwurf, alle innerhalb seiner Zusagen.
+
+**1. Eine siebte Datenbankfunktion: `promote_prepared_question`.** Der Entwurf nannte sechs. Beim Bau zeigte sich, dass „vorbereitete Frage" und „aktuelle Frage" einen eigenen Übergang brauchen: Wartet der Spieler (nach einer richtigen Antwort lag nichts bereit), muss die nachgezogene Frage aktuell werden — und zwar **erst, wenn ihr Bild geladen ist**, weil dort der Ausgabezeitpunkt und damit die Messung beginnt (AC-34). Der naheliegende Weg, sie gleich als aktuelle entstehen zu lassen, wurde verworfen: Eine aktuelle Frage ist nach EC-12 nicht mehr verwerfbar, und lädt ihr Bild nicht, säße die Runde fest. Jede Frage entsteht deshalb als vorbereitete — dort ist sie verwerfbar — und wird separat befördert. Die Funktion ist **idempotent**: Hat `submit_answer` bereits befördert, meldet sie Erfolg statt Fehlschlag.
+
+**2. Ein eigenes Modul fürs Ziehen: `src/lib/quiz/draw-question.ts`.** Es gibt die Lösung zurück und darf deshalb nie ein Endpunkt sein; in einer Server-Action-Datei wäre jeder Export einer. Der Wächter über die Server Actions hat das beim ersten Lauf bestätigt — er hat sogar den bloßen *Kommentar* mit der Direktive angemahnt, was richtig war und den Kommentar gekostet hat, nicht die Regel.
+
+**3. `load-error-card.tsx` bekam eine optionale Meldung.** Die Fehlerkarte trug bisher nur den Ausfall der Datenquelle (AC-16); für EC-15 („die Runde lief anderswo weiter") braucht sie einen zweiten Text. Die Datei stand in keiner Aufgabe — die Änderung ist klein und berührt keine andere.
+
+**4. Zwei Wettläufe im Anzeige-Zustand, beide von den E2E-Journeys gefunden, beide dieselbe Klasse wie BUG-33 im abgelösten Aufbau.** `advance` läuft aus einem `setTimeout` und las Reserve und aktuelle Frage aus einer veralteten Closure; einmal zog es dadurch eine überflüssige Frage nach, die der Server nie zur aktuellen machte, und die Runde blieb auf „Runde wird vorbereitet …" stehen (11 von 57 E2E-Tests rot). Behoben mit Refs, die neben dem State gesetzt werden — `currentRef`, `reserveRef`, `probingRef`. **Kein Test der Unit-Ebene hat das gesehen**, weil dort keine echten Bilder laden; erst die drei Engines haben es aufgedeckt.
+
+**5. Zwei falsch-grüne Tests, gefunden durch die Rot-Gegenprobe zu T48.** Sie sind der Grund, warum die Gegenprobe verlangt war:
+- *„Ohne Sitzung kein Bild"* blieb grün, als die Sitzungsprüfung aus der Bild-Route entfernt wurde — der Proxy leitet unangemeldete Aufrufe schon vorher um. Der E2E-Test belegt also „ein Fremder bekommt kein Bild", nicht „die Route prüft selbst". Letzteres hält jetzt ausdrücklich der Unit-Test der Route fest, und der Umfang steht als Kommentar im E2E-Test.
+- *„Ein erfundenes Frage-Token liefert kein Bild"* blieb grün, weil das verwendete Token gar kein wohlgeformtes UUID war und schon am Schema scheiterte — die Token-Prüfung wurde nie erreicht. Mit einer formal gültigen, fremden UUID ist der Test rot, sobald die Prüfung fällt.
+
+### Verifikation
+
+- `npm test` **239/239**, `npm run lint` **0 Probleme**, `npm run build` **Exit 0**
+- `npx playwright test` **57/57** in drei Engines (Chromium, Firefox, Mobile Safari)
+- Die Funktionen aus Migration `0009` zusätzlich direkt in SQL durchgespielt (Start, Auflösen, richtig, falsch, Token-Wiederverwendung, Verwerfen, Beenden, zweites Beenden, Aufräum-Lauf) — dabei fiel ein mehrdeutiges `on conflict (round_id)` auf, bevor eine Zeile Anwendungscode existierte
+- Rot-Gegenprobe je T48-Test einzeln: Client schickt Serie mit → rot · Zustand wird nicht gelöscht → rot · Bildadresse zurück auf das CDN → rot · Lösung zu jedem Token → rot · Antwort ohne Token-Prüfung → rot · Sitzungsprüfung der Route entfernt → **grün, siehe Punkt 5**
+
+
+---
+
+## Notizen aus dem Fix-Lauf (2026-09-07)
+
+Drei Befunde des ersten unabhängigen QA-Laufs, behoben. Der erste ist der wichtige.
+
+**BUG-110 — die Lücke lag nicht im Neuen, sondern im Alten, das stehenblieb.** Der Umbau hat die Server Action `saveRun` ersatzlos entfernt und damit die Einreiche-Schnittstelle geschlossen, die AC-12 verbietet. Übersehen wurde, dass dieselbe Schnittstelle noch ein zweites Mal existierte: als Insert-Policy auf `runs` aus Migration `0002`, geschrieben für den Entwurf, in dem der Browser das Ergebnis einreichte. Über PostgREST war sie mit dem öffentlichen Schlüssel und einer gewöhnlichen Sitzung bedienbar — Serie 386 in 0 ms, HTTP 201.
+
+Die Lehre steht schon in der Historie dieses Features: Bei BUG-22 überlebte eine `remotePatterns`-Freigabe den Code, für den sie angelegt worden war. Hier war es eine Policy. **Wer einen Schreibweg entfernt, muss die Rechte mitentfernen, die ihn erlaubt haben** — der Code verschwindet aus dem Diff, die Berechtigung nicht.
+
+Warum es keiner der eigenen Prüfungen auffiel: Sie befragen die Anwendung durch ihre eigene Oberfläche. `tests/PROJ-2-round-authority.spec.ts` belegte, dass der **Browser** kein Ergebnis schickt — der Angriff redet gar nicht mit dem Browser. Der neue Test setzt deshalb ausdrücklich an der Datenschnittstelle an.
+
+**BUG-111 — die erste Frage war nie durch die Sonde gegangen.** `ImageProbe` prüft die *vorbereitete* Frage; die erste einer Runde wird direkt angezeigt. Ihr Bild hatte weder `onError` noch Zeitgrenze, ein Ausfall blieb also als Skelettfläche stehen — ohne zweiten Versuch, ohne Fehlerkarte, mit vier klickbaren Optionen zu einem unsichtbaren Bild. `PokemonImage` trägt die Frist jetzt selbst; die Frage wird dabei **nicht** ersetzt, sonst wäre aus einem Bildfehler ein Überspringen-Knopf geworden (EC-12).
+
+**BUG-114 — „Pool leer" war ein stiller Rückweg.** Der Client behandelte die Meldung als „nichts weiter vorzubereiten" und kehrte kommentarlos zurück; wartete der Spieler gerade, blieb der Bildschirm auf „Runde wird vorbereitet …" stehen und die Runde verfiel nach 110 Minuten. Jetzt endet sie und wird gewertet. Die Gewinner-Meldung hängt weiterhin an der Serie und nicht am leeren Vorrat — `seen_ids` enthält auch verworfene Nummern, das war schon BUG-17/BUG-23.
+
+### Verifikation
+
+- `npm test` **242/242**, `npm run lint` **0**, `npm run build` **Exit 0**, `npx playwright test` **60/60** in drei Engines
+- Rot-Gegenprobe je Fix: Policy wiederhergestellt → E2E rot · `onFailed` abgeklemmt → beide Unit-Tests rot · Rundenende bei leerem Vorrat entfernt → Unit-Test rot; nach Rücknahme jeweils wieder grün
+- Schreibweg direkt gemessen: `POST /rest/v1/runs` → **403 permission denied**, Lesen weiterhin **200**
+
+## Notizen aus dem zweiten Fix-Lauf (2026-09-07)
+
+**BUG-119 — ein Fix, der das Problem nur verschoben hat.** Der erste Anlauf gegen BUG-114 beseitigte den sichtbaren Hänger, indem der **Browser** die Runde beendete. Der Nachlauf hat gezeigt, warum das zu wenig war: AC-35 nennt „weil der Pool erschöpft ist" ausdrücklich als eine der drei Endbedingungen, bei denen **der Server** schreibt, bevor er antwortet. Blieb der Aufruf des Browsers aus, war das Ergebnis wie vorher verloren. Die Wertung sitzt jetzt in `prepareNext` — aber nur, wenn dort keine Frage mehr offensteht, sonst würde eine laufende Frage unter dem Spieler weggewertet.
+
+Die Lehre daraus ist die gleiche wie bei BUG-110, nur andersherum: Dort blieb eine alte Berechtigung stehen, hier blieb eine Zuständigkeit beim Falschen. **Ein Fix, der das Symptom im Client beseitigt, während der Vertrag den Server nennt, ist kein Fix.**
+
+**BUG-120 — der Fix hat einen bestehenden Konstruktionsfehler freigelegt.** `finish_round(p_profile)` beendete, was gerade aktiv war. Antworten waren immer schon token-geprüft; das Rundenende war die einzige Stelle, an der der Server nicht wissen wollte, wovon die Rede ist. Aufgefallen ist das erst, als der BUG-111-Fix einen veralteten Tab überhaupt erst in die Fehlerkarte brachte — dort steht „Runde beenden". Die Funktion nimmt jetzt die Runden-Kennung entgegen (Migration `0012`); passt sie nicht, geschieht nichts.
+
+**BUG-113 — der Text musste sich der Wahrheit beugen, nicht umgekehrt.** Die Karte behauptete „die Uhr steht so lange still". Das gilt für die **angezeigte** Uhr immer, für die **gewertete** Zeit aber nur, wenn serverseitig keine Frage offensteht. Die Karte unterscheidet die beiden Fälle jetzt.
+
+Die naheliegende Alternative — die Serveruhr beim Bildfehler anhalten — wurde **verworfen**: Sie wäre vom Client auslösbar und damit freie Bedenkzeit auf dem Tie-Breaker. Genau dieser Weg ist beim Entwurf schon einmal ausgeschlossen worden (siehe die Begründung zu EC-12); ihn hier wieder zu öffnen, hätte einen Anzeigefehler gegen eine Manipulationsmöglichkeit getauscht.
+
+**Zur Lesart von AC-16.** Das Kriterium sagt „die Uhr steht still". Gemeint ist die **angezeigte** Uhr — AC-2 nennt sie ausdrücklich „Anzeige" und verweist für die Wertung auf AC-34. Unter dieser Lesart ist AC-16 erfüllt, und BUG-113 war ein Textfehler. Läse man „die Uhr" als die gewertete Zeit, wäre es keine Code-, sondern eine Vertragsfrage und gehörte in ein `/refine`.
+
+### Verifikation
+
+- `npm test` **247/247**, `npm run lint` **0**, `npm run build` **Exit 0**, `npx playwright test` **66/66** in drei Engines
+- Rot-Gegenprobe je Fix: `finish_round` ohne Kennung → E2E rot · Server wertet nicht mehr → E2E rot · Karte behauptet wieder immer die stehende Uhr → Unit-Test rot; nach Rücknahme jeweils grün
+- Die beiden neuen E2E-Tests stellen ihren Zustand **direkt** her, nicht über die Oberfläche — der erschöpfte Vorrat wäre sonst erst nach rund 380 Fragen erreichbar
+
+
+## Notizen aus dem dritten Fix-Lauf (2026-09-07)
+
+Vier Befunde, drei davon Nachzügler bereits gezogener Lehren. Deshalb liegen sie in **einer** Migration (`0013`): Es ist dieselbe Frage, dreimal nicht zu Ende beantwortet.
+
+**BUG-122 — eine Berechtigung, die man beim Aufräumen übersieht.** `0011` hat den Einreichweg für Rundenergebnisse geschlossen und dabei `insert, update, delete` entzogen — aber nicht `truncate`. Und TRUNCATE unterliegt **keiner** Row Level Security: Wäre es erreichbar, löschte ein Aufruf die Runden aller Spieler. Erreichbar war es nicht, PostgREST kennt kein solches Verb. Trotzdem ist es dieselbe Klasse wie BUG-110 und BUG-22 davor: **Wer einen Schreibweg entfernt, muss die Rechte mitentfernen — alle, nicht die drei, an die man beim Schreiben gerade denkt.** `revoke all` und dann gezielt `grant select` zurück ist die Form, die das erzwingt; `0007` machte es bei `active_runs` von Anfang an so.
+
+**BUG-123 — zwei Anweisungen, die eine hätten sein müssen.** `start_round` löschte und fügte getrennt ein. Zwei gleichzeitige Starts sehen die Löschung der jeweils anderen nicht; der unterlegene lief in `duplicate key … active_runs_pkey`. Für den Spieler war das keine Fehlermeldung, sondern eine Sackgasse: Der Client macht daraus `unavailable`, landet in der Fehlerkarte **ohne** Runden-Kennung, „Erneut versuchen" führt zurück in dieselbe Karte, „Runde beenden" in die Fremdrunden-Meldung. Nur Neuladen half. Aus einem Tab verhinderte ein Riegel im Client das — aus zwei Tabs nicht, und genau die nennt EC-9.
+
+`on conflict (profile_id) do update` macht daraus einen Schritt. Der Aktualisierungszweig setzt durchgehend `excluded.*`, **einschließlich der Spalten, die in der Einfügeliste gar nicht auftauchen** (`round_id`, `streak`, `accumulated_ms`, `touched_at` — sie kämen aus ihren Spaltenvorgaben). Damit ist der Zweig per Konstruktion identisch mit einem frischen Einfügen, statt von Hand nachgebaut: Eine stehengebliebene `streak` wäre der Fehler, den man hier macht, und er wäre in der Rangliste gelandet.
+
+**BUG-130 — der Fix von `0012`, zu Ende geführt.** BUG-120 hatte gezeigt, dass das Rundenende nicht wusste, welche Runde gemeint ist. `0012` hat das für `finish_round` behoben — und nur dafür. `set_prepared_question` und `discard_prepared_question` banden sich weiterhin allein an das Profil, und die Server Actions darüber nahmen **überhaupt kein Argument**: Ein veralteter Tab konnte seine Runde gar nicht nennen, also war er von einem aktuellen nicht unterscheidbar.
+
+Gemessen: Runde A durch Runde B verdrängt, dann der Aufruf aus Tab A → die vorbereitete Frage der **laufenden** Runde B ausgetauscht (151 → 300), ihr Token gewechselt, ihr Ziehungsvorrat um drei Nummern kürzer. Der spielende Tab hatte das Bild des alten Tokens vorgeladen; das war wertlos, die nächste Frage kam mit sichtbarem Ladezustand statt vorgeladen (AC-10). Und im Randfall „Vorrat erschöpft, keine Frage offen" beendete Tab A die laufende Runde B samt Wertung — weil `finishRound` dort die serverseitig abgeleitete `snapshot.roundId` bekam, die zwangsläufig immer passte.
+
+Der Riegel sitzt jetzt an drei Stellen, und das ist kein Übermaß, sondern die Aufgabenteilung: die **Datenbank** prüft `and a.round_id = p_round_id` (die Autorität), `prepareNext` prüft vor allem, was den Zustand verändert (damit nichts halb geschieht), und `replacePreparedQuestionAction` prüft **vor** dem Verwerfen — sonst hätte der veraltete Tab die vorbereitete Frage der laufenden Runde bereits gelöscht, bevor `prepareNext` ihn abweist. Im `pool-empty`-Zweig geht bewusst die Kennung des **Aufrufers** an `finish_round`, nicht die aus dem Schnappschuss: Die serverseitig abgeleitete käme immer durch, und die Prüfung in `0012` hätte an dieser Stelle nichts mehr zu tun.
+
+Neu im Vertrag der Action ist der Status `stale` — dieselbe Antwort, die eine Antwort aus einem verwaisten Tab seit jeher bekommt. Der Client zeigt darauf die EC-15-Meldung.
+
+**BUG-124 — die einzige Migration, die rückwirkend geändert wurde.** `0010` hatte ein blankes `create extension if not exists pg_cron`. Verweigert das gehostete Projekt die Erweiterung, bricht damit die **ganze** Migration ab und `supabase db push` scheitert hart. Ein Nachtrag in einer späteren Migration hilft nicht: `0010` läuft zuerst.
+
+Die Änderung an einer bereits gelaufenen Datei ist hier zulässig und nur hier — **kein Feature steht auf `Deployed`**, die Datei hat die Maschine nie verlassen. Sie ist jetzt in einen `do`-Block gefasst, der den Fehlschlag zu einer Warnung macht und den Aufräum-Lauf überspringt, statt alles abzubrechen. Die Absicherung bleiben **T36** und **T37**; ohne sie ist AC-41 eine Zusage ohne Mechanismus — aber als sichtbare Deploy-Aufgabe, nicht als stiller Ausfall.
+
+Bemerkenswert bleibt die Spannung zum eigenen Bauplan: `0005` hat den Weg über `pg_cron` fünf Migrationen früher ausdrücklich vermieden, mit derselben Begründung, an der er hier fast gescheitert wäre.
+
+### Verifikation
+
+- `npm test` **260/260** (23 Dateien), `npm run lint` **Exit 0**, `npm run build` **Exit 0** (6 Routen), `npx playwright test` **72/72** in drei Engines
+- `supabase db reset` über **0001–0013** zweimal vollständig durchgelaufen — das ist zugleich der Nachweis für den `0010`-Fix
+- Wirkung gemessen: `runs` trägt für `authenticated` nur noch `r` (SELECT), `anon` gar nichts · fünf gleichzeitige Rundenstarts → **alle fünf erfolgreich**, genau eine Zeile, `streak` und `accumulated_ms` auf 0 (vorher 2 von 3 mit HTTP 500) · Aufruf mit fremder Runden-Kennung → `discard` wirkungslos, `set` gibt `null`, Runde B **Feld für Feld unverändert**
+- **Kontrollmessungen**, damit das Abweisen kein kaputter Aufruf ist: dieselben Aufrufe mit der **eigenen** Kennung wirken unverändert (neues Token, `seen_ids` wächst)
+- **Rot-Gegenprobe je Fix**, einzeln eingebaut und zurückgenommen: Riegel in `prepareNext` entfernt → **2 Unit-Tests rot** · Riegel in `replacePreparedQuestionAction` entfernt → **1 Unit-Test rot** · `start_round` zurück auf Löschen-dann-Einfügen → **E2E rot** in Zeile 330 · `set_prepared_question` ohne Runden-Prüfung → **E2E rot** in Zeile 276. Nach Rücknahme jeweils wieder grün
+### Nachtrag am selben Tag — BUG-131 und ein Wächter für die Rechte
+
+**BUG-131 — dieselbe Fehlerklasse eine Tabelle weiter.** `profiles` gewährte `anon` und `authenticated` **alle** Rechte (`arwdDxtm`), während die einzige Policy nur SELECT abdeckt: Schreibzugriffe hielt allein die Row Level Security. Sie hielt auch, in allen vier Verben gemessen — es fehlte die zweite Schicht, nicht die erste. `0014` schneidet die Rechte auf `select` für `authenticated` zurück; `anon` bekommt nichts.
+
+**Vor dem Schnitt geprüft, wer `select` wirklich braucht:** Die Kopfzeile liest den eigenen Trainernamen über die **Nutzersitzung** (`site-header.tsx:27-32`) — die bleibt. Die Verfügbarkeitsprüfung beim Registrieren (`is_trainer_name_taken`, `0006`) und der Anlege-Trigger (`handle_new_user`, `0001`) sind beide `security definer` und von Tabellenrechten unabhängig. Nach dem Schnitt gegengemessen: Registrierung legt das Profil weiterhin an, der Lesepfad liefert den Trainernamen, und der Schreibversuch scheitert jetzt **eine Stufe früher** — `permission denied for table profiles` statt einer RLS-Verletzung.
+
+**Die Lücke aus der ersten Fassung dieser Notiz ist damit zu.** Dort stand, die Tabellenrechte selbst pinne kein Test, weil der Rechtestand über PostgREST nicht abfragbar ist. Das war zu kurz gedacht: **Die beiden Schichten sind am Wortlaut der Abweisung unterscheidbar** — fehlt das Tabellenrecht, sagt Postgres `permission denied for table`; greift nur die Policy, sagt es `violates row-level security policy`. `PROJ-2-round-authority.spec.ts` prüft deshalb jetzt die **Meldung**, nicht den Statuscode, für vier Schreibversuche auf `profiles` und `runs`. Rot-Gegenprobe: weite Rechte wiederhergestellt → der Test wird rot und nennt genau den Unterschied (`Received: "new row violates row-level security policy"`), obwohl der Schreibversuch weiterhin mit 403 abgewiesen wird. Ein wiederhergestelltes `grant` wäre ohne diesen Wächter unbemerkt geblieben.
+
+Damit sind BUG-122 und BUG-131 nicht nur behoben, sondern gegen einen künftigen Umbau gesichert — anders als die unter BUG-101/BUG-118 beschriebenen Grenzwerte.
+
+**Verifikation nach dem Nachtrag:** `npm test` **260/260**, `npm run lint` **Exit 0**, `npm run build` **Exit 0**, `npx playwright test` **75/75** in drei Engines; `supabase db reset` über **0001–0014**.
+
+
+## Notizen aus dem vierten Fix-Lauf (2026-09-07)
+
+Vier Befunde, **eine** Ursache: Der Client kannte für drei Zustände, die der Server korrekt behandelt, keinen Weg nach vorn. Der Umbau auf die serverseitig geführte Runde hat die Autorität sauber verschoben — die Oberfläche ist an drei Stellen nicht mitgegangen.
+
+**BUG-133 — die Frage-Ansicht kennt nur den Weg über die falsche Antwort.** `ResultView` erscheint ausschließlich bei `phase === 'finished'`, gesetzt allein von `showResult`. Der Zweig, der eine Runde per **richtiger** Antwort beendet, rief `showResult` nicht auf; „Weiter zum Ergebnis" wiederum erscheint nur bei einer falschen Antwort (`answeredWrong`). Wer alle 386 richtig hatte, blieb auf der Frage stehen — mit dem Ergebnis längst in der Datenbank. Nebenwirkung: Die Gewinner-Meldung war auf dem vorgesehenen Weg **unerreichbar**. Jetzt geht eine richtige, beendende Antwort nach `CORRECT_FEEDBACK_MS` ins Ergebnis; die falsche behält ihre stehende Auflösung (AC-6).
+
+**BUG-134 / BUG-135 — die Fehlerkarte war für einen Fall gebaut und für drei benutzt.** Sie hieß immer „Die nächste Frage lädt gerade nicht" und bot immer dieselben zwei Knöpfe an. Bei einem gescheiterten **Start** gab es keine Runde: „Erneut versuchen" rief `prepareNextQuestionAction('')`, was der Server zu Recht mit `stale` beantwortete — die Karte lief in sich selbst zurück. Nach der EC-15-Meldung stand „Starte eine neue Runde", ohne dass es dafür einen Knopf gab. Beides nur mit Neuladen verlassbar.
+
+Die Karte kennt jetzt drei Sorten und leitet daraus Überschrift **und** Ausweg ab: `question` (fortsetzbar, zwei Knöpfe), `no-round` (nur „Erneut versuchen", das wirklich startet — nichts zu beenden), `stale-round` (nur „Neue Runde starten"). **BUG-121** fällt damit ab: Die Überschrift unterscheidet endlich die angezeigte von der nächsten Frage, so wie der Text darunter es schon tat.
+
+**Ein Lint-Fund unterwegs:** Die Sorte aus `roundIdRef` beim Rendern abzuleiten, war ein Ref-Zugriff im Render (`react-hooks/refs`). Ersetzt durch `hasRound` als State.
+
+### Verifikation
+
+- `npm test` **263/263** (23 Dateien), `npm run lint` **Exit 0**, `npm run build` **Exit 0**, `npx playwright test` **75/75** in drei Engines
+- **Rot-Gegenprobe je Fix**, einzeln eingebaut und zurückgenommen: Übergang zum Ergebnis entfernt → BUG-133-Test rot · Neustart bei fehlender Runde entfernt → BUG-134-Test rot · „Neue Runde starten" entfernt → BUG-135-Test rot. Nach Rücknahme jeweils grün
+- Zwei bestehende Tests mussten die neue Überschrift übernehmen — sie standen im Block „das Bild der **angezeigten** Frage", also genau dem Fall, dessen Titel BUG-121 als falsch gemeldet hatte
+- Der BUG-133-Test prüft die **Gewinner-Meldung** („Alle Pokémon geschafft … Mehr geht nicht"), nicht bloß den Ergebnis-Screen: Sie war der Teil, der nachweislich unerreichbar war
+
+## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)
+
+> Alles ab hier beschreibt den **clientseitig geführten** Entwurf, den `/refine PROJ-2` am 2026-09-06 abgelöst hat. Er bleibt vollständig stehen, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde und Bug-Nummern verweisen — und weil die Begründungen zeigen, welche Überlegung damals wozu geführt hat.
+>
+> **Nicht danach bauen.** Was hier über Rundenzustand im Browser, `correctIndex`, das Einreichen fertiger Ergebnisse an `saveRun` oder die aus der Nummer gebildete Bildadresse steht, gilt nicht mehr. Was weiter gilt: die App-Shell (Kopfzeile, Fußzeile, Seitenrahmen), das Verwerfen nicht ladbarer Bilder, der Umgang mit der PokeAPI und die Notizen zum Wächter über die Server Actions.
+
+
+
+### Component Structure
 
 ```
 Wurzel-Layout (src/app/layout.tsx) — die App-Shell, gehört diesem Feature
@@ -56,9 +450,9 @@ Kein Übergang führt aus `beendet` zurück in `offen` — eine beendete Runde i
 
 **Korrigiert am 2026-09-04 (BUG-10).** Dieser Entwurf schrieb ursprünglich `beendet --"Nochmal spielen"--> bereit`, also zurück auf den Startbildschirm. Der Code folgte dem Design, und das Design widersprach dem Vertrag: AC-9 sagt „dann **startet eine neue Runde**", nicht „dann sieht der Nutzer wieder den Startknopf". Aufgefallen ist das erst im QA-Lauf vom 2026-09-04 — vier Wochen lang stand ein Übergang im Design, den niemand gegen die Spec gelesen hatte. Aufgelöst zugunsten des Vertrags, weil das PRD-Erfolgskriterium „mindestens die Hälfte startet direkt eine zweite Runde" jeden zusätzlichen Klick teuer macht.
 
-## Data Model
+### Data Model
 
-### Neue Tabelle: `runs`
+#### Neue Tabelle: `runs`
 
 ```
 Jede beendete Runde hat:
@@ -90,15 +484,15 @@ Geräte- oder Browserdaten (AC-27).
 
 **Zugriffs-Entscheidung, die vom app-weiten Datenmodell abweicht.** `docs/data-model.md` beschrieb `runs` bisher als „von allen angemeldeten Nutzern lesbar (das ist die Rangliste)". Genau das würde aber der Zusage widersprechen, die im selben Dokument steht: *„Schlechte Runden sind privat."* Wäre die Tabelle für alle lesbar, könnte jeder Angemeldete die vollständige Rundenhistorie jedes anderen Spielers abfragen — die Rangliste zeigt zwar nur den besten Lauf, die Datenbank gäbe aber alles heraus. Deshalb: **Lesen nur eigene Runden.** Die Weltrangliste in PROJ-3 liest nicht direkt aus der Tabelle, sondern durch eine dafür gebaute Datenbankfunktion, die ausschliesslich den besten Lauf pro Spieler zurückgibt. `docs/data-model.md` ist entsprechend aktualisiert.
 
-### Index
+#### Index
 
 Ein einziger zusammengesetzter Index über `(Profil, Serie absteigend, Dauer aufsteigend)`. Er bedient drei Dinge gleichzeitig: die persönliche Bestleistung in AC-8, das Löschen der Runden beim Entfernen eines Profils (AC-26) und später die Ranglisten-Abfrage von PROJ-3 („bester Lauf pro Spieler"). Ein separater Index auf die Profil-Spalte ist damit überflüssig.
 
-### Unverändert
+#### Unverändert
 
 `profiles` und `auth.users` bleiben, wie PROJ-1 sie angelegt hat. Dieses Feature ändert dort nichts und legt keine Pokémon-Entität an — Bilder und Namen bleiben externe Daten mit einem verwerfbaren Zwischenspeicher davor.
 
-## Behaviors & Access
+### Behaviors & Access
 
 ```
 Nächste Frage holen (Server Action, nur angemeldet)
@@ -165,7 +559,7 @@ Rechts-Links in der Fusszeile
 
 **Sämtlicher Verkehr zur PokeAPI läuft über den Server, nicht nur der für Bilder.** AC-20 verlangt das ausdrücklich nur für Bilder; würde der Browser die Namen selbst holen, ginge seine IP-Adresse trotzdem an einen Nicht-EU-Dienst. Beides serverseitig zu holen ist derselbe Aufwand und schliesst die Lücke.
 
-## Dependencies
+### Dependencies
 
 **Keine neuen Pakete.** Alles, was dieses Feature braucht, ist bereits installiert:
 
@@ -174,13 +568,13 @@ Rechts-Links in der Fusszeile
 - `@supabase/ssr` (vorhanden) — Sitzung und Datenbankzugriff in Server Actions und Server-Komponenten
 - shadcn/ui `Button`, `Card`, `Skeleton`, `Avatar`, `Badge` (vorhanden) — keine neue UI-Komponente nötig
 
-## Settings the user makes
+### Settings the user makes
 
 **Keine.** Dieses Feature braucht keine Einstellung in einem Anbieter-Dashboard — Zwischenspeicher und Bild-Auslieferung werden in `next.config.ts` konfiguriert und sind damit ganz normale Aufgaben für `/build`.
 
 Ein Hinweis fürs spätere `/deploy`, keine Aufgabe: Die serverseitige Bild-Optimierung wird auf manchen Hosting-Tarifen nach optimierten Bildern abgerechnet. Bei einem Pool von 386 Pokémon und einer Bildgrösse ist die Obergrenze 386 optimierte Bilder insgesamt — nicht pro Nutzer. Das bleibt in jedem kostenlosen Tarif unauffällig.
 
-## Technical Decisions
+### Technical Decisions
 
 | Decision | Rationale | Alternative considered | Trade-off | Date |
 | --- | --- | --- | --- | --- |
@@ -200,14 +594,14 @@ Ein Hinweis fürs spätere `/deploy`, keine Aufgabe: Die serverseitige Bild-Opti
 | **Das Vorladen des Bildes bekommt eine eigene Zeitgrenze: 5 Sekunden, ein stiller zweiter Versuch, dann Verwurf** | `onLoad` und `onError` decken ein Bild ab, das ankommt, und eines, das abgelehnt wird — aber keines, das **gar nicht antwortet**. Genau das war BUG-15: Die Runde saß dann für immer auf „Runde wird vorbereitet …", ohne Fehlerkarte und ohne Ausweg, und die Serie war beim Neuladen verloren. AC-15 verspricht die Frist ausdrücklich („nach 5 Sekunden nicht vollständig ladbar"), und ein Bild ist Teil der Frage — `design.md` sagt selbst: „Eine Frage gilt erst als vorgeladen, wenn ihr Bild geladen ist." Die Frist spiegelt daher `withTimeoutAndOneRetry` der Serverseite, damit eine langsame Runde **ein** Budget hat statt zweier | Sofort verwerfen ohne zweiten Versuch; oder die Frist in `quiz-screen` statt in der Sonde führen | Ein hängendes Bild kostet jetzt bis zu 10 Sekunden, und bis zur Fehlerkarte im schlimmsten Fall drei davon. Das ist der seltene Hänge-Fall; der häufige (404) antwortet weiterhin sofort. Der zweite Versuch läuft über den React-`key` und **nicht** über die Adresse — ein Cache-Buster in der URL hätte AC-31 und AC-20 gebrochen | 2026-09-04 |
 | **Der Proxy leitet Server-Action-POSTs nicht um; die Sitzungsprüfung sitzt in der Action** | Next.js kodiert das `redirect()` einer Server Action **in-band** — Status 200 plus `x-action-redirect` —, ausdrücklich damit der Browser keiner 307 auf eine Anmeldeseite folgt (`action-handler.ts`). Eine gewöhnliche Weiterleitung auf einen Action-POST ist für den Handler deshalb ein Protokollbruch; der Client wirft „An unexpected response was received from the server". Genau das machte den `unauthenticated`-Zweig **unerreichbar** (BUG-9): Wem mitten in der Runde die Sitzung ablief, der sah einen Ergebnis-Screen, der Erfolg vortäuschte. Der Zweig existierte und war getestet — der Proxy ließ ihn nie laufen. Next.js' eigene Anleitung sagt dazu: „any Server Actions called from components must perform their own authorization checks" | Den Fehlertext der Framework-Meldung im Client auswerten und daraus auf „abgemeldet" schließen | **Wir tauschen eine Schranke davor gegen eine Schranke darin.** Ein Action-POST ohne Sitzung erreicht jetzt die Action; sie prüft selbst, und die Datenbank prüft über RLS ein zweites Mal. Damit das nicht bei der fünften Action still verfällt, erzwingt `server-actions.guard.test.ts` die Prüfung für **jede** Action. Nebenwirkung: Ein Action-Kennzeichen einer *fremden* Route ergibt ohne Sitzung HTTP 500 statt 307 — nachgemessen tut es das **mit** Sitzung genauso, ist also vorbestehendes Framework-Verhalten und kein neues Loch. Die Alternative hinge an einer Zeichenkette in einer Fehlermeldung und bräche bei jedem Next-Update still | 2026-09-04 |
 
-## Open Questions
+### Open Questions
 
 - [ ] Der Bild-Zwischenspeicher des Frameworks liegt beim Hoster und überlebt ein neues Deploy je nach Anbieter nicht. Nach dem ersten `/deploy` einmal prüfen, ob nach einer Neuveröffentlichung die ersten Fragen spürbar langsamer sind — falls ja, ist die Ablaufzeit der richtige Hebel, nicht der Aufbau.
 - [ ] AC-31 ist auf Anfragen zur PokeAPI hin gebaut, nicht auf Datenmengen. Sollte die Bild-Optimierung auf dem gewählten Tarif doch abgerechnet werden, ist das bei `/deploy` zu prüfen — die Obergrenze von 386 Bildern insgesamt steht oben.
 
 ---
 
-## Notizen aus dem Build (2026-09-01)
+### Notizen aus dem Build (2026-09-01)
 
 Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb des genehmigten Designs:
 
@@ -217,7 +611,7 @@ Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb de
 
 **Die Zeit des beendeten Laufs liegt in einem State, nicht nur im Ref.** Das Ergebnis würde sonst während des Renderns aus einem Ref lesen, was die React-Regeln des Projekts (ESLint) zu Recht verbieten.
 
-### Was im Build verifiziert wurde
+#### Was im Build verifiziert wurde
 
 | Prüfung | Ergebnis |
 |---|---|
@@ -230,7 +624,7 @@ Drei Abweichungen bzw. Präzisierungen gegenüber dem Entwurf, alle innerhalb de
 
 **Ein Bug wurde dabei gefunden und behoben:** Das Vorladen aus AC-10 feuerte nie — nach der ersten Frage füllte nichts die Reserve, jede Frage hätte einen Ladezustand gezeigt. Sichtbar wurde das erst im Server-Log (nur ein `getNextQuestion`-Aufruf pro Runde statt mehrerer), nicht in der Oberfläche. Nach der Korrektur: 8 Aufrufe.
 
-### Nachtrag (2026-09-01, nach Review)
+#### Nachtrag (2026-09-01, nach Review)
 
 **`server-only` wurde doch ergänzt — als bewusste, abgesprochene Ausnahme von „keine neuen Pakete".** Der ursprüngliche Kommentar zur Importgrenze erzwang nichts: Ein versehentlicher Client-Import des PokeAPI-Clients hätte die Abfragen in den Browser verlagert und AC-31 und AC-20 lautlos gebrochen — genau die Fehlerklasse, gegen die dieses Feature sonst überall absichert. Verifiziert durch einen absichtlich eingebauten Client-Import: Der Build bricht mit „'server-only' cannot be imported from a Client Component module" ab.
 
@@ -240,7 +634,7 @@ Damit weicht dieses Feature bewusst von der Konvention ab, dass Tests ausschlie�
 
 ---
 
-## Notizen aus dem Fix-Lauf (2026-09-04)
+### Notizen aus dem Fix-Lauf (2026-09-04)
 
 Vier Befunde aus dem QA-Lauf vom selben Tag behoben: BUG-10 (AC-9), BUG-7 (EC-3), BUG-8 (EC-6) und BUG-13 (AC-31). Alle vier innerhalb des genehmigten Designs; die einzige Design-Änderung ist der oben korrigierte Übergang.
 
@@ -265,7 +659,7 @@ Vier Befunde aus dem QA-Lauf vom selben Tag behoben: BUG-10 (AC-9), BUG-7 (EC-3)
 
 ---
 
-## Notiz zur E2E-Instabilität (2026-09-04) — eine korrigierte Fehlzuschreibung
+### Notiz zur E2E-Instabilität (2026-09-04) — eine korrigierte Fehlzuschreibung
 
 `npm run test:e2e` war bei der Standard-Worker-Zahl (16 auf dieser Maschine) reproduzierbar rot, 5 bis 6 von 24. Die erste Erklärung lautete: Ursache ist BUG-15, das hängende Bild ohne Zeitgrenze. **Das war falsch, und es ist lehrreich, warum.**
 
@@ -281,19 +675,19 @@ Es war also **Kontention im Messaufbau**, kein Produktfehler. Bestätigt durch d
 
 ---
 
-## Was der Wächter über die Server Actions leistet — und was nicht (Stand 2026-09-05)
+### Was der Wächter über die Server Actions leistet — und was nicht (Stand 2026-09-05)
 
 Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke *darin* (Action) gewandert. Das ist das vom Framework vorgesehene Muster, es hat aber eine offensichtliche Schwäche: Es hält nur, solange jede Action daran denkt. `src/lib/actions/server-actions.guard.ts` ist der Versuch, das maschinell abzusichern.
 
 **Dieser Abschnitt ist zweimal umgeschrieben worden, weil er zweimal mehr versprochen hat, als der Code hielt** (BUG-20, dann BUG-32). Deshalb steht hier jetzt die Grenze zuerst.
 
-### Was er zuverlässig leistet
+#### Was er zuverlässig leistet
 
 - **Er findet jede Server Action.** Ein QA-Verifizierer hat am 2026-09-05 alle in `node_modules/next/dist/docs/` dokumentierten Formen durchprobiert — Datei-Direktive, Inline-`'use server'` im Funktionsrumpf, Pfeilfunktion, Objekt-Methode, anonymer Default-Export, Currying, `export { inner as doThing }`, HOF-Umhüllung, `async function*`, `'use client'` davor. **Keine wurde übersehen.**
 - **Was er nicht analysieren kann, lässt er nicht durch.** Re-Exporte und destrukturierte Exporte fallen als „nicht analysierbar" durch, statt stillschweigend übersprungen zu werden.
 - **Er kann nicht still grün werden.** Der Gegenzeuge verlangt, dass jede Datei, die `use server` erwähnt, mindestens eine Action liefert, und hält Mindestzahlen für Actions und Dateien. Bricht die Erkennung, wird der Test rot statt leer — das war die Lücke, an der die erste Fassung scheiterte.
 
-### Was er ausdrücklich **nicht** leistet
+#### Was er ausdrücklich **nicht** leistet
 
 **Er prüft, ob ein Aufruf namens `getUser` im Rumpf steht — nicht, ob eine Sitzung wirksam geprüft wird.** Folgende Attrappen kommen durch, alle am 2026-09-05 gemessen:
 
@@ -313,7 +707,7 @@ Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke
 - **Er sieht nur `.ts`/`.tsx` unterhalb `src/`.** Eine Action in `.js`/`.mjs` oder außerhalb wäre für Erkennung **und** Gegenzeugen gleichzeitig unsichtbar.
 - **Er läuft jetzt vor jedem Commit, der Code enthält** (BUG-36, behoben am 2026-09-05). Die frühere Begründung an dieser Stelle — „läuft in `npm test`, also in der Prüfung, die vor jedem Commit ohnehin fährt" — war zum Zeitpunkt des Schreibens **unbelegt**: Es gab kein `.husky/`, kein `.github/workflows/` und keinen Hook. Seit `.githooks/pre-commit` stimmt sie, und zwar nachprüfbar: Der Hook wird über `core.hooksPath` aktiviert (gesetzt vom `prepare`-Skript, überlebt also einen frischen Klon) und fährt `npm test`, sobald `src/`, `tests/`, `supabase/`, `package.json` oder eine Konfigurationsdatei im Commit liegt. **Die Grenze bleibt benannt:** `git commit --no-verify` umgeht ihn, und das ist Absicht — ein Wächter ohne Notausgang wird ausgebaut statt benutzt.
 
-### Was daraus folgt — die Aufgabenteilung
+#### Was daraus folgt — die Aufgabenteilung
 
 **Der Wächter beantwortet eine Frage: „Gibt es eine Server Action, an die beim Schreiben niemand gedacht hat?"** Das ist die Frage, die im Alltag schiefgeht — eine neue Action, geschrieben unter Zeitdruck, ohne den Gedanken an die Sitzung. Dagegen hilft er zuverlässig, und dafür ist er gebaut.
 

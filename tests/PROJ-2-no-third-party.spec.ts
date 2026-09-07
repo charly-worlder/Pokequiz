@@ -39,18 +39,22 @@ test('Eine ganze Runde ohne eine einzige Anfrage an einen fremden Host (AC-20, A
   await page.getByRole('button', { name: 'Runde starten' }).click()
   await waitForQuestion(page)
 
-  // AC-20 — das Bild kommt über die Bild-Optimierung der eigenen Domain, nicht
-  // vom CDN. Die CDN-Adresse steckt als Parameter darin — der Server holt sie,
-  // nicht der Browser.
+  // AC-20 — das Bild kommt über die eigene Domain, nicht vom CDN.
+  //
+  // **Die Adresse hat sich am 2026-09-06 geändert.** Vorher war es die
+  // Bild-Optimierung des Frameworks, und die CDN-Adresse stand als Parameter
+  // darin — mitsamt der Pokémon-Nummer. Genau das war die Lücke hinter AC-32:
+  // AC-20 war erfüllt, und trotzdem konnte ein Skript die Lösung ablesen. Jetzt
+  // ist es eine eigene Route mit einem Token, und beide Kriterien halten.
   const src = await questionImage(page).getAttribute('src')
   expect(src, 'Das Pokémon-Bild muss über die eigene Domain kommen (AC-20)').toMatch(
-    /^\/_next\/image\?/
+    new RegExp('^/api/question/[0-9a-f-]{36}/image$')
   )
 
   // Drei Fragen weit spielen, damit auch die nachgeladenen und vorgeladenen
   // Bilder mit im Mitschnitt sind — nicht nur das erste.
   for (let i = 0; i < 3; i++) {
-    await answerCorrectly(page, request)
+    await answerCorrectly(page)
     await waitForQuestion(page)
   }
 

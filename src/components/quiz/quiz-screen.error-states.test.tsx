@@ -1,426 +1,452 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QuizScreen } from './quiz-screen'
-import type { Question } from '@/lib/quiz/question-action'
 
 /**
- * Written by /qa for the failure paths of PROJ-2.
+ * Die Fehlerpfade (spec.md AC-16 bis AC-19, EC-3, EC-6, EC-10, EC-12, EC-15).
  *
- * These cannot be provoked from the outside: the PokeAPI is called by the
- * *server*, so blocking requests in a browser does not reach it. Here the
- * action is mocked, which is the only place the outage is reproducible.
- *
- * Covers AC-16, AC-17, AC-18, AC-19, EC-7, EC-10 — sowie die Abnahmetests zu
- * BUG-7, BUG-8, BUG-10 und BUG-13 aus dem QA-Lauf vom 2026-09-04. Alle vier
- * beschreiben Zustände, die man beim Anschauen nicht sieht: ein Ergebnis, das
- * gespeichert *aussieht*, eine Runde, die hängt, ein Klick, der nichts tut, und
- * eine Anfrageschleife, die nur im Server-Log auffällt.
+ * Der wichtigste Test hier ist EC-12: Eine Frage, die der Spieler schon sieht,
+ * darf **nicht** ersetzt werden. Ohne diese Grenze wäre „Bild kaputt" ein
+ * Überspringen-Knopf für jedes Pokémon, das er nicht erkennt — und die Regel
+ * hat vor dem 2026-09-06 niemand getragen, weil die Runde ohnehin dem Browser
+ * gehörte.
  */
 
-const { getNextQuestion, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
-  getNextQuestion: vi.fn(),
-  saveRun: vi.fn(),
-  getPersonalBest: vi.fn(),
+const actions = vi.hoisted(() => ({
+  startRoundAction: vi.fn(),
+  prepareNextQuestionAction: vi.fn(),
+  promoteQuestionAction: vi.fn(),
+  replacePreparedQuestionAction: vi.fn(),
+  answerAction: vi.fn(),
+  endRoundAction: vi.fn(),
+  getRunByRoundIdAction: vi.fn(),
   push: vi.fn(),
 }))
 
-vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion }))
-vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
-// `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
-// benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
-vi.mock('next/image', () => ({
-  default: ({ src, alt, onLoad, onError }: Record<string, unknown>) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src as string}
-      alt={alt as string}
-      onLoad={onLoad as () => void}
-      onError={onError as () => void}
-    />
-  ),
+vi.mock('@/lib/quiz/question-action', () => ({
+  startRoundAction: actions.startRoundAction,
+  prepareNextQuestionAction: actions.prepareNextQuestionAction,
+  promoteQuestionAction: actions.promoteQuestionAction,
+  replacePreparedQuestionAction: actions.replacePreparedQuestionAction,
+}))
+vi.mock('@/lib/quiz/run-actions', () => ({
+  answerAction: actions.answerAction,
+  endRoundAction: actions.endRoundAction,
+  getRunByRoundIdAction: actions.getRunByRoundIdAction,
+}))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: actions.push }),
+  unstable_rethrow: () => {},
 }))
 
-const question = (id: number): Question => ({
-  pokemonId: id,
-  imageUrl: `https://example.test/${id}.png`,
-  options: [`Name${id}`, 'F1', 'F2', 'F3'],
-  correctIndex: 0,
+const question = (token: string, right = 'Glurak') => ({
+  token,
+  options: [right, 'Relaxo', 'Pikachu', 'Enton'],
 })
 
-const images = () => Array.from(document.querySelectorAll('img'))
-const loadImages = () => images().forEach((i) => fireEvent.load(i))
-const failImages = () => images().forEach((i) => fireEvent.error(i))
+function probeImage() {
+  // Die Sonde ist das Bild mit leerem alt (dekorativ); das sichtbare trägt eine
+  // Frage als alt-Text.
+  return Array.from(document.querySelectorAll('img')).find((img) => img.getAttribute('alt') === '')
+}
 
-const ERROR_TEXT = /Die nächste Frage lädt gerade nicht/
+async function openRound() {
+  render(<QuizScreen initialPersonalBest={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+  await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+}
 
-describe('QuizScreen — Fehlerpfade', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
+beforeEach(() => {
+  // `resetAllMocks` statt `clearAllMocks`: Letzteres leert nur die Aufrufliste,
+  // nicht die mit `mockResolvedValueOnce` gefuellte Warteschlange — ein nicht
+  // verbrauchter Eintrag waere sonst in den naechsten Test geleckt.
+  vi.resetAllMocks()
+  actions.promoteQuestionAction.mockResolvedValue({ promoted: true })
+  actions.startRoundAction.mockResolvedValue({
+    status: 'ok',
+    roundId: 'round-1',
+    current: question('t-1'),
+    prepared: question('t-2', 'Bisasam'),
+  })
+  actions.replacePreparedQuestionAction.mockResolvedValue({
+    status: 'ok',
+    prepared: question('t-ersatz', 'Schiggy'),
+  })
+  actions.prepareNextQuestionAction.mockResolvedValue({
+    status: 'ok',
+    prepared: question('t-3', 'Schiggy'),
+  })
+})
+
+describe('QuizScreen — Bildausfall', () => {
+  it('ersetzt eine vorbereitete Frage, deren Bild nicht lädt (EC-6)', async () => {
+    await openRound()
+
+    const probe = probeImage()
+    expect(probe?.getAttribute('src')).toBe('/api/question/t-2/image')
+    fireEvent.error(probe!)
+
+    await waitFor(() => expect(actions.replacePreparedQuestionAction).toHaveBeenCalledTimes(1))
   })
 
-  it('AC-16: zeigt die Fehlerkarte mit beiden Auswegen, wenn die Quelle nichts liefert', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+  it('lässt die angezeigte Frage dabei unangetastet — kein Überspringen (EC-12)', async () => {
+    await openRound()
 
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Erneut versuchen' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Runde beenden' })).toBeInTheDocument()
+    fireEvent.error(probeImage()!)
+    await waitFor(() => expect(actions.replacePreparedQuestionAction).toHaveBeenCalled())
+
+    // Die aktuelle Frage steht unverändert da: dieselben vier Optionen, dasselbe
+    // Bild. Der Spieler kann sich nicht durch einen Bildfehler aus ihr befreien.
+    expect(screen.getByText('Glurak')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Antwort A: Glurak' })).toBeInTheDocument()
+    const visible = Array.from(document.querySelectorAll('img')).find(
+      (img) => img.getAttribute('alt') !== ''
+    )
+    expect(visible?.getAttribute('src')).toBe('/api/question/t-1/image')
   })
 
-  it('AC-17: „Erneut versuchen" ist unbegrenzt und setzt die Runde fort, sobald es klappt', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
+  it('zeigt nach drei Verwürfen in Folge die Fehlerkarte, sobald der Spieler wartet (EC-10, AC-16)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
 
-    // Zwei erfolglose Versuche — die Karte bleibt, es gibt keine Obergrenze.
-    for (let i = 0; i < 2; i++) {
-      fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
-      await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
+    await openRound()
+
+    // Drei Bildfehler hintereinander: Nach dem dritten wird nicht weiter
+    // nachgezogen.
+    for (let i = 0; i < 3; i++) {
+      const probe = probeImage()
+      if (!probe) break
+      fireEvent.error(probe)
+      await waitFor(() => expect(probeImage()?.getAttribute('src')).not.toBe(undefined), {
+        timeout: 1000,
+      }).catch(() => {})
     }
 
-    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(7) })
+    // Jetzt antwortet der Spieler richtig — es liegt nichts bereit, also wartet er.
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    await waitFor(
+      () => expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  })
+})
+
+function visibleImage() {
+  return Array.from(document.querySelectorAll('img')).find(
+    (img) => img.getAttribute('alt') !== ''
+  )
+}
+
+describe('QuizScreen — das Bild der angezeigten Frage (BUG-111)', () => {
+  it('zeigt die Fehlerkarte, wenn das Bild auch beim zweiten Versuch nicht kommt (AC-15, AC-16)', async () => {
+    await openRound()
+
+    // Erster Fehlschlag: stiller zweiter Versuch, noch keine Fehlerkarte (AC-15).
+    fireEvent.error(visibleImage()!)
+    expect(screen.queryByText('Das Bild dieser Frage lädt nicht')).not.toBeInTheDocument()
+
+    // Zweiter Fehlschlag: jetzt ist Schluss.
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText('Das Bild dieser Frage lädt nicht')).toBeInTheDocument()
+    )
+  })
+
+  it('holt beim erneuten Versuch dieselbe Frage zurück, statt eine neue zu ziehen (AC-17, EC-12)', async () => {
+    await openRound()
+    fireEvent.error(visibleImage()!)
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText('Das Bild dieser Frage lädt nicht')).toBeInTheDocument()
+    )
+
     fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
 
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name7')).toBeInTheDocument())
-    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument()
-  })
-
-  it('AC-18: „Runde beenden" wertet die Runde und speichert sie', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-
-    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
-
-    await waitFor(() => expect(saveRun).toHaveBeenCalledTimes(1))
-    expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 0 })
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument())
-  })
-
-  it('EC-10: nach drei verworfenen Fragen in Folge erscheint die Fehlerkarte statt weiterer Versuche', async () => {
-    let served = 0
-    getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    // Jedes vorgeladene Bild scheitert -> verworfen -> neue Frage, bis die Grenze greift.
-    for (let i = 0; i < 6; i++) {
-      await waitFor(() => expect(images().length).toBeGreaterThan(0))
-      failImages()
-      await new Promise((r) => setTimeout(r, 30))
-      if (screen.queryByText(ERROR_TEXT)) break
-    }
-
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-    // Die Grenze greift, bevor unbegrenzt weitergezogen wird.
-    expect(getNextQuestion.mock.calls.length).toBeLessThanOrEqual(4)
-  })
-
-  it('EC-7: eine abgelaufene Sitzung führt auf /login, statt die Runde fortzusetzen', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unauthenticated' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() => expect(push).toHaveBeenCalledWith('/login'))
-  })
-
-  it('EC-7: eine abgelaufene Sitzung beim Speichern führt ebenfalls auf /login', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    saveRun.mockResolvedValue({ status: 'unauthenticated' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-
-    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
-    await waitFor(() => expect(push).toHaveBeenCalledWith('/login'))
-  })
-
-  // Abnahmetest zu BUG-1 (qa-report.md): AC-19 fehlte vollständig — `beforeunload`
-  // kam im ganzen Quellcode nicht vor. Dieser Test war zuerst rot, danach wurde
-  // der Effekt ergänzt; er hält die Warnung ab jetzt fest.
-  it('AC-19: die Verlassen-Warnung greift erst ab Serie 1, nicht davor', async () => {
-    // Statt addEventListener zu ersetzen (das greift auch in React ein) wird das
-    // Ereignis wirklich ausgelöst: eine abgewehrte Navigation ist das Verhalten,
-    // das AC-19 zusagt.
-    const fireBeforeUnload = () => {
-      const event = new Event('beforeunload', { cancelable: true })
-      window.dispatchEvent(event)
-      return event.defaultPrevented
-    }
-
-    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(3) })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name3')).toBeInTheDocument())
-
-    expect(fireBeforeUnload()).toBe(false) // Serie 0 — nichts zu verlieren
-
-    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name3' }))
-    await waitFor(() => expect(fireBeforeUnload()).toBe(true))
-  })
-
-  // Abnahmetest zu BUG-6 (qa-report.md, Lauf vom 2026-09-02): Die Warnung hing an
-  // `roundInFlight`, das die Phase `loading` nicht einschloss. War die nächste Frage
-  // noch nicht vorgeladen, lief die Runde zwar weiter, war aber ungeschützt —
-  // gemessen ~400 ms je Runde. Der Test war zuerst rot, danach wurde die Phase
-  // ergänzt; er hält die Lücke ab jetzt geschlossen.
-  it('AC-19: die Warnung greift auch, während die nächste Frage noch lädt', async () => {
-    const fireBeforeUnload = () => {
-      const event = new Event('beforeunload', { cancelable: true })
-      window.dispatchEvent(event)
-      return event.defaultPrevented
-    }
-
-    // Erste Frage kommt, das Vorladen bleibt hängen — nach der richtigen Antwort
-    // gibt es keine Reserve, die Runde geht in die Phase `loading`.
-    getNextQuestion.mockResolvedValueOnce({ status: 'ok', question: question(3) })
-    getNextQuestion.mockReturnValue(new Promise(() => {}))
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name3')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name3' }))
-    await waitFor(() => expect(fireBeforeUnload()).toBe(true))
-
-    // Serie 1 ist erreicht, die nächste Frage lädt noch: die Runde hat etwas zu
-    // verlieren, also muss die Warnung auch hier greifen.
-    await waitFor(() =>
-      expect(screen.getByText('Runde wird vorbereitet …')).toBeInTheDocument()
-    )
-    expect(fireBeforeUnload()).toBe(true)
-  })
-
-  it('EC-9: mehrfaches Klicken auf „Runde starten" startet genau eine Runde', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(4) })
-    render(<QuizScreen initialPersonalBest={null} />)
-
-    const start = screen.getByRole('button', { name: 'Runde starten' })
-    fireEvent.click(start)
-    fireEvent.click(start)
-    fireEvent.click(start)
-
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    // Genau ein Abruf für die erste Frage — die weiteren Klicks laufen ins Leere.
-    expect(getNextQuestion).toHaveBeenCalledTimes(1)
-  })
-// --- Abnahmetests zum QA-Lauf vom 2026-09-04 -----------------------------
-
-  // BUG-7 (High): `saveRun` wurde ohne try/catch aufgerufen. Ein Transport-
-  // Fehler ließ alle folgenden Zeilen aus — `saveState` blieb auf 'saving',
-  // der Ergebnis-Screen sah aus wie ein gespeichertes Ergebnis, und die
-  // Fehler-UI aus EC-3 war unerreichbar.
-  it('EC-3 / BUG-7: ein Transport-Fehler beim Speichern zeigt Hinweis und Wiederholung', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    saveRun.mockRejectedValue(new TypeError('Failed to fetch'))
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
-
-    await waitFor(() =>
-      expect(screen.getByText(/konnte noch nicht gespeichert werden/)).toBeInTheDocument()
-    )
-    expect(screen.getByRole('button', { name: 'Erneut speichern' })).toBeInTheDocument()
-
-    // Und der Wiederholungsversuch geht durch, sobald die Verbindung steht.
-    saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Erneut speichern' }))
-    await waitFor(() =>
-      expect(screen.queryByText(/konnte noch nicht gespeichert werden/)).not.toBeInTheDocument()
-    )
-  })
-
-  // BUG-8 (High) und BUG-16: Bis zum 2026-09-04 wurde bei einem kaputten Bild die
-  // offizielle Adresse nachgeschlagen. Sie ist für den ganzen Pool *dieselbe*, die
-  // gerade gescheitert war — erneut gesetzt ließ sie `ImageProbe`s `key` unverändert,
-  // der Browser lud nicht neu, `onError` feuerte kein zweites Mal, und die Runde hing.
-  // Die Reparaturstufe ist inzwischen ersatzlos entfallen (spec.md EC-11); ein kaputtes
-  // Bild führt unmittelbar zum Verwurf.
-  //
-  // Der Test feuert `error` deshalb **genau einmal**. Ein zweites Feuern von Hand ist
-  // genau das, was der Browser nicht tut, und würde einen Hänger zudecken: Der Fehler
-  // bestünde ja gerade darin, dass kein zweites Ereignis kommt.
-  it('EC-6: ein kaputtes Bild verwirft die Frage nach einem einzigen Fehlerereignis', async () => {
-    let served = 0
-    getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() =>
-      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/1.png')).toBe(true)
-    )
-    expect(getNextQuestion).toHaveBeenCalledTimes(1)
-
-    failImages() // genau einmal
-
-    // Die Runde muss von sich aus weitergehen: verwerfen und neu ziehen (EC-6).
-    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(2))
-    await waitFor(() =>
-      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/2.png')).toBe(true)
-    )
-  })
-
-  // BUG-15 (Medium): `onLoad` und `onError` decken ein Bild ab, das ankommt, und
-  // eines, das abgelehnt wird — aber keines, das **gar nicht antwortet**. Ohne
-  // Frist saß die Runde dann für immer auf „Runde wird vorbereitet …": keine
-  // Fehlerkarte, kein Ausweg, Serie beim Neuladen verloren.
-  //
-  // Das Bild feuert hier bewusst **kein einziges Ereignis**. Genau darin besteht
-  // der Fehler; ein Test, der zum Schluss doch `error` auslöst, prüft ihn weg.
-  it('AC-15 / BUG-15: ein hängendes Bild wird einmal still neu geladen und dann verworfen', async () => {
-    vi.useFakeTimers()
-    try {
-      let served = 0
-      getNextQuestion.mockImplementation(async () => ({
-        status: 'ok',
-        question: question(++served),
-      }))
-
-      render(<QuizScreen initialPersonalBest={null} />)
-      fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
-      expect(getNextQuestion).toHaveBeenCalledTimes(1)
-      expect(images().length).toBeGreaterThan(0)
-
-      // Erster Ablauf: AC-15 verlangt einen stillen zweiten Versuch, keinen
-      // Verwurf. Die Frage darf hier noch nicht ersetzt werden.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-      expect(getNextQuestion).toHaveBeenCalledTimes(1)
-      expect(images().some((i) => i.getAttribute('src') === 'https://example.test/1.png')).toBe(true)
-
-      // Zweiter Ablauf: jetzt ist die Frage nicht ladbar und wird verworfen (EC-6).
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-      expect(getNextQuestion).toHaveBeenCalledTimes(2)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  // BUG-23: „Pool leer" ist nicht dasselbe wie „alle geschafft". Verworfene
-  // Fragen verbrauchen Pool-Einträge, also kann der Pool zu Ende gehen, während
-  // die Serie darunter liegt. Vorher stand dann „Alle Pokémon geschafft" über
-  // einer Runde, die das nicht war.
-  it('EC-2 / BUG-23: „Pool leer" bei zu kleiner Serie zeigt keine Gewinner-Meldung', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'pool-empty' })
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() => expect(saveRun).toHaveBeenCalledTimes(1))
-    expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 0 })
-
-    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
-    expect(screen.queryByText('Alle Pokémon geschafft')).not.toBeInTheDocument()
-    expect(
-      screen.queryByText(/Du hast jedes Pokémon aus dem Pool richtig erkannt/)
-    ).not.toBeInTheDocument()
-  })
-
-  // BUG-33: `answer` plant `advance` aus dem Render **vor** `setStreak`. Das
-  // eingefangene `fetchQuestion` hielt `streak` in seiner Closure, der Zweig
-  // „Pool leer" speicherte deshalb eine richtige Antwort zu wenig — dauerhaft,
-  // und für die Rangliste von PROJ-3 relevant.
-  it('EC-2 / BUG-33: „Pool leer" nach einer richtigen Antwort speichert Serie 1, nicht 0', async () => {
-    // Erste Frage kommt, danach ist der Pool erschöpft — genau die Lage aus EC-2.
-    getNextQuestion.mockResolvedValueOnce({ status: 'ok', question: question(1) })
-    getNextQuestion.mockResolvedValue({ status: 'pool-empty' })
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name1')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name1' }))
-
-    await waitFor(() => expect(saveRun).toHaveBeenCalledTimes(1))
-    // Vor dem Fix stand hier 0, während der Bildschirm „1 richtige Antworten" zeigte.
-    expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 1 })
-
-    // Und die Gewinner-Meldung bleibt aus: eine richtige Antwort ist nicht der Pool.
-    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
-    expect(screen.queryByText('Alle Pokémon geschafft')).not.toBeInTheDocument()
-  })
-
-  // BUG-13 (Medium): Die Verwurfsgrenze griff nur, wenn der Spieler wartete.
-  // Fiel die Bildquelle aus, während er noch antwortete, zog das Vorladen
-  // endlos nach — je vier Namensabfragen an die PokeAPI, ohne Backoff.
-  it('AC-31 / BUG-13: ein Bildausfall während der Antwort zieht nicht endlos nach', async () => {
-    let served = 0
-    getNextQuestion.mockImplementation(async () => ({ status: 'ok', question: question(++served) }))
-
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name1')).toBeInTheDocument())
-
-    // Ab hier scheitert jedes *vorgeladene* Bild; die sichtbare Frage bleibt.
-    for (let i = 0; i < 10; i++) {
-      images()
-        .filter((img) => img.getAttribute('src') !== 'https://example.test/1.png')
-        .forEach((img) => fireEvent.error(img))
-      await new Promise((r) => setTimeout(r, 20))
-    }
-
-    // 1 Start + 1 Vorladen + höchstens 3 Verwürfe. Ohne die Grenze läuft das
-    // hier zweistellig weiter.
-    expect(getNextQuestion.mock.calls.length).toBeLessThanOrEqual(5)
-    // Die laufende Frage wird davon nicht angetastet.
-    expect(screen.getByText('Name1')).toBeInTheDocument()
-  })
-
-  // BUG-10 (Medium): AC-9 verlangt eine gestartete Runde, der Code führte auf
-  // den Startbildschirm zurück — ein zusätzlicher Klick, der gegen das
-  // PRD-Erfolgskriterium „direkt eine zweite Runde" arbeitet.
-  it('AC-9 / BUG-10: „Nochmal spielen" startet unmittelbar eine neue Runde', async () => {
-    getNextQuestion.mockResolvedValue({ status: 'unavailable' })
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
-    await waitFor(() => expect(screen.getByText(ERROR_TEXT)).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument()
-    )
-
-    const callsBefore = getNextQuestion.mock.calls.length
-    getNextQuestion.mockResolvedValue({ status: 'ok', question: question(5) })
-    fireEvent.click(screen.getByRole('button', { name: 'Nochmal spielen' }))
-
-    await waitFor(() => expect(getNextQuestion.mock.calls.length).toBeGreaterThan(callsBefore))
-    // Kein Umweg über den Startbildschirm.
-    expect(screen.queryByRole('button', { name: 'Runde starten' })).not.toBeInTheDocument()
-
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadImages()
-    await waitFor(() => expect(screen.getByText('Name5')).toBeInTheDocument())
-    // Serie 0 und zurückgesetzte Uhr (AC-9).
-    expect(screen.getByText('0')).toBeInTheDocument()
-    expect(screen.getByText('0:00')).toBeInTheDocument()
+    // Dieselbe Frage, dieselben Optionen — kein Überspringen durch einen Bildfehler.
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(visibleImage()?.getAttribute('src')).toBe('/api/question/t-1/image')
+    expect(actions.replacePreparedQuestionAction).not.toHaveBeenCalled()
   })
 })
 
+describe('QuizScreen — was die Fehlerkarte über die Zeit sagt (BUG-113)', () => {
+  it('sagt bei offener Frage, dass die Zeit mitläuft — sie tut es (AC-34)', async () => {
+    await openRound()
+
+    // Das Bild der ANGEZEIGTEN Frage fällt aus: Serverseitig bleibt die Frage
+    // offen, ihre Zeit läuft also weiter.
+    fireEvent.error(visibleImage()!)
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText(/ihre Zeit läuft also mit/)).toBeInTheDocument()
+    )
+    expect(screen.queryByText(/die Uhr steht so lange still/)).not.toBeInTheDocument()
+  })
+
+  it('sagt bei fehlender Nachfolgerin, dass die Uhr stillsteht — sie tut es (AC-16)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 3,
+      result: null,
+    })
+    actions.prepareNextQuestionAction.mockResolvedValue({ status: 'unavailable' })
+    actions.replacePreparedQuestionAction.mockResolvedValue({ status: 'unavailable' })
+
+    await openRound()
+    fireEvent.error(probeImage()!)
+    await waitFor(() => expect(actions.replacePreparedQuestionAction).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    // Jetzt steht serverseitig keine Frage offen — dann zählt der Server nichts.
+    await waitFor(() => expect(screen.getByText(/die Uhr steht so lange still/)).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+  })
+})
+
+describe('QuizScreen — erschöpfter Ziehungsvorrat (BUG-114)', () => {
+  it('beendet die Runde und wertet sie, statt hängenzubleiben (EC-2)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 5,
+      result: null,
+    })
+    // **Der Server wertet, nicht der Browser** (AC-35, BUG-119): Das Ergebnis
+    // kommt mit der „Pool leer“-Antwort mit, nicht ueber einen zusaetzlichen Aufruf.
+    //
+    // Die Reihenfolge bildet nach, was der Server wirklich liefert: Solange noch
+    // eine Frage offensteht, kommt kein Ergebnis mit — erst wenn keine mehr da ist.
+    // Erst steht noch eine Frage offen — dann kommt kein Ergebnis mit. Danach ist
+    // der Vorrat leer und der Server hat gewertet.
+    actions.prepareNextQuestionAction
+      .mockResolvedValueOnce({ status: 'pool-empty', result: null })
+      .mockResolvedValueOnce({
+        status: 'pool-empty',
+        result: { streak: 5, durationMs: 42_000, isPersonalBest: false },
+      })
+
+    await openRound()
+
+    // Die vorbereitete Frage als geprüft melden, damit sie nachrücken kann …
+    fireEvent.load(probeImage()!)
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+    await waitFor(() => expect(screen.getByText('Bisasam')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+
+    // … danach ist der Vorrat leer, und der Spieler wartet auf eine Frage,
+    // die es nicht mehr gibt.
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Bisasam' }))
+
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    // Und zwar ohne dass der Browser das Rundenende ausloesen muss: Bliebe sein
+    // Aufruf aus, waere das Ergebnis sonst verloren (BUG-119).
+    expect(actions.endRoundAction).not.toHaveBeenCalled()
+    expect(screen.queryByText('Runde wird vorbereitet …')).not.toBeInTheDocument()
+  })
+})
+describe('QuizScreen — Fehlerkarte', () => {
+  async function reachErrorCard() {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 3,
+      result: null,
+    })
+    actions.prepareNextQuestionAction.mockResolvedValue({ status: 'unavailable' })
+
+    await openRound()
+    fireEvent.error(probeImage()!)
+    await waitFor(() => expect(actions.replacePreparedQuestionAction).toHaveBeenCalled())
+    // Auch der Ersatz lädt nicht.
+    actions.replacePreparedQuestionAction.mockResolvedValue({ status: 'unavailable' })
+    await waitFor(() => expect(probeImage()).toBeDefined())
+    fireEvent.error(probeImage()!)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+    await waitFor(
+      () => expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument(),
+      { timeout: 3000 }
+    )
+  }
+
+  it('behält die Serie und bietet einen unbegrenzten neuen Versuch an (AC-16, AC-17)', async () => {
+    await reachErrorCard()
+
+    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Erneut versuchen' })).toBeInTheDocument()
+  })
+
+  it('wertet „Runde beenden" mit der bis dahin erreichten Serie (AC-18)', async () => {
+    actions.endRoundAction.mockResolvedValue({
+      status: 'ended',
+      result: { streak: 3, durationMs: 45_000, isPersonalBest: true },
+    })
+
+    await reachErrorCard()
+    fireEvent.click(screen.getByRole('button', { name: 'Runde beenden' }))
+
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
+    expect(screen.getByText('Neue persönliche Bestleistung')).toBeInTheDocument()
+  })
+})
+
+describe('QuizScreen — verlorene Antwort und fremde Runde', () => {
+  it('holt ein bereits geschriebenes Ergebnis nach, wenn das Urteil verlorenging (EC-3)', async () => {
+    // Der Server hat geschrieben und den Zustand gelöscht; die Antwort kam nie
+    // an. Der zweite Versuch trifft deshalb auf ein Token, das nicht mehr passt.
+    actions.answerAction.mockResolvedValue({ status: 'stale' })
+    actions.getRunByRoundIdAction.mockResolvedValue({
+      streak: 12,
+      durationMs: 90_000,
+      isPersonalBest: true,
+    })
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
+    expect(actions.getRunByRoundIdAction).toHaveBeenCalledWith('round-1')
+    expect(screen.getByText('12')).toBeInTheDocument()
+  })
+
+  it('sagt es, wenn die Runde anderswo weiterlief (EC-15)', async () => {
+    actions.answerAction.mockResolvedValue({ status: 'stale' })
+    actions.getRunByRoundIdAction.mockResolvedValue(null)
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Diese Runde ist nicht mehr offen')).toBeInTheDocument()
+    )
+    expect(screen.getByText(/anderen Tab weiter/)).toBeInTheDocument()
+  })
+})
+
+/**
+ * **Wege aus einem Endzustand heraus (BUG-133, BUG-134, BUG-135).**
+ *
+ * Der Server behandelte diese drei Zustände von Anfang an korrekt — er schrieb
+ * das Ergebnis, wies den veralteten Tab ab, meldete den gescheiterten Start.
+ * Der Browser hatte für keinen davon einen Weg nach vorn: Er blieb auf der
+ * Frage stehen oder lief in dieselbe Fehlerkarte zurück, und nur Neuladen half.
+ *
+ * Diese Tests prüfen deshalb nicht, was angezeigt wird, sondern **dass es
+ * weitergeht**.
+ */
+describe('QuizScreen — aus jedem Endzustand führt ein Weg heraus', () => {
+  it('zeigt das Ergebnis, wenn die letzte Frage RICHTIG beantwortet die Runde beendet (EC-2, BUG-133)', async () => {
+    // Genau die Serverantwort der 386. richtigen Antwort: Urteil richtig **und**
+    // Ergebnis dabei. Vorher setzte der Client daraufhin nur `phase='resolved'`
+    // und blieb auf der Frage stehen — „Weiter zum Ergebnis" erscheint nur bei
+    // einer falschen Antwort, und einen automatischen Übergang gab es nicht.
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 386,
+      result: { streak: 386, durationMs: 704, isPersonalBest: true },
+    })
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    // Bei Serie 386 ist das zugleich die Gewinner-Meldung — und die war auf dem
+    // vorgesehenen Weg bisher **unerreichbar**, weil man nur über eine falsche
+    // Antwort oder „Runde beenden" auf den Ergebnis-Screen kam.
+    await waitFor(() => expect(screen.getByText('Alle Pokémon geschafft')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByText(/Mehr geht nicht/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument()
+    expect(screen.getByText('386')).toBeInTheDocument()
+  })
+
+  it('startet eine neue Runde, wenn der Start selbst gescheitert war (AC-17, BUG-134)', async () => {
+    actions.startRoundAction.mockResolvedValueOnce({ status: 'unavailable' })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Die Runde konnte nicht gestartet werden')).toBeInTheDocument()
+    )
+    // Es gibt keine Runde — also auch nichts zu beenden.
+    expect(screen.queryByRole('button', { name: 'Runde beenden' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
+
+    // Der Kern: ein zweiter START, nicht ein Vorbereiten ohne Runden-Kennung.
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(2)
+    expect(actions.prepareNextQuestionAction).not.toHaveBeenCalledWith('')
+  })
+
+  it('bietet nach „Runde lief anderswo weiter" eine neue Runde an (EC-15, BUG-135)', async () => {
+    actions.answerAction.mockResolvedValue({ status: 'stale' })
+    actions.getRunByRoundIdAction.mockResolvedValue(null)
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Diese Runde ist nicht mehr offen')).toBeInTheDocument()
+    )
+
+    // Der Text fordert dazu auf, eine neue Runde zu starten — vorher gab es
+    // dafür keinen Knopf, und die beiden vorhandenen führten in dieselbe Karte.
+    const neu = screen.getByRole('button', { name: 'Neue Runde starten' })
+    expect(screen.queryByRole('button', { name: 'Erneut versuchen' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Runde beenden' })).not.toBeInTheDocument()
+
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
+    fireEvent.click(neu)
+
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('QuizScreen — Verlassen der Seite', () => {
+  it('warnt erst, wenn die Runde etwas zu verlieren hat (AC-19)', async () => {
+    const addSpy = vi.spyOn(window, 'addEventListener')
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
+
+    await openRound()
+    expect(addSpy.mock.calls.some(([type]) => type === 'beforeunload')).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    await waitFor(
+      () => expect(addSpy.mock.calls.some(([type]) => type === 'beforeunload')).toBe(true),
+      { timeout: 3000 }
+    )
+    addSpy.mockRestore()
+  })
+})

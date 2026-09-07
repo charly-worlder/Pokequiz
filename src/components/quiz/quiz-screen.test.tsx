@@ -1,113 +1,176 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QuizScreen } from './quiz-screen'
-import type { Question } from '@/lib/quiz/question-action'
 
 /**
- * Regression test for the prefetch (spec.md AC-10).
+ * Der normale Ablauf einer Runde, nachdem der Server sie führt (spec.md AC-32
+ * bis AC-35).
  *
- * The bug this pins down: after the first question was promoted, nothing kicked
- * off loading the next one, so the reserve was never filled and every question
- * would have shown a loading state. It was invisible in the UI — the only
- * symptom was a single `getNextQuestion` call per round in the server log,
- * which is exactly why it needs a test rather than another manual look.
+ * Der wichtigste Test dieser Datei ist der letzte: Er belegt, dass im
+ * ausgelieferten Markup **nichts** steht, woraus sich die Lösung ableiten ließe —
+ * keine Pokémon-Nummer, kein markierter richtiger Eintrag. Genau daran ist der
+ * alte Aufbau gescheitert, und das lässt sich nicht durch Hinsehen sicherstellen.
  */
 
-const { getNextQuestion, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
-  getNextQuestion: vi.fn(),
-  saveRun: vi.fn(),
-  getPersonalBest: vi.fn(),
+const actions = vi.hoisted(() => ({
+  startRoundAction: vi.fn(),
+  prepareNextQuestionAction: vi.fn(),
+  promoteQuestionAction: vi.fn(),
+  replacePreparedQuestionAction: vi.fn(),
+  answerAction: vi.fn(),
+  endRoundAction: vi.fn(),
+  getRunByRoundIdAction: vi.fn(),
   push: vi.fn(),
 }))
 
-vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion }))
-vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
+vi.mock('@/lib/quiz/question-action', () => ({
+  startRoundAction: actions.startRoundAction,
+  prepareNextQuestionAction: actions.prepareNextQuestionAction,
+  promoteQuestionAction: actions.promoteQuestionAction,
+  replacePreparedQuestionAction: actions.replacePreparedQuestionAction,
+}))
+vi.mock('@/lib/quiz/run-actions', () => ({
+  answerAction: actions.answerAction,
+  endRoundAction: actions.endRoundAction,
+  getRunByRoundIdAction: actions.getRunByRoundIdAction,
+}))
 // `unstable_rethrow` gehört zum echten Modul und wird von runClientAction
 // benutzt (BUG-7). Ohne es im Mock schlüge jeder Aufruf hier fehl.
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
-
-// next/image needs a real <img> here so that load and error events can be
-// dispatched; its own props are not what this test is about.
-vi.mock('next/image', () => ({
-  default: ({ src, alt, onLoad, onError }: Record<string, unknown>) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src as string}
-      alt={alt as string}
-      onLoad={onLoad as () => void}
-      onError={onError as () => void}
-    />
-  ),
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: actions.push }),
+  unstable_rethrow: () => {},
 }))
 
-function question(id: number): Question {
-  return {
-    pokemonId: id,
-    imageUrl: `https://example.test/${id}.png`,
-    options: [`Name${id}`, 'Falsch1', 'Falsch2', 'Falsch3'],
-    correctIndex: 0,
-  }
-}
+export const question = (token: string, right = 'Glurak') => ({
+  token,
+  options: [right, 'Relaxo', 'Pikachu', 'Enton'],
+})
 
-/**
- * The probe and the visible picture are both mocked <img>s. The probe carries
- * an empty alt (it is decorative), so it has no `img` role — query the DOM.
- */
-function images() {
+export function images() {
   return Array.from(document.querySelectorAll('img'))
 }
 
-function loadAllImages() {
+export function loadAllImages() {
   for (const img of images()) fireEvent.load(img)
 }
 
-describe('QuizScreen — Vorladen der nächsten Frage (AC-10)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    let next = 1
-    getNextQuestion.mockImplementation(async () => ({
-      status: 'ok' as const,
-      question: question(next++),
-    }))
-    saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
+export function startedRound() {
+  actions.startRoundAction.mockResolvedValue({
+    status: 'ok',
+    roundId: 'round-1',
+    current: question('t-1'),
+    prepared: question('t-2', 'Bisasam'),
   })
+}
 
-  it('startet das Laden der nächsten Frage, sobald die erste sichtbar ist', async () => {
+beforeEach(() => {
+  vi.clearAllMocks()
+  actions.promoteQuestionAction.mockResolvedValue({ promoted: true })
+  startedRound()
+  actions.prepareNextQuestionAction.mockResolvedValue({
+    status: 'ok',
+    prepared: question('t-3', 'Schiggy'),
+  })
+})
+
+describe('QuizScreen — eine Runde spielen', () => {
+  it('zeigt die erste Frage und lädt das Bild der vorbereiteten im Hintergrund (AC-10)', async () => {
     render(<QuizScreen initialPersonalBest={null} />)
-
     fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
 
-    // The first question is fetched…
-    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(1))
-
-    // …its picture loads, which promotes it to the visible question.
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
-    loadAllImages()
     await waitFor(() => expect(screen.getByRole('button', { name: /^Antwort A:/ })).toBeInTheDocument())
 
-    // The regression: a second fetch has to start straight away, while the
-    // player is still looking at the first question. Before the fix this
-    // stayed at 1 and the reserve was never filled.
-    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(2))
+    // Zwei Bilder: das sichtbare der aktuellen Frage und die unsichtbare Sonde
+    // für die vorbereitete. Beide über die eigene Route, beide mit Token (AC-20, AC-32).
+    const sources = images().map((img) => img.getAttribute('src'))
+    expect(sources).toContain('/api/question/t-1/image')
+    expect(sources).toContain('/api/question/t-2/image')
   })
 
-  it('zeigt die vorgeladene Frage nach einer richtigen Antwort ohne erneutes Laden', async () => {
+  it('nimmt nach einer richtigen Antwort die vorbereitete Frage ohne Ladezustand (AC-4, AC-10)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
+
     render(<QuizScreen initialPersonalBest={null} />)
     fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
 
-    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(images().length).toBeGreaterThan(0))
+    // Die vorbereitete Frage als geprüft melden, dann antworten.
     loadAllImages()
-    await waitFor(() => expect(screen.getByText('Name1')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
 
-    // Let the prefetch land in the reserve.
-    await waitFor(() => expect(getNextQuestion).toHaveBeenCalledTimes(2))
-    loadAllImages()
-
-    // Answer correctly — the reserve must take over, not a fresh round trip.
-    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Name1' }))
-
-    await waitFor(() => expect(screen.getByText('Name2')).toBeInTheDocument(), { timeout: 3000 })
+    await waitFor(() => expect(screen.getByText('Bisasam')).toBeInTheDocument(), { timeout: 3000 })
     expect(screen.queryByText('Runde wird vorbereitet …')).not.toBeInTheDocument()
+    // Und für die übernächste wurde sofort nachgeladen.
+    await waitFor(() => expect(actions.prepareNextQuestionAction).toHaveBeenCalled())
+  })
+
+  it('zählt die Serie, die der Server meldet — nicht die eigene (AC-33)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      // Der Server meldet 7, obwohl dies die erste Antwort dieser Runde ist.
+      streak: 7,
+      result: null,
+    })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    loadAllImages()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    await waitFor(() => expect(screen.getByText('7')).toBeInTheDocument(), { timeout: 3000 })
+  })
+
+  it('schickt nur Token und Position an den Server (AC-32, AC-33)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort C: Pikachu' }))
+
+    await waitFor(() => expect(actions.answerAction).toHaveBeenCalledWith({ token: 't-1', choice: 2 }))
+  })
+
+  it('startet bei mehreren Klicks auf „Runde starten" genau eine Runde (EC-9)', async () => {
+    render(<QuizScreen initialPersonalBest={null} />)
+    const button = screen.getByRole('button', { name: 'Runde starten' })
+
+    fireEvent.click(button)
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('verrät im Ausgelieferten weder die Pokémon-Nummer noch die richtige Option (AC-32)', async () => {
+    const { container } = render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+
+    const markup = container.innerHTML
+    expect(markup).not.toContain('official-artwork')
+    expect(markup).not.toContain('githubusercontent')
+    expect(markup).not.toContain('correctIndex')
+    // Keine der vier Optionen ist vor der Antwort anders ausgezeichnet als die
+    // anderen: Alle vier tragen denselben Zustand.
+    const optionButtons = screen.getAllByRole('button', { name: /^Antwort [A-D]:/ })
+    const classes = new Set(optionButtons.map((b) => b.className))
+    expect(classes.size).toBe(1)
   })
 })

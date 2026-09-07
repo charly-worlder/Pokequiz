@@ -23,7 +23,7 @@
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
-| PROJ-2 | Pokémon-Quiz | Eine Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
+| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
@@ -52,7 +52,8 @@
 | PROJ-1 | _(Original zu BUG-91, High — fasst BUG-17 und BUG-90 zusammen; BUG-17 steht seit dem 2026-09-04 offen). `src/lib/auth/actions.ts:161-193` prüft nur `getUser()`, **nicht ob es eine Recovery-Sitzung ist**, und ruft `registerAttempt` gar nicht auf — `design.md` → Behaviors & Access verspricht ausdrücklich „nur mit gültiger Recovery-Sitzung". **Am 2026-09-06 erstmals zur Laufzeit vollständig durchgespielt:** mit einer gewöhnlichen Login-Sitzung Passwort gesetzt → Login mit **altem** Passwort abgelehnt, mit **neuem** erfolgreich; **12 Aufrufe von einer IP, 0 abgewiesen**. Da die Sitzung laut AC-5 mit `Max-Age=34560000` bis zum aktiven Logout läuft, übernimmt jeder, der ein angemeldetes Gerät erreicht, das Konto endgültig ohne Kenntnis des alten Passworts.)_ | ✅ erledigt |
 | PROJ-1 | **Grenzwerte des neuen Scopes `password-update` stehen nicht im Vertrag** — 10 je 15 Minuten, gebaut beim BUG-91-Fix und durch eine Mutation bewacht, aber AC-18 nennt keine Zahlen und `spec.md` ist während `/build` read-only. Dieselbe Klasse wie N22/N31 im Vorlauf: eine Entscheidung ohne Kriterium. Per `/refine` in AC-18 nachzutragen | Vertrag nachziehen |
 | PROJ-1 | **Kontoexistenz weiterhin über zwei andere Kanäle bestimmbar** (BUG-88/BUG-89, Medium) — nicht mehr über die Reset-Antwort, aber über die **Antwortzeit** (durch die Server Action gemessen: Median 120,3 vs. 71,1 ms, Blindtest **20/20** bzw. **30/30** bei **einer** Anfrage je Adresse, ~10 Adressen/s) und über das **Registrierungsformular** (deterministisch, **30/30**, 6,72 Adressen/s, ohne Kontoanlage — Folge von AC-3). Kein Codefehler im engeren Sinn; entwertet aber die Low-Einstufung von **EC-9** zum zweiten Mal.<br>**✅ Entschieden am 2026-09-06 durch `/refine`:** EC-9 steht jetzt auf **Medium** statt Low, EC-11 trägt die durch die Server Action gemessenen Zahlen, EC-4 die richtigen Ausheilzeiten je Vorgang. Neu im Vertrag festgehalten: Begründungen für EC-9 dürfen sich **nicht mehr auf die Vertraulichkeit von Adressen stützen** — AC-3 gibt die Kontoexistenz bewusst preis, und genau daran sind drei Begründungen nacheinander gescheitert. **Verhalten unverändert** — bewusst getragen, korrekt benannt | ✅ dokumentiert |
-| PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen | beim Deploy |
+| PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen. **Am 2026-09-07 zur Laufzeit reproduziert:** mit `Origin: https://evil.example.com` allein → HTTP 500 „Invalid Server Actions request."; **zusätzlich mit `X-Forwarded-Host: evil.example.com`** → Runde gestartet | beim Deploy |
+| PROJ-2 | **Aufbewahrungsfrist aus AC-41 hängt an `pg_cron` im gehosteten Projekt** — die offenen `[user]`-Aufgaben **T36** und **T37**. Zu erledigen: Extension im Dashboard einschalten (Database → Extensions), prüfen, dass das Projekt nicht wegen Inaktivität pausiert ist (Project Settings), danach den Job im gehosteten Projekt nachmessen. **Lokal belegt** (Job lief, `DELETE 1`).<br>~~**BUG-124** — `0010` bricht bei verweigerter Erweiterung die ganze Migration ab~~ — **behoben am 2026-09-07**: Der `create extension` steckt jetzt in einem `do`-Block, der den Fehlschlag zu einer Warnung macht und nur den Aufräum-Lauf überspringt; `supabase db push` scheitert dadurch nicht mehr hart. Die rückwirkende Änderung an `0010` war zulässig, weil kein Feature auf `Deployed` steht. Über zwei vollständige `db reset` von 0001–0013 verifiziert | beim Deploy |
 
 
 ## Bekannte Restrisiken — PROJ-1 (Stand 2026-09-06)
@@ -77,6 +78,8 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 | **BUG-18 / BUG-77** | `X-Forwarded-Host` hebelt die Origin-Prüfung aus; `origin` fließt ungeprüft in `redirectTo` | Medium | Beim gewählten Host zu prüfen und zu strippen; BUG-77 hängt zusätzlich an T18 |
 | **EC-9 / EC-10 / EC-11** | Kontoexistenz bleibt über **Antwortzeit** und über das **Registrierungsformular** bestimmbar — eine Anfrage je Adresse, ~10 Adressen/s | Medium, **im Vertrag akzeptiert** | Bewusst getragen. Die Preisgabe beim Registrieren ist eine Produktentscheidung (AC-3). Nachgemessen, Zahlen unverändert |
 | **BUG-103 … BUG-108** | Fehlerzweig von `getClaims()` ungepinnt · neue Prüfung in `reset-password/page.tsx` ohne Test · `X-Powered-By` · Passwort-Obergrenze (72 Byte) nicht im Vertrag · Dev-Build gibt DB-Meldung und absolute Serverpfade aus (Produktions-Build ungeprüft) · `PROJ-2-access-guard.spec.ts:53` verdrahtet Port fest | Low | Sammelposten für den nächsten Aufräum-Durchgang |
+| ~~**BUG-131**~~ | ~~`profiles` gewährt `anon` und `authenticated` **alle** Tabellenrechte; Schreibzugriffe hält allein RLS~~ — **behoben am 2026-09-07** (Migration `0014`): `revoke all` + `grant select` nur für `authenticated`, `anon` bekommt nichts. Vor dem Schnitt geprüft, dass kein Pfad `anon`-Zugriff braucht (Kopfzeile liest über die Nutzersitzung; `is_trainer_name_taken` und der Anlege-Trigger sind `security definer`). Danach gegengemessen: Registrierung und Lesepfad laufen, Schreibversuche scheitern jetzt am **Tabellenrecht** statt erst an der Policy. **Von einem Test gepinnt**, der die Meldung prüft, nicht den Statuscode — mit Rot-Gegenprobe | ✅ |
+| **BUG-132** | `auth_throttle` behält für `anon` und `authenticated` die **vollen** Tabellenrechte (`arwdDxtm`), hat RLS an und **keine einzige Policy** — es hält also genau eine Schicht, und TRUNCATE unterliegt ihr nicht. Dieselbe Einschicht-Konstruktion, die BUG-122 (`runs`) und BUG-131 (`profiles`) beseitigt haben; `auth_throttle` wurde ausgelassen. **Kein erreichbarer Angriff** (gemessen: REST-Lesen und -Löschen wirkungslos, RPC → 401, PostgREST kennt kein TRUNCATE-Verb). Beim Fix mitzukorrigieren: `0007_active_runs.sql:92` nennt sein Vorgehen „dasselbe Muster wie auth_throttle (0003)", geht aber tatsächlich einen Schritt weiter — `0003` entzieht nur Funktionsrechte | Low | Gefunden am 2026-09-07 im vierten QA-Lauf zu PROJ-2, **von zwei Bahnen unabhängig**. Fix ist derselbe Einzeiler wie bei BUG-122/131 |
 | **BUG-97** | „Stattdessen einloggen" erscheint auch bei einem bloßen Formatfehler in der E-Mail | Low | — |
 
 ### Wie es mit PROJ-1 weitergeht
@@ -85,6 +88,39 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Falls die Test-Abdeckungslücke später doch geschlossen wird, ist BUG-101 der Anfang** — nicht BUG-102: Ein literaler Test je Grenzwert (wie er für zwei der sechs Limits bereits existiert) deckt vier Kriterien auf einmal ab und ist der billigste Schritt. Die Mutationen liegen mit genauem Diff und gemessenem Rot/Grün-Verhalten als fertiges Abnahmekriterium im `qa-report.md` → QA-Abschlusslauf 2026-09-06.
 
-**Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-3** (`Planned`) und danach PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
+**Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
+
+
+## Bekannte Restrisiken — PROJ-2 (Stand 2026-09-07)
+
+> **PROJ-2 steht auf `Approved` mit offenen Punkten.** Entscheidung des Nutzers vom 2026-09-07 nach dem fünften QA-Durchgang: Findet der Abschlusslauf nur noch Low, wird der Rest **dokumentiert akzeptiert statt weiter gebaut**. Er fand nur Low. Diese Liste ist der Preis dieser Entscheidung — sie steht hier, damit niemand `Approved` für „nichts mehr offen" hält.
+>
+> **Kein einziger dieser Punkte trägt ein Sicherheits- oder Datenrisiko.** Der Critical des ersten Laufs (Ergebnisse an der Runde vorbei einreichbar) und alle Autoritätslücken sind geschlossen und mehrfach von Kontexten bestätigt worden, die den Fix nicht gebaut haben.
+
+### Die größte Lücke ist keine Bug-Nummer
+
+**Darstellung und Responsive-Verhalten hat in fünf Läufen niemand gesehen.** `/qa` hat keinen Browser: AC-24, der Uhrstart aus AC-2, die Färbung und die Animationen aus AC-4/AC-6/AC-8, der Puls der Skelettfläche und der Browser-Dialog aus AC-19 sind ausschließlich über Quelltext und Unit-Tests belegt. Das schließt `/e2e-tests`, nicht ein weiterer QA-Durchgang.
+
+### Offen, nach Gewicht
+
+| # | Risiko | Severity | Warum es liegen bleibt |
+| --- | --- | --- | --- |
+| **BUG-112** | AC-25: Textzeile statt Skelettfläche beim Rundenstart und beim Warten | Low | Kosmetik. Für das Quizbild existiert die Skelettfläche |
+| **BUG-125** | AC-34 Satz 2 beschreibt das gebaute Verhalten nicht mehr | Low | Vertragsfrage. Die Alternative — eine vom Client anhaltbare Serveruhr — wurde bewusst verworfen, sie wäre freie Bedenkzeit auf dem Tie-Breaker |
+| **BUG-136** | EC-3 im Wortlaut nicht erfüllt; die Meldung nennt den falschen Grund | Low | Wiederholung funktioniert, Ergebnis ist über die Runden-Kennung nachlesbar |
+| **BUG-137** | Die Drei-Verwürfe-Grenze aus EC-10 liegt nur im Client, `design.md` schreibt sie dem Server zu | Low | Entweder Dokumentfehler oder kleiner Umbau; kein Nutzerschaden |
+| **BUG-138** | Der Entwicklungs-Build protokolliert Sprite-Adressen samt Pokémon-Nummer | Low | Nur Entwicklung, in Produktion unwirksam |
+| **BUG-139** | Die Fehlerkarte nach gescheitertem Start bietet nur eine der beiden in AC-16 genannten Aktionen | Low | Sachlich richtig — es gibt nichts zu beenden. AC-16 kennt den Fall nur nicht |
+| **BUG-140** | Der Text der `no-round`-Karte nennt einen Grund, der nicht feststeht | Low | Dieselbe Klasse wie BUG-136 |
+| **BUG-126** | `replacePreparedQuestionAction` unbegrenzt aufrufbar, erzeugt PokeAPI-Verkehr | Low | Spannung zur Fair-Use-Zusage; kein Zugangsdaten-Pfad, Selbstschaden am eigenen Ziehungsvorrat |
+| **BUG-121** | ~~Fehlerkarte betitelt die angezeigte Frage als „die nächste"~~ | — | **behoben am 2026-09-07**, mit Gegenprobe |
+
+**Vier der neun sind Vertragsfragen**, keine Codefehler: BUG-125, BUG-136, BUG-139, BUG-140 beschreiben Stellen, an denen `spec.md` etwas anderes sagt als das, was mit gutem Grund gebaut wurde. Wer sie schließen will, tut das mit **einem** `/refine PROJ-2`, nicht mit einem Build.
+
+### Wie es mit PROJ-2 weitergeht
+
+**Kein weiterer Fix-Zyklus.** PROJ-2 ist abgenommen. Was tatsächlich vor dem Start passieren muss, steht in der **Deploy-Blocker**-Tabelle und nirgends sonst — für PROJ-2 sind das BUG-12/BUG-116 (Security-Header), BUG-18 (`X-Forwarded-Host`) und T36/T37 (`pg_cron` im gehosteten Projekt).
+
+**Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
 ## Next Available ID: PROJ-5

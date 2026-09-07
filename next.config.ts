@@ -8,30 +8,24 @@ const nextConfig: NextConfig = {
   // attribute on the auth forms is the actual fix; this only removes one way of
   // triggering it and makes testing from a phone possible at all.
   allowedDevOrigins: ['192.168.0.165'],
-  images: {
-    // spec.md AC-20: the browser only ever requests /_next/image on our own
-    // domain — Next fetches the sprite server-side and serves it back. That is
-    // what keeps a player's IP address out of a non-EU CDN, and it is why this
-    // is configuration rather than a hand-written proxy route
-    // (design.md -> Technical Decisions).
-    // Exactly one pattern, as narrow as the feature needs. A second, far wider
-    // one used to sit here (`…/PokeAPI/**`), justified solely by EC-11's repair
-    // path. EC-11 was dropped on 2026-09-04 and its code removed — the entry
-    // stayed, and it was not decoration: it let /_next/image fetch and cache any
-    // image file from any repository of the PokeAPI organisation, unauthenticated
-    // (BUG-22, found independently by all three QA lanes). Removing code without
-    // removing the configuration that only existed for it is how an allow-list
-    // silently outlives its reason.
-    remotePatterns: [
-      new URL(
-        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/**"
-      ),
-    ],
-    // spec.md AC-31: optimized sprites are kept for 31 days. Pokemon artwork
-    // does not change, and the cache key is the image URL plus its size — no
-    // user identity takes part in it (spec.md AC-28).
-    minimumCacheTTL: 2678400,
-  },
+  // **Kein `images`-Block mehr, seit dem 2026-09-06.**
+  //
+  // Bis dahin lieferte die Bild-Optimierung des Frameworks das Quizbild aus, und
+  // `remotePatterns` schaltete dafür den Sprite-Host frei. Das erfüllte AC-20 (der
+  // Browser fragt nur die eigene Domain), brach aber AC-32: Die Quell-Adresse steht
+  // sichtbar in `/_next/image?url=…/official-artwork/25.png` — mit der Nummer darin.
+  // Ein Skript in der Konsole liest sie, schlägt den deutschen Namen nach und klickt
+  // richtig; der Server zählte eine echte Serie.
+  //
+  // Das Bild kommt jetzt aus `src/app/api/question/[token]/image/route.ts`, unter
+  // einem Token statt einer Nummer. Die Freigabe hier zu belassen wäre nicht
+  // folgenlos: Sie hielte den alten, nummernsichtbaren Weg offen und damit einen
+  // zweiten, unbewachten Zugang an AC-32 vorbei — dieselbe Klasse wie BUG-22, wo
+  // eine Freigabe ihren Grund überlebt hat.
+  //
+  // Der Zwischenspeicher wandert mit: Er liegt jetzt auf der `fetch`-Ebene in
+  // `src/lib/pokeapi/client.ts` und hängt weiter an der CDN-Adresse, also an der
+  // Pokémon-Nummer (AC-31, AC-37) — nicht am wechselnden Token.
   logging: {
     // Makes the fetch cache observable at all: in development every outgoing
     // request is printed with its cache status. This is how /qa verifies AC-31

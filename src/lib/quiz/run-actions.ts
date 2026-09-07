@@ -1,27 +1,53 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import { runSubmissionSchema } from '@/lib/validation/quiz'
+import { answerSubmissionSchema } from '@/lib/validation/quiz'
+import { finishRound, submitAnswer } from './round-state'
 import { z } from 'zod'
+import { isBetterThan } from './personal-best'
 
 export type PersonalBest = {
   streak: number
   durationMs: number
 }
 
-export type SaveRunResult =
-  | { status: 'saved'; isPersonalBest: boolean }
-  /** spec.md EC-3 — the caller keeps the result on screen and offers a retry. */
-  | { status: 'failed' }
-  /** spec.md AC-12 — arithmetically impossible, so it is not stored. */
+export type RoundResult = {
+  streak: number
+  /** Die servergemessene Zeit (spec.md AC-34) — nicht der Stand der Anzeigeuhr. */
+  durationMs: number
+  isPersonalBest: boolean
+}
+
+export type AnswerResult =
+  | {
+      status: 'answered'
+      correct: boolean
+      /** Erst jetzt, mit dem Urteil, erfährt der Browser die Lösung (AC-6). */
+      correctIndex: number
+      streak: number
+      /** Gesetzt, sobald die Runde vorbei ist (falsch geantwortet oder Pool leer). */
+      result: RoundResult | null
+    }
+  /**
+   * spec.md EC-1, EC-15 — das Token gehört zu keiner offenen Frage: zweiter
+   * Klick, verwaister Tab, oder die Runde lief anderswo weiter.
+   */
+  | { status: 'stale' }
+  /** spec.md AC-12 — nichts, was unser eigener Client schicken würde. */
   | { status: 'rejected' }
-  /** spec.md EC-7 — session gone; the round is discarded, never reassigned. */
+  /** spec.md EC-7 — Sitzung weg. */
+  | { status: 'unauthenticated' }
+
+export type EndRoundResult =
+  | { status: 'ended'; result: RoundResult }
+  /** Es gab keinen Rundenzustand mehr — ein zweiter Aufruf legt nichts an (EC-4). */
+  | { status: 'gone' }
   | { status: 'unauthenticated' }
 
 /**
- * spec.md AC-8 — the player's best round: highest streak, shortest time on a
- * tie. Reads only the caller's own rows; the table's select policy does not
- * allow anything else (migration 0002).
+ * spec.md AC-8 — der beste eigene Lauf: höchste Serie, bei Gleichstand kürzeste
+ * Zeit. Liest ausschließlich eigene Runden; die Lesepolicy der Tabelle lässt
+ * nichts anderes zu (Migration 0002).
  */
 export async function getPersonalBest(excludeRoundId?: unknown): Promise<PersonalBest | null> {
   const supabase = await createClient()
@@ -30,23 +56,18 @@ export async function getPersonalBest(excludeRoundId?: unknown): Promise<Persona
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  // Validated at the boundary like every other argument that arrives from
-  // outside: this is exported from a `'use server'` file, so it is a public
-  // endpoint whatever the design intended it for (BUG-12). An unparsable value
-  // is refused rather than passed into the query builder.
+  // An der Grenze geprüft wie jedes Argument von außen: Diese Datei ist
+  // `'use server'`, also ist jeder Export ein öffentlicher Endpunkt (BUG-12).
   const parsedExclude = z.uuid().optional().safeParse(excludeRoundId ?? undefined)
   if (!parsedExclude.success) return null
   const excludeId = parsedExclude.data
 
-  let query = supabase
-    .from('runs')
-    .select('streak, duration_ms')
-    .eq('profile_id', user.id)
+  let query = supabase.from('runs').select('streak, duration_ms').eq('profile_id', user.id)
 
-  // Used when saving: the round being stored must not compete with itself, or a
-  // repeated submission of a record round would report "no record" the second
-  // time (spec.md EC-4).
-  if (excludeId) query = query.neq('client_round_id', excludeId)
+  // Beim Speichern gebraucht: Die gerade geschriebene Runde darf nicht gegen
+  // sich selbst antreten, sonst meldete ein Rekord beim zweiten Aufruf „kein
+  // Rekord" (spec.md EC-4).
+  if (excludeId) query = query.neq('round_id', excludeId)
 
   const { data } = await query
     .order('streak', { ascending: false })
@@ -59,47 +80,114 @@ export async function getPersonalBest(excludeRoundId?: unknown): Promise<Persona
 }
 
 /**
- * spec.md AC-11, AC-12, AC-14 — stores one finished round.
+ * spec.md EC-3 — das Ergebnis einer Runde nachlesen.
  *
- * The row is always written for the session's own profile; a profile id from
- * the caller is never trusted, and the table's insert policy rejects one anyway.
- * Submitting the same clientRoundId twice does not create a second row and
- * still reports success (spec.md EC-4) — the uniqueness is enforced by the
- * database, so it holds even for two requests arriving at once.
+ * Gebraucht, wenn die Antwort des Servers unterwegs verlorengeht: Der Server hat
+ * die Zeile dann geschrieben und den Rundenzustand gelöscht, der Browser hat
+ * aber kein Ergebnis. Mit der Runden-Kennung, die er beim Start bekommen hat,
+ * holt er es nach, statt den Spieler ohne Ergebnis stehenzulassen.
+ *
+ * Liest über die Sitzung des Nutzers, nicht über den Administrationszugang — die
+ * Lesepolicy aus Migration 0002 lässt ohnehin nur eigene Runden zu (AC-14).
  */
-export async function saveRun(submission: unknown): Promise<SaveRunResult> {
-  const parsed = runSubmissionSchema.safeParse(submission)
-  if (!parsed.success) return { status: 'rejected' }
+export async function getRunByRoundIdAction(roundId: unknown): Promise<RoundResult | null> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return null
 
-  const { streak, durationMs, clientRoundId } = parsed.data
+  const parsed = z.uuid().safeParse(roundId)
+  if (!parsed.success) return null
 
+  const { data } = await supabase
+    .from('runs')
+    .select('streak, duration_ms')
+    .eq('profile_id', user.id)
+    .eq('round_id', parsed.data)
+    .maybeSingle()
+
+  if (!data) return null
+
+  const previousBest = await getPersonalBest(parsed.data)
+  return {
+    streak: data.streak,
+    durationMs: data.duration_ms,
+    isPersonalBest: isBetterThan(data.streak, data.duration_ms, previousBest),
+  }
+}
+
+/**
+ * spec.md AC-33, AC-34, AC-35 — eine Antwort abgeben.
+ *
+ * Der Browser schickt das Frage-Token und die gewählte Position, sonst nichts.
+ * Geurteilt, gezählt und gemessen wird in der Datenbank (Migration 0009); diese
+ * Action übersetzt nur und ergänzt bei Rundenende den Bestleistungs-Vergleich.
+ */
+export async function answerAction(submission: unknown): Promise<AnswerResult> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { status: 'unauthenticated' }
 
-  // "Is this a new record?" compares against every other round of this player —
-  // excluding this one, so a repeated submission answers the same as the first.
-  const previousBest = await getPersonalBest(clientRoundId)
+  const parsed = answerSubmissionSchema.safeParse(submission)
+  if (!parsed.success) return { status: 'rejected' }
 
-  const { error } = await supabase.from('runs').insert({
-    profile_id: user.id,
-    streak,
-    duration_ms: durationMs,
-    client_round_id: clientRoundId,
-  })
+  const verdict = await submitAnswer(user.id, parsed.data.token, parsed.data.choice)
+  if (!verdict.matched) return { status: 'stale' }
 
-  if (error) {
-    // 23505 = unique violation: this round was already stored, which is exactly
-    // what EC-4 asks for. Anything else is a real failure (EC-3).
-    if (error.code !== '23505') return { status: 'failed' }
+  let result: RoundResult | null = null
+  if (verdict.finished && verdict.durationMs !== null && verdict.roundId) {
+    const previousBest = await getPersonalBest(verdict.roundId)
+    result = {
+      streak: verdict.streak,
+      durationMs: verdict.durationMs,
+      isPersonalBest: isBetterThan(verdict.streak, verdict.durationMs, previousBest),
+    }
   }
 
-  const isPersonalBest =
-    !previousBest ||
-    streak > previousBest.streak ||
-    (streak === previousBest.streak && durationMs < previousBest.durationMs)
+  return {
+    status: 'answered',
+    correct: verdict.correct,
+    correctIndex: verdict.correctIndex as number,
+    streak: verdict.streak,
+    result,
+  }
+}
 
-  return { status: 'saved', isPersonalBest }
+/**
+ * spec.md AC-18 — „Runde beenden" aus der Fehlerkarte heraus. Die bis dahin
+ * erreichte Serie und die gemessene Zeit werden normal gewertet und gespeichert.
+ *
+ * **Die Runden-Kennung ist Pflicht** (BUG-120): Ohne sie beendete der Aufruf,
+ * was gerade aktiv war — ein veralteter Tab konnte damit die laufende Runde
+ * eines anderen Tabs beenden und bekam deren Ergebnis angezeigt. Passt die
+ * Kennung nicht, meldet die Datenbank `written = false`, und hier wird daraus
+ * `gone`.
+ */
+export async function endRoundAction(roundId: unknown): Promise<EndRoundResult> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { status: 'unauthenticated' }
+
+  const parsed = z.uuid().safeParse(roundId)
+  if (!parsed.success) return { status: 'gone' }
+
+  const finished = await finishRound(user.id, parsed.data)
+  if (!finished.written || finished.streak === null || finished.durationMs === null) {
+    return { status: 'gone' }
+  }
+
+  const previousBest = await getPersonalBest(finished.roundId ?? undefined)
+  return {
+    status: 'ended',
+    result: {
+      streak: finished.streak,
+      durationMs: finished.durationMs,
+      isPersonalBest: isBetterThan(finished.streak, finished.durationMs, previousBest),
+    },
+  }
 }

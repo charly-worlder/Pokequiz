@@ -1,4 +1,6 @@
-import { expect, type APIRequestContext, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
+import { createClient } from '@supabase/supabase-js'
+import { expect, type Page } from '@playwright/test'
 
 /**
  * Gemeinsame Bausteine der E2E-Journeys zu PROJ-2.
@@ -38,29 +40,6 @@ export async function register(page: Page, prefix: string) {
   await expect(page.getByRole('button', { name: 'Runde starten' })).toBeVisible()
 
   return { trainer, email }
-}
-
-/**
- * Wartet auf die Antwort des Aufrufs, der die Runde speichert.
- *
- * **Muss vor dem auslösenden Klick aufgerufen werden** — der Rückgabewert wird
- * danach abgewartet.
- *
- * Warum nicht `waitForLoadState('networkidle')`: Das löst auf, sobald das Netz
- * gerade ruhig ist — auch dann, wenn der Speicher-Aufruf noch gar nicht gestartet
- * ist. Eine Abwesenheitsprüfung dahinter ist immer grün und würde eine kaputte
- * Rekordlogik durchwinken. Nachgemessen: Nach `networkidle` fehlt das
- * Bestleistungs-Abzeichen selbst dann, wenn es korrekt erscheinen müsste.
- *
- * Alle Server Actions dieses Features sprechen dieselbe Adresse an; unterscheidbar
- * sind sie am Rumpf. Nur das Speichern trägt das Runden-Kennzeichen mit sich.
- */
-export function runSavedResponse(page: Page) {
-  return page.waitForResponse(
-    (response) =>
-      response.request().method() === 'POST' &&
-      (response.request().postData() ?? '').includes('clientRoundId')
-  )
 }
 
 /** Die vier Antwort-Schaltflächen der offenen Frage. */
@@ -117,72 +96,80 @@ export function clockValue(page: Page) {
   return page.getByText('Zeit', { exact: true }).locator('xpath=following-sibling::p[1]')
 }
 
-/** Die Pokémon-Nummer der gezeigten Frage, gelesen aus der Bildadresse. */
-export async function currentPokemonId(page: Page) {
-  const src = await questionImage(page).getAttribute('src')
-  const id = decodeURIComponent(src ?? '').match(/\/(\d+)\.png/)?.[1]
-  expect(id, `Pokémon-Nummer nicht aus der Bildadresse lesbar: ${src}`).toBeTruthy()
-  return id as string
-}
 
 /**
- * Der offizielle deutsche Name zu einer Nummer.
+ * Der Zugang, über den die Suite die richtige Antwort erfährt.
  *
- * Der Test muss die richtige Antwort von außen kennen — die Oberfläche verrät sie
- * vor der Antwort nicht, und das ist beabsichtigt. Gefragt wird dieselbe Quelle,
- * aus der die App ihre Optionen zieht; pro Testprozess wird jede Nummer nur einmal
- * abgefragt, damit die Suite die Fair-Use-Bitte der PokeAPI nicht unterläuft
- * (spec.md AC-31).
+ * **Das ist der Kern der Umstellung vom 2026-09-06.** Bis dahin las der Test die
+ * Pokémon-Nummer aus der Bildadresse und schlug den deutschen Namen bei der
+ * PokeAPI nach — genau der Weg, den ein Betrüger genommen hätte, und genau
+ * deshalb ist er weg (spec.md AC-32). Die Wahrheit steht jetzt nur noch in der
+ * Datenbank, und der Test kommt an sie ausschließlich mit dem Service-Role-
+ * Schlüssel — also über einen Kanal, den ein Browser nie hat.
+ *
+ * Dass dieser Umweg überhaupt nötig ist, ist die Aussage: Aus der Seite allein
+ * lässt sich die Lösung nicht mehr gewinnen.
  */
-const germanNames = new Map<string, string>()
-
-export async function germanNameFor(request: APIRequestContext, id: string) {
-  const cached = germanNames.get(id)
-  if (cached) return cached
-
-  const response = await request.get(`https://pokeapi.co/api/v2/pokemon-species/${id}`)
-  expect(response.ok(), `PokeAPI antwortete mit ${response.status()} für #${id}`).toBeTruthy()
-
-  const body = (await response.json()) as { names: { language: { name: string }; name: string }[] }
-  const german = body.names.find((entry) => entry.language.name === 'de')?.name
-  expect(german, `Kein deutscher Name für #${id}`).toBeTruthy()
-
-  germanNames.set(id, german as string)
-  return german as string
+function envFromLocalFile(key: string): string {
+  const raw = readFileSync('.env.local', 'utf8')
+  const line = raw
+    .split(String.fromCharCode(10))
+    .find((entry) => entry.startsWith(`${key}=`))
+  const value = line?.slice(key.length + 1).trim()
+  expect(value, `${key} fehlt in .env.local — ohne ihn kann die Suite keine Runde spielen`).toBeTruthy()
+  return value as string
 }
 
-function escapeForRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const admin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? envFromLocalFile('NEXT_PUBLIC_SUPABASE_URL'),
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? envFromLocalFile('SUPABASE_SERVICE_ROLE_KEY'),
+  { auth: { persistSession: false, autoRefreshToken: false } }
+)
+
+/** Das Frage-Token der gezeigten Frage — undurchsichtig, ohne Pokémon-Nummer (AC-32). */
+export async function currentToken(page: Page) {
+  const src = await questionImage(page).getAttribute('src')
+  const token = src?.match(new RegExp('/api/question/([0-9a-f-]{36})/image'))?.[1]
+  expect(token, `Kein Frage-Token in der Bildadresse: ${src}`).toBeTruthy()
+  return token as string
 }
 
-/** Die Schaltfläche mit genau diesem Namen — `aria-label` ist „Antwort A: <Name>". */
-export function optionNamed(page: Page, label: string) {
-  return page.getByRole('button', {
-    name: new RegExp(`^Antwort [A-D]: ${escapeForRegExp(label)}$`),
-  })
+/** Die richtige Position zu einem Frage-Token, gelesen aus dem Rundenzustand. */
+export async function correctIndexFor(token: string) {
+  const { data, error } = await admin
+    .from('active_runs')
+    .select('current_correct_index')
+    .eq('current_token', token)
+    .maybeSingle()
+
+  expect(error, `Rundenzustand nicht lesbar: ${error?.message}`).toBeNull()
+  expect(data, `Kein offener Zustand zum Token ${token}`).toBeTruthy()
+  return (data as { current_correct_index: number }).current_correct_index
 }
 
-/** Beantwortet die offene Frage richtig und gibt den gewählten Namen zurück. */
-export async function answerCorrectly(page: Page, request: APIRequestContext) {
+/** Beantwortet die offene Frage richtig und gibt die gewählte Position zurück. */
+export async function answerCorrectly(page: Page) {
   await waitForQuestion(page)
-  const id = await currentPokemonId(page)
-  const german = await germanNameFor(request, id)
-  await optionNamed(page, german).click()
-  return { id, german }
+  const token = await currentToken(page)
+  const index = await correctIndexFor(token)
+  const german = await optionLabelAt(page, index)
+  await answerOptions(page).nth(index).click()
+  return { token, index, german }
 }
 
-/** Beantwortet die offene Frage falsch und gibt den richtigen Namen zurück. */
-export async function answerWrongly(page: Page, request: APIRequestContext) {
+/** Beantwortet die offene Frage falsch und gibt die richtige Position zurück. */
+export async function answerWrongly(page: Page) {
   await waitForQuestion(page)
-  const id = await currentPokemonId(page)
-  const german = await germanNameFor(request, id)
+  const token = await currentToken(page)
+  const index = await correctIndexFor(token)
+  const german = await optionLabelAt(page, index)
+  const wrong = index === 0 ? 1 : 0
+  await answerOptions(page).nth(wrong).click()
+  return { token, index, german, chosen: wrong }
+}
 
-  const labels = await answerOptions(page).evaluateAll((nodes) =>
-    nodes.map((node) => node.getAttribute('aria-label') ?? '')
-  )
-  const wrong = labels.find((label) => !label.endsWith(`: ${german}`))
-  expect(wrong, 'Keine falsche Option gefunden').toBeTruthy()
-
-  await page.getByRole('button', { name: wrong as string, exact: true }).click()
-  return { id, german }
+/** Der sichtbare Name hinter einer Antwort-Position (`aria-label` ist „Antwort A: <Name>"). */
+export async function optionLabelAt(page: Page, index: number) {
+  const label = await answerOptions(page).nth(index).getAttribute('aria-label')
+  return (label ?? '').replace(/^Antwort [A-D]: /, '')
 }
