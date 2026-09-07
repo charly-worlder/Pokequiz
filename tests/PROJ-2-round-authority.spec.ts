@@ -40,6 +40,16 @@ const admin = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } }
 )
 
+/** Die Kennung der gerade laufenden Runde — der Browser kennt sie auch, sie verrät nichts. */
+async function activeRoundId(profileId: string) {
+  const { data } = await admin
+    .from('active_runs')
+    .select('round_id')
+    .eq('profile_id', profileId)
+    .maybeSingle()
+  return (data as { round_id: string } | null)?.round_id ?? null
+}
+
 async function profileIdFor(trainer: string) {
   const { data } = await admin.from('profiles').select('id').eq('trainer_name', trainer).maybeSingle()
   expect(data, `Kein Profil zu ${trainer}`).toBeTruthy()
@@ -159,6 +169,107 @@ test('Der Rundenzustand ist nach dem Rundenende gelöscht (AC-39)', async ({ pag
   expect(after.data, 'Nach dem Rundenende ist er weg — im selben Vorgang (AC-39)').toHaveLength(0)
 })
 
+/**
+ * spec.md AC-18, AC-36, EC-15 — **der veraltete Tab, direkt hergestellt.**
+ *
+ * Der Zustand wird hier nicht über die Oberfläche erspielt, sondern gesetzt: zwei
+ * Runden nacheinander, die zweite verdrängt die erste (AC-36). Danach wird das
+ * Rundenende so ausgelöst, wie der veraltete Tab es täte — mit **seiner** alten
+ * Runden-Kennung.
+ *
+ * Vor dem Fix beendete das die laufende Runde des anderen Tabs und lieferte
+ * dessen Ergebnis zurück (BUG-120).
+ */
+test('Ein veralteter Tab beendet nicht die laufende Runde des anderen (AC-36, BUG-120)', async ({
+  page,
+  context,
+}) => {
+  const { trainer } = await register(page, 'e2eStale')
+  const profileId = await profileIdFor(trainer)
+
+  // Runde A — der Tab, der gleich veraltet
+  await page.getByRole('button', { name: 'Runde starten' }).click()
+  await waitForQuestion(page)
+  const roundA = await activeRoundId(profileId)
+
+  // Runde B verdrängt sie (AC-36)
+  const second = await context.newPage()
+  await second.goto('/')
+  await second.getByRole('button', { name: 'Runde starten' }).click()
+  await waitForQuestion(second)
+  const roundB = await activeRoundId(profileId)
+  expect(roundB, 'Die zweite Runde muss eine andere sein').not.toBe(roundA)
+
+  // Der veraltete Tab beendet „seine" Runde.
+  const stale = await admin.rpc('finish_round', { p_profile: profileId, p_round_id: roundA })
+  expect(stale.error).toBeNull()
+  expect(
+    stale.data?.[0]?.written,
+    'Eine Runde, die es nicht mehr gibt, lässt sich nicht beenden'
+  ).toBe(false)
+
+  // Und Runde B lebt unverändert weiter.
+  expect(await activeRoundId(profileId), 'Runde B läuft weiter').toBe(roundB)
+  const { data: written } = await admin.from('runs').select('round_id').eq('profile_id', profileId)
+  expect(written, 'Es wurde nichts geschrieben').toHaveLength(0)
+
+  // Gegenprobe: Mit der richtigen Kennung geht es sehr wohl.
+  const proper = await admin.rpc('finish_round', { p_profile: profileId, p_round_id: roundB })
+  expect(proper.data?.[0]?.written).toBe(true)
+
+  await second.close()
+})
+
+/**
+ * spec.md AC-35, EC-2 — **der erschöpfte Ziehungsvorrat, direkt hergestellt.**
+ *
+ * Durch die Oberfläche wäre dieser Zustand erst nach rund 380 Fragen erreichbar.
+ * Hier wird er gesetzt: Die Ausschlussliste der laufenden Runde bekommt alle 386
+ * Nummern, die vorbereitete Frage wird entfernt. Der Spieler beantwortet dann
+ * seine letzte offene Frage — und danach gibt es nichts mehr zu ziehen.
+ *
+ * Erwartet wird, dass **der Server** die Runde wertet und schreibt (AC-35). Vor
+ * dem Fix hing das an einem zusätzlichen Aufruf des Browsers; blieb der aus, war
+ * das Ergebnis verloren (BUG-119).
+ */
+test('Erschöpfter Vorrat: der Server wertet die Runde (AC-35, EC-2)', async ({ page }) => {
+  const { trainer } = await register(page, 'e2eDrained')
+  const profileId = await profileIdFor(trainer)
+
+  await page.getByRole('button', { name: 'Runde starten' }).click()
+  await waitForQuestion(page)
+
+  // Der Vorrat ist auf: alle 386 Nummern gezogen, nichts vorbereitet.
+  const drain = await admin
+    .from('active_runs')
+    .update({
+      seen_ids: Array.from({ length: 386 }, (_, i) => i + 1),
+      prepared_answer_id: null,
+      prepared_correct_index: null,
+      prepared_token: null,
+    })
+    .eq('profile_id', profileId)
+  expect(drain.error).toBeNull()
+
+  // Die letzte offene Frage wird richtig beantwortet.
+  await answerCorrectly(page)
+
+  // Der Server beendet die Runde und schreibt sie — der Browser zeigt sie nur.
+  await expect(page.getByText('Runde beendet')).toBeVisible({ timeout: 15_000 })
+
+  const { data: written } = await admin
+    .from('runs')
+    .select('streak')
+    .eq('profile_id', profileId)
+  expect(written, 'Genau eine gewertete Runde').toHaveLength(1)
+  expect(written?.[0].streak, 'Die eine richtige Antwort zählt').toBe(1)
+
+  const { data: open } = await admin
+    .from('active_runs')
+    .select('profile_id')
+    .eq('profile_id', profileId)
+  expect(open, 'Kein Rundenzustand bleibt zurück (AC-39)').toHaveLength(0)
+})
 test('Die Bildadresse verrät die Pokémon-Nummer nicht (AC-32)', async ({ page }) => {
   await register(page, 'e2eOpaque')
   await page.getByRole('button', { name: 'Runde starten' }).click()

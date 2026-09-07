@@ -302,6 +302,26 @@ Warum es keiner der eigenen Prüfungen auffiel: Sie befragen die Anwendung durch
 - Rot-Gegenprobe je Fix: Policy wiederhergestellt → E2E rot · `onFailed` abgeklemmt → beide Unit-Tests rot · Rundenende bei leerem Vorrat entfernt → Unit-Test rot; nach Rücknahme jeweils wieder grün
 - Schreibweg direkt gemessen: `POST /rest/v1/runs` → **403 permission denied**, Lesen weiterhin **200**
 
+## Notizen aus dem zweiten Fix-Lauf (2026-09-07)
+
+**BUG-119 — ein Fix, der das Problem nur verschoben hat.** Der erste Anlauf gegen BUG-114 beseitigte den sichtbaren Hänger, indem der **Browser** die Runde beendete. Der Nachlauf hat gezeigt, warum das zu wenig war: AC-35 nennt „weil der Pool erschöpft ist" ausdrücklich als eine der drei Endbedingungen, bei denen **der Server** schreibt, bevor er antwortet. Blieb der Aufruf des Browsers aus, war das Ergebnis wie vorher verloren. Die Wertung sitzt jetzt in `prepareNext` — aber nur, wenn dort keine Frage mehr offensteht, sonst würde eine laufende Frage unter dem Spieler weggewertet.
+
+Die Lehre daraus ist die gleiche wie bei BUG-110, nur andersherum: Dort blieb eine alte Berechtigung stehen, hier blieb eine Zuständigkeit beim Falschen. **Ein Fix, der das Symptom im Client beseitigt, während der Vertrag den Server nennt, ist kein Fix.**
+
+**BUG-120 — der Fix hat einen bestehenden Konstruktionsfehler freigelegt.** `finish_round(p_profile)` beendete, was gerade aktiv war. Antworten waren immer schon token-geprüft; das Rundenende war die einzige Stelle, an der der Server nicht wissen wollte, wovon die Rede ist. Aufgefallen ist das erst, als der BUG-111-Fix einen veralteten Tab überhaupt erst in die Fehlerkarte brachte — dort steht „Runde beenden". Die Funktion nimmt jetzt die Runden-Kennung entgegen (Migration `0012`); passt sie nicht, geschieht nichts.
+
+**BUG-113 — der Text musste sich der Wahrheit beugen, nicht umgekehrt.** Die Karte behauptete „die Uhr steht so lange still". Das gilt für die **angezeigte** Uhr immer, für die **gewertete** Zeit aber nur, wenn serverseitig keine Frage offensteht. Die Karte unterscheidet die beiden Fälle jetzt.
+
+Die naheliegende Alternative — die Serveruhr beim Bildfehler anhalten — wurde **verworfen**: Sie wäre vom Client auslösbar und damit freie Bedenkzeit auf dem Tie-Breaker. Genau dieser Weg ist beim Entwurf schon einmal ausgeschlossen worden (siehe die Begründung zu EC-12); ihn hier wieder zu öffnen, hätte einen Anzeigefehler gegen eine Manipulationsmöglichkeit getauscht.
+
+**Zur Lesart von AC-16.** Das Kriterium sagt „die Uhr steht still". Gemeint ist die **angezeigte** Uhr — AC-2 nennt sie ausdrücklich „Anzeige" und verweist für die Wertung auf AC-34. Unter dieser Lesart ist AC-16 erfüllt, und BUG-113 war ein Textfehler. Läse man „die Uhr" als die gewertete Zeit, wäre es keine Code-, sondern eine Vertragsfrage und gehörte in ein `/refine`.
+
+### Verifikation
+
+- `npm test` **247/247**, `npm run lint` **0**, `npm run build` **Exit 0**, `npx playwright test` **66/66** in drei Engines
+- Rot-Gegenprobe je Fix: `finish_round` ohne Kennung → E2E rot · Server wertet nicht mehr → E2E rot · Karte behauptet wieder immer die stehende Uhr → Unit-Test rot; nach Rücknahme jeweils grün
+- Die beiden neuen E2E-Tests stellen ihren Zustand **direkt** her, nicht über die Oberfläche — der erschöpfte Vorrat wäre sonst erst nach rund 380 Fragen erreichbar
+
 ## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)
 
 > Alles ab hier beschreibt den **clientseitig geführten** Entwurf, den `/refine PROJ-2` am 2026-09-06 abgelöst hat. Er bleibt vollständig stehen, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde und Bug-Nummern verweisen — und weil die Begründungen zeigen, welche Überlegung damals wozu geführt hat.

@@ -15,11 +15,24 @@ export function LoadErrorCard({
   streak,
   retrying,
   message,
+  timeKeepsRunning,
   onRetry,
   onEndRound,
 }: {
   streak: number
   retrying: boolean
+  /**
+   * Läuft die **servergemessene** Zeit gerade weiter (spec.md AC-34)?
+   *
+   * Sie tut das genau dann, wenn serverseitig noch eine Frage offen ist — also
+   * wenn das Bild der **angezeigten** Frage nicht kam. Liegt keine Frage offen
+   * (die nächste ließ sich nicht laden), zählt der Server nichts.
+   *
+   * Die Karte behauptete bis zum 2026-09-07 in beiden Fällen, die Uhr stehe
+   * still (BUG-113). Das stimmte nur im zweiten. Die angezeigte Uhr pausiert
+   * ohnehin immer — hier geht es um die Zeit, die am Ende gewertet wird.
+   */
+  timeKeepsRunning: boolean
   /**
    * Abweichender Grund, falls die Frage nicht am Laden liegt — etwa eine Runde,
    * die in einem anderen Tab weiterlief (spec.md EC-15). Ohne Angabe steht hier
@@ -39,13 +52,20 @@ export function LoadErrorCard({
           {message ? 'Diese Runde ist nicht mehr offen' : 'Die nächste Frage lädt gerade nicht'}
         </h2>
         <p className="mx-auto max-w-[40ch] text-[15px] text-muted-foreground text-pretty">
-          {message ?? (
-            <>
-              Die Pokémon-Datenquelle antwortet nicht. Deine Serie von{' '}
-              <span className="tabular font-semibold text-foreground">{streak}</span> bleibt
-              erhalten, und die Uhr steht so lange still.
-            </>
-          )}
+          {message ??
+            (timeKeepsRunning ? (
+              <>
+                Das Bild dieser Frage lädt nicht. Deine Serie von{' '}
+                <span className="tabular font-semibold text-foreground">{streak}</span> bleibt
+                erhalten — die Frage ist aber weiter offen, ihre Zeit läuft also mit.
+              </>
+            ) : (
+              <>
+                Die Pokémon-Datenquelle antwortet nicht. Deine Serie von{' '}
+                <span className="tabular font-semibold text-foreground">{streak}</span> bleibt
+                erhalten, und die Uhr steht so lange still.
+              </>
+            ))}
         </p>
       </div>
 

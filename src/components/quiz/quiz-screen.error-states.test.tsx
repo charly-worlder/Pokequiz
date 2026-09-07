@@ -57,7 +57,10 @@ async function openRound() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  // `resetAllMocks` statt `clearAllMocks`: Letzteres leert nur die Aufrufliste,
+  // nicht die mit `mockResolvedValueOnce` gefuellte Warteschlange — ein nicht
+  // verbrauchter Eintrag waere sonst in den naechsten Test geleckt.
+  vi.resetAllMocks()
   actions.promoteQuestionAction.mockResolvedValue({ promoted: true })
   actions.startRoundAction.mockResolvedValue({
     status: 'ok',
@@ -172,6 +175,43 @@ describe('QuizScreen — das Bild der angezeigten Frage (BUG-111)', () => {
   })
 })
 
+describe('QuizScreen — was die Fehlerkarte über die Zeit sagt (BUG-113)', () => {
+  it('sagt bei offener Frage, dass die Zeit mitläuft — sie tut es (AC-34)', async () => {
+    await openRound()
+
+    // Das Bild der ANGEZEIGTEN Frage fällt aus: Serverseitig bleibt die Frage
+    // offen, ihre Zeit läuft also weiter.
+    fireEvent.error(visibleImage()!)
+    fireEvent.error(visibleImage()!)
+    await waitFor(() =>
+      expect(screen.getByText(/ihre Zeit läuft also mit/)).toBeInTheDocument()
+    )
+    expect(screen.queryByText(/die Uhr steht so lange still/)).not.toBeInTheDocument()
+  })
+
+  it('sagt bei fehlender Nachfolgerin, dass die Uhr stillsteht — sie tut es (AC-16)', async () => {
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 3,
+      result: null,
+    })
+    actions.prepareNextQuestionAction.mockResolvedValue({ status: 'unavailable' })
+    actions.replacePreparedQuestionAction.mockResolvedValue({ status: 'unavailable' })
+
+    await openRound()
+    fireEvent.error(probeImage()!)
+    await waitFor(() => expect(actions.replacePreparedQuestionAction).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    // Jetzt steht serverseitig keine Frage offen — dann zählt der Server nichts.
+    await waitFor(() => expect(screen.getByText(/die Uhr steht so lange still/)).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+  })
+})
+
 describe('QuizScreen — erschöpfter Ziehungsvorrat (BUG-114)', () => {
   it('beendet die Runde und wertet sie, statt hängenzubleiben (EC-2)', async () => {
     actions.answerAction.mockResolvedValue({
@@ -181,11 +221,19 @@ describe('QuizScreen — erschöpfter Ziehungsvorrat (BUG-114)', () => {
       streak: 5,
       result: null,
     })
-    actions.prepareNextQuestionAction.mockResolvedValue({ status: 'pool-empty' })
-    actions.endRoundAction.mockResolvedValue({
-      status: 'ended',
-      result: { streak: 5, durationMs: 42_000, isPersonalBest: false },
-    })
+    // **Der Server wertet, nicht der Browser** (AC-35, BUG-119): Das Ergebnis
+    // kommt mit der „Pool leer“-Antwort mit, nicht ueber einen zusaetzlichen Aufruf.
+    //
+    // Die Reihenfolge bildet nach, was der Server wirklich liefert: Solange noch
+    // eine Frage offensteht, kommt kein Ergebnis mit — erst wenn keine mehr da ist.
+    // Erst steht noch eine Frage offen — dann kommt kein Ergebnis mit. Danach ist
+    // der Vorrat leer und der Server hat gewertet.
+    actions.prepareNextQuestionAction
+      .mockResolvedValueOnce({ status: 'pool-empty', result: null })
+      .mockResolvedValueOnce({
+        status: 'pool-empty',
+        result: { streak: 5, durationMs: 42_000, isPersonalBest: false },
+      })
 
     await openRound()
 
@@ -203,7 +251,9 @@ describe('QuizScreen — erschöpfter Ziehungsvorrat (BUG-114)', () => {
     await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument(), {
       timeout: 3000,
     })
-    expect(actions.endRoundAction).toHaveBeenCalled()
+    // Und zwar ohne dass der Browser das Rundenende ausloesen muss: Bliebe sein
+    // Aufruf aus, waere das Ergebnis sonst verloren (BUG-119).
+    expect(actions.endRoundAction).not.toHaveBeenCalled()
     expect(screen.queryByText('Runde wird vorbereitet …')).not.toBeInTheDocument()
   })
 })

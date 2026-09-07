@@ -10,9 +10,14 @@ const state = vi.hoisted(() => ({
   startRound: vi.fn(),
   setPreparedQuestion: vi.fn(),
   discardPreparedQuestion: vi.fn(),
+  promotePreparedQuestion: vi.fn(),
   getRoundSnapshot: vi.fn(),
+  finishRound: vi.fn(),
 }))
 vi.mock('./round-state', () => state)
+
+const { getPersonalBest } = vi.hoisted(() => ({ getPersonalBest: vi.fn() }))
+vi.mock('./run-actions', () => ({ getPersonalBest }))
 
 import {
   startRoundAction,
@@ -140,7 +145,7 @@ describe('replacePreparedQuestionAction', () => {
 })
 
 describe('prepareNextQuestionAction', () => {
-  it('meldet „Pool leer", wenn keine Nummer mehr übrig ist (EC-2)', async () => {
+  it('beendet die Runde selbst, wenn der Vorrat erschöpft ist und keine Frage offensteht (AC-35, EC-2)', async () => {
     state.getRoundSnapshot.mockResolvedValue({
       roundId: 'r-1',
       seenIds: [],
@@ -149,8 +154,37 @@ describe('prepareNextQuestionAction', () => {
       hasPrepared: false,
     })
     drawQuestion.mockResolvedValue('pool-empty')
+    state.finishRound.mockResolvedValue({
+      roundId: 'r-1',
+      streak: 386,
+      durationMs: 12_000,
+      written: true,
+    })
+    getPersonalBest.mockResolvedValue(null)
 
-    expect(await prepareNextQuestionAction()).toEqual({ status: 'pool-empty' })
+    const result = await prepareNextQuestionAction()
+
+    // Der Server wertet, nicht der Browser: Bleibt dessen Aufruf aus, wäre das
+    // Ergebnis sonst verloren (BUG-119).
+    expect(state.finishRound).toHaveBeenCalledWith('user-1', 'r-1')
+    expect(result).toEqual({
+      status: 'pool-empty',
+      result: { streak: 386, durationMs: 12_000, isPersonalBest: true },
+    })
+  })
+
+  it('beendet die Runde NICHT, solange noch eine Frage offensteht (AC-35)', async () => {
+    state.getRoundSnapshot.mockResolvedValue({
+      roundId: 'r-1',
+      seenIds: [],
+      streak: 5,
+      hasCurrent: true,
+      hasPrepared: false,
+    })
+    drawQuestion.mockResolvedValue('pool-empty')
+
+    expect(await prepareNextQuestionAction()).toEqual({ status: 'pool-empty', result: null })
+    expect(state.finishRound).not.toHaveBeenCalled()
   })
 
   it('meldet „nicht ladbar", wenn es gar keine laufende Runde gibt', async () => {

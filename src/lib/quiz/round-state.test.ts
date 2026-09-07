@@ -159,9 +159,14 @@ describe('submitAnswer', () => {
 })
 
 describe('finishRound', () => {
-  it('meldet die geschriebene Runde', async () => {
-    makeAdmin([{ round_id: 'r-1', streak: 5, duration_ms: 9000, written: true }])
-    expect(await finishRound('p-1')).toEqual({
+  it('nennt die zu beendende Runde und meldet die geschriebene zurück', async () => {
+    const calls = makeAdmin([{ round_id: 'r-1', streak: 5, duration_ms: 9000, written: true }])
+    const result = await finishRound('p-1', 'r-1')
+
+    // Ohne die Kennung beendete der Aufruf, was gerade aktiv war — ein veralteter
+    // Tab konnte damit die laufende Runde eines anderen beenden (BUG-120).
+    expect(calls[0].args).toEqual({ p_profile: 'p-1', p_round_id: 'r-1' })
+    expect(result).toEqual({
       roundId: 'r-1',
       streak: 5,
       durationMs: 9000,
@@ -171,7 +176,12 @@ describe('finishRound', () => {
 
   it('meldet den zweiten Aufruf als nicht geschrieben (EC-4)', async () => {
     makeAdmin([{ round_id: null, streak: null, duration_ms: null, written: false }])
-    expect((await finishRound('p-1')).written).toBe(false)
+    expect((await finishRound('p-1', 'r-1')).written).toBe(false)
+  })
+
+  it('meldet eine fremde Runden-Kennung als nicht geschrieben (BUG-120)', async () => {
+    makeAdmin([{ round_id: null, streak: null, duration_ms: null, written: false }])
+    expect((await finishRound('p-1', 'r-fremd')).written).toBe(false)
   })
 })
 

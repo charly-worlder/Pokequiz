@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { answerSubmissionSchema } from '@/lib/validation/quiz'
 import { finishRound, submitAnswer } from './round-state'
 import { z } from 'zod'
+import { isBetterThan } from './personal-best'
 
 export type PersonalBest = {
   streak: number
@@ -116,12 +117,6 @@ export async function getRunByRoundIdAction(roundId: unknown): Promise<RoundResu
   }
 }
 
-function isBetterThan(streak: number, durationMs: number, previous: PersonalBest | null): boolean {
-  if (!previous) return true
-  if (streak > previous.streak) return true
-  return streak === previous.streak && durationMs < previous.durationMs
-}
-
 /**
  * spec.md AC-33, AC-34, AC-35 — eine Antwort abgeben.
  *
@@ -164,15 +159,24 @@ export async function answerAction(submission: unknown): Promise<AnswerResult> {
 /**
  * spec.md AC-18 — „Runde beenden" aus der Fehlerkarte heraus. Die bis dahin
  * erreichte Serie und die gemessene Zeit werden normal gewertet und gespeichert.
+ *
+ * **Die Runden-Kennung ist Pflicht** (BUG-120): Ohne sie beendete der Aufruf,
+ * was gerade aktiv war — ein veralteter Tab konnte damit die laufende Runde
+ * eines anderen Tabs beenden und bekam deren Ergebnis angezeigt. Passt die
+ * Kennung nicht, meldet die Datenbank `written = false`, und hier wird daraus
+ * `gone`.
  */
-export async function endRoundAction(): Promise<EndRoundResult> {
+export async function endRoundAction(roundId: unknown): Promise<EndRoundResult> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { status: 'unauthenticated' }
 
-  const finished = await finishRound(user.id)
+  const parsed = z.uuid().safeParse(roundId)
+  if (!parsed.success) return { status: 'gone' }
+
+  const finished = await finishRound(user.id, parsed.data)
   if (!finished.written || finished.streak === null || finished.durationMs === null) {
     return { status: 'gone' }
   }

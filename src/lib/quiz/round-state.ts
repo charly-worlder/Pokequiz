@@ -156,9 +156,17 @@ export async function submitAnswer(
   }
 }
 
-export async function finishRound(profileId: string): Promise<FinishedRound> {
+/**
+ * Beendet **genau die genannte** Runde. Passt die Kennung nicht zur laufenden,
+ * geschieht nichts und `written` ist false — ein veralteter Tab kann damit die
+ * Runde eines anderen nicht mehr beenden (BUG-120).
+ */
+export async function finishRound(profileId: string, roundId: string): Promise<FinishedRound> {
   const admin = createAdminClient()
-  const rows = unwrap(await admin.rpc('finish_round', { p_profile: profileId }), 'Runde beenden')
+  const rows = unwrap(
+    await admin.rpc('finish_round', { p_profile: profileId, p_round_id: roundId }),
+    'Runde beenden'
+  )
   const row = rows[0]
   return {
     roundId: row.round_id,

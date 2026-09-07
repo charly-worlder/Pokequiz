@@ -130,13 +130,6 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
    * „Erneut versuchen" die Antwort statt eine Frage nachzuladen (EC-3).
    */
   const pendingAnswerRef = useRef<{ token: string; choice: number } | null>(null)
-  /**
-   * `prepareNext` muss die Runde beenden können (EC-2), wird von `endRound` aber
-   * nicht benutzt — die Reihenfolge der Definitionen lässt sich nicht auflösen,
-   * ohne eine der beiden künstlich zu verschieben. Ein Ref ist hier ehrlicher
-   * als eine Umsortierung, die niemand mehr versteht.
-   */
-  const endRoundRef = useRef<() => Promise<void>>(async () => {})
 
   // --- Uhr: reine Anzeige ---------------------------------------------------
   // Gewertet wird die servergemessene Zeit (AC-34, EC-13); diese hier läuft nur,
@@ -232,17 +225,18 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
           setProbingQuestion(result.prepared)
           return
         }
-        // **Kein Vorrat mehr.** Wartet der Spieler gerade auf eine Frage, ist die
-        // Runde damit zu Ende und wird gewertet (EC-2). Vorher blieb der Bildschirm
-        // hier stumm auf „Runde wird vorbereitet …" stehen, das Ergebnis ging
-        // verloren und der Zustand verfiel nach 110 Minuten (BUG-114, QA 2026-09-07).
-        // Steht noch eine Frage offen, passiert nichts: Der Spieler beantwortet sie,
-        // und der Fall trifft danach zu.
+        // **Kein Vorrat mehr.** Der Server hat die Runde dann bereits gewertet und
+        // geschrieben (AC-35) — hier wird das Ergebnis nur noch angezeigt.
+        //
+        // Bis zum 2026-09-07 beendete der Browser sie selbst; blieb sein Aufruf aus
+        // (Tab zu, Verbindung weg), war das Ergebnis verloren (BUG-119). Steht noch
+        // eine Frage offen, kommt kein Ergebnis mit: Der Spieler beantwortet sie
+        // erst, und der Fall trifft danach zu.
         //
         // Die Gewinner-Meldung hängt weiterhin an der Serie, nicht am leeren Vorrat —
         // `seen_ids` enthält auch verworfene Nummern (EC-5, EC-6).
         if (result.status === 'pool-empty') {
-          if (!currentRef.current) void endRoundRef.current()
+          if (result.result) showResult(result.result)
           return
         }
         if (!currentRef.current) goToError(null)
@@ -250,7 +244,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         preparingRef.current = false
       }
     },
-    [bailToLogin, goToError, setProbingQuestion]
+    [bailToLogin, goToError, setProbingQuestion, showResult]
   )
 
   /** Das Bild der vorbereiteten Frage lädt — sie darf nachrücken (AC-10). */
@@ -463,7 +457,12 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   }, [prepareNext, submit])
 
   const endRound = useCallback(async () => {
-    const outcome = await runClientAction(() => endRoundAction(), { status: 'gone' as const })
+    // Die Runden-Kennung ist Pflicht (BUG-120): Ohne sie beendete der Aufruf,
+    // was gerade aktiv war — ein veralteter Tab konnte damit die laufende Runde
+    // eines anderen Tabs beenden.
+    const outcome = await runClientAction(() => endRoundAction(roundIdRef.current), {
+      status: 'gone' as const,
+    })
     if (outcome.status === 'unauthenticated') return bailToLogin()
     if (outcome.status === 'ended') return showResult(outcome.result)
 
@@ -473,10 +472,6 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     if (stored) return showResult(stored)
     goToError(STALE_MESSAGE)
   }, [bailToLogin, goToError, showResult])
-
-  useEffect(() => {
-    endRoundRef.current = endRound
-  }, [endRound])
 
   /**
    * spec.md AC-15, AC-16 — das Bild der **angezeigten** Frage kam auch nach dem
@@ -526,6 +521,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
           streak={streak}
           retrying={retrying}
           message={errorMessage}
+          timeKeepsRunning={current !== null}
           onRetry={retryAfterError}
           onEndRound={() => void endRound()}
         />

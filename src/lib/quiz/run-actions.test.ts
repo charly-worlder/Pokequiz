@@ -175,10 +175,11 @@ describe('endRoundAction', () => {
       written: true,
     })
 
-    expect(await endRoundAction()).toEqual({
+    expect(await endRoundAction(ROUND)).toEqual({
       status: 'ended',
       result: { streak: 4, durationMs: 8000, isPersonalBest: true },
     })
+    expect(state.finishRound).toHaveBeenCalledWith('user-1', ROUND)
   })
 
   it('meldet einen zweiten Aufruf als gegenstandslos, statt eine zweite Zeile anzulegen (EC-4)', async () => {
@@ -189,7 +190,15 @@ describe('endRoundAction', () => {
       written: false,
     })
 
-    expect(await endRoundAction()).toEqual({ status: 'gone' })
+    expect(await endRoundAction(ROUND)).toEqual({ status: 'gone' })
+  })
+})
+
+describe('endRoundAction — die Runden-Kennung (BUG-120)', () => {
+  it('lehnt einen Aufruf ohne brauchbare Kennung ab, statt irgendeine Runde zu beenden', async () => {
+    expect(await endRoundAction(undefined)).toEqual({ status: 'gone' })
+    expect(await endRoundAction('nicht-uuid')).toEqual({ status: 'gone' })
+    expect(state.finishRound).not.toHaveBeenCalled()
   })
 })
 

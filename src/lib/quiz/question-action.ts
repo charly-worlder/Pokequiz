@@ -5,11 +5,14 @@ import { drawQuestion } from './draw-question'
 import { questionTokenSchema } from '@/lib/validation/quiz'
 import {
   discardPreparedQuestion,
+  finishRound,
   promotePreparedQuestion,
   getRoundSnapshot,
   setPreparedQuestion,
   startRound,
 } from './round-state'
+import { getPersonalBest, type RoundResult } from './run-actions'
+import { isBetterThan } from './personal-best'
 
 /**
  * Was der Browser von einer Frage erfährt: vier Namen und ein Token — nicht die
@@ -35,7 +38,17 @@ export type StartRoundResult =
 
 export type PrepareResult =
   | { status: 'ok'; prepared: ClientQuestion }
-  | { status: 'pool-empty' }
+  /**
+   * spec.md AC-35, EC-2 — der Ziehungsvorrat ist erschöpft.
+   *
+   * Steht dabei keine Frage mehr offen, ist die Runde zu Ende, und **der Server**
+   * hat sie bereits gewertet und geschrieben, bevor er hier antwortet; `result`
+   * trägt das Ergebnis. Der Browser zeigt es nur noch an.
+   *
+   * Stand noch eine Frage offen, ist `result` leer: Der Spieler beantwortet sie
+   * erst, und der Fall trifft danach zu.
+   */
+  | { status: 'pool-empty'; result: RoundResult | null }
   | { status: 'unavailable' }
   | { status: 'unauthenticated' }
 
@@ -104,7 +117,31 @@ async function prepareNext(profileId: string): Promise<PrepareResult> {
   if (!snapshot) return { status: 'unavailable' }
 
   const drawn = await drawQuestion(new Set(snapshot.seenIds))
-  if (drawn === 'pool-empty') return { status: 'pool-empty' }
+  if (drawn === 'pool-empty') {
+    // **Hier endet die Runde, nicht im Browser** (spec.md AC-35, BUG-119). Der
+    // Fix für BUG-114 hatte die Wertung an einen zusätzlichen Aufruf des Clients
+    // gehängt; blieb der aus — Tab geschlossen, Verbindung weg —, war das
+    // Ergebnis verloren und der Zustand verfiel nach 110 Minuten.
+    //
+    // Nur wenn gerade keine Frage offen ist: Sonst beantwortet der Spieler die
+    // laufende erst, und der Fall trifft danach zu.
+    if (snapshot.hasCurrent) return { status: 'pool-empty', result: null }
+
+    const finished = await finishRound(profileId, snapshot.roundId)
+    if (!finished.written || finished.streak === null || finished.durationMs === null) {
+      return { status: 'pool-empty', result: null }
+    }
+
+    const previousBest = await getPersonalBest(finished.roundId ?? undefined)
+    return {
+      status: 'pool-empty',
+      result: {
+        streak: finished.streak,
+        durationMs: finished.durationMs,
+        isPersonalBest: isBetterThan(finished.streak, finished.durationMs, previousBest),
+      },
+    }
+  }
   if (drawn === null) return { status: 'unavailable' }
 
   const token = await setPreparedQuestion(
