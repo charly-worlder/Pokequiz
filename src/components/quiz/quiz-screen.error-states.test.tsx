@@ -149,12 +149,12 @@ describe('QuizScreen — das Bild der angezeigten Frage (BUG-111)', () => {
 
     // Erster Fehlschlag: stiller zweiter Versuch, noch keine Fehlerkarte (AC-15).
     fireEvent.error(visibleImage()!)
-    expect(screen.queryByText('Die nächste Frage lädt gerade nicht')).not.toBeInTheDocument()
+    expect(screen.queryByText('Das Bild dieser Frage lädt nicht')).not.toBeInTheDocument()
 
     // Zweiter Fehlschlag: jetzt ist Schluss.
     fireEvent.error(visibleImage()!)
     await waitFor(() =>
-      expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument()
+      expect(screen.getByText('Das Bild dieser Frage lädt nicht')).toBeInTheDocument()
     )
   })
 
@@ -163,7 +163,7 @@ describe('QuizScreen — das Bild der angezeigten Frage (BUG-111)', () => {
     fireEvent.error(visibleImage()!)
     fireEvent.error(visibleImage()!)
     await waitFor(() =>
-      expect(screen.getByText('Die nächste Frage lädt gerade nicht')).toBeInTheDocument()
+      expect(screen.getByText('Das Bild dieser Frage lädt nicht')).toBeInTheDocument()
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
@@ -334,6 +334,96 @@ describe('QuizScreen — verlorene Antwort und fremde Runde', () => {
       expect(screen.getByText('Diese Runde ist nicht mehr offen')).toBeInTheDocument()
     )
     expect(screen.getByText(/anderen Tab weiter/)).toBeInTheDocument()
+  })
+})
+
+/**
+ * **Wege aus einem Endzustand heraus (BUG-133, BUG-134, BUG-135).**
+ *
+ * Der Server behandelte diese drei Zustände von Anfang an korrekt — er schrieb
+ * das Ergebnis, wies den veralteten Tab ab, meldete den gescheiterten Start.
+ * Der Browser hatte für keinen davon einen Weg nach vorn: Er blieb auf der
+ * Frage stehen oder lief in dieselbe Fehlerkarte zurück, und nur Neuladen half.
+ *
+ * Diese Tests prüfen deshalb nicht, was angezeigt wird, sondern **dass es
+ * weitergeht**.
+ */
+describe('QuizScreen — aus jedem Endzustand führt ein Weg heraus', () => {
+  it('zeigt das Ergebnis, wenn die letzte Frage RICHTIG beantwortet die Runde beendet (EC-2, BUG-133)', async () => {
+    // Genau die Serverantwort der 386. richtigen Antwort: Urteil richtig **und**
+    // Ergebnis dabei. Vorher setzte der Client daraufhin nur `phase='resolved'`
+    // und blieb auf der Frage stehen — „Weiter zum Ergebnis" erscheint nur bei
+    // einer falschen Antwort, und einen automatischen Übergang gab es nicht.
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 386,
+      result: { streak: 386, durationMs: 704, isPersonalBest: true },
+    })
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort A: Glurak' }))
+
+    // Bei Serie 386 ist das zugleich die Gewinner-Meldung — und die war auf dem
+    // vorgesehenen Weg bisher **unerreichbar**, weil man nur über eine falsche
+    // Antwort oder „Runde beenden" auf den Ergebnis-Screen kam.
+    await waitFor(() => expect(screen.getByText('Alle Pokémon geschafft')).toBeInTheDocument(), {
+      timeout: 3000,
+    })
+    expect(screen.getByText(/Mehr geht nicht/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument()
+    expect(screen.getByText('386')).toBeInTheDocument()
+  })
+
+  it('startet eine neue Runde, wenn der Start selbst gescheitert war (AC-17, BUG-134)', async () => {
+    actions.startRoundAction.mockResolvedValueOnce({ status: 'unavailable' })
+
+    render(<QuizScreen initialPersonalBest={null} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Die Runde konnte nicht gestartet werden')).toBeInTheDocument()
+    )
+    // Es gibt keine Runde — also auch nichts zu beenden.
+    expect(screen.queryByRole('button', { name: 'Runde beenden' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Erneut versuchen' }))
+
+    // Der Kern: ein zweiter START, nicht ein Vorbereiten ohne Runden-Kennung.
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(2)
+    expect(actions.prepareNextQuestionAction).not.toHaveBeenCalledWith('')
+  })
+
+  it('bietet nach „Runde lief anderswo weiter" eine neue Runde an (EC-15, BUG-135)', async () => {
+    actions.answerAction.mockResolvedValue({ status: 'stale' })
+    actions.getRunByRoundIdAction.mockResolvedValue(null)
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Diese Runde ist nicht mehr offen')).toBeInTheDocument()
+    )
+
+    // Der Text fordert dazu auf, eine neue Runde zu starten — vorher gab es
+    // dafür keinen Knopf, und die beiden vorhandenen führten in dieselbe Karte.
+    const neu = screen.getByRole('button', { name: 'Neue Runde starten' })
+    expect(screen.queryByRole('button', { name: 'Erneut versuchen' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Runde beenden' })).not.toBeInTheDocument()
+
+    actions.answerAction.mockResolvedValue({
+      status: 'answered',
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      result: null,
+    })
+    fireEvent.click(neu)
+
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(2)
   })
 })
 

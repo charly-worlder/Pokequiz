@@ -126,6 +126,12 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   /** Die Runden-Kennung, mit der ein verlorengegangenes Ergebnis nachlesbar ist (EC-3). */
   const roundIdRef = useRef<string>('')
   /**
+   * Ob gerade eine Runde existiert — dieselbe Aussage wie `roundIdRef`, aber als
+   * State, weil die Fehlerkarte sie beim Rendern braucht und ein Ref dort nicht
+   * gelesen werden darf (react-hooks/refs).
+   */
+  const [hasRound, setHasRound] = useState(false)
+  /**
    * Die Antwort, deren Urteil unterwegs verlorenging. Ist sie gesetzt, wiederholt
    * „Erneut versuchen" die Antwort statt eine Frage nachzuladen (EC-3).
    */
@@ -309,6 +315,11 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     accumulatedRef.current = 0
     startedAtRef.current = null
     pendingAnswerRef.current = null
+    // Die alte Kennung ist ab hier gegenstandslos. Bliebe sie stehen und der
+    // Start scheiterte, hielte sich die Fehlerkarte für eine laufende Runde und
+    // böte „Runde beenden" für eine Runde an, die es nicht gibt (BUG-134).
+    roundIdRef.current = ''
+    setHasRound(false)
 
     setElapsedMs(0)
     setStreak(0)
@@ -331,6 +342,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         if (started.status !== 'ok') return goToError(null)
 
         roundIdRef.current = started.roundId
+        setHasRound(true)
         showCurrent(started.current)
         setProbingQuestion(started.prepared)
         setPhase('open')
@@ -401,14 +413,24 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       setStreak(outcome.streak)
 
       if (outcome.result) {
+        const finished = outcome.result
         pauseClock()
         setPhase('resolved')
-        setResult(outcome.result)
-        if (outcome.result.isPersonalBest) {
-          setPersonalBest({
-            streak: outcome.result.streak,
-            durationMs: outcome.result.durationMs,
-          })
+        setResult(finished)
+        if (finished.isPersonalBest) {
+          setPersonalBest({ streak: finished.streak, durationMs: finished.durationMs })
+        }
+
+        // **Eine richtige Antwort, die die Runde beendet, hat keine Auflösung zu
+        // zeigen** (spec.md EC-2, BUG-133). Bei einer falschen bleibt die
+        // Auflösung stehen, bis der Spieler weiterklickt (AC-6) — dafür trägt die
+        // Frage-Ansicht den Knopf „Weiter zum Ergebnis". Sie zeigt ihn aber nur
+        // bei einer falschen Antwort, und richtig ist hier gerade die 386. und
+        // letzte gewesen: Ohne diesen Übergang bliebe der Spieler auf der Frage
+        // stehen und sähe sein Ergebnis nie — obwohl der Server es längst
+        // geschrieben hat.
+        if (outcome.correct) {
+          window.setTimeout(() => showResult(finished), CORRECT_FEEDBACK_MS)
         }
         return
       }
@@ -445,6 +467,15 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
           return
         }
 
+        // **Es gibt gar keine Runde** — der Start selbst ist gescheitert
+        // (BUG-134). „Erneut versuchen" muss dann eine Runde *starten*; vorher
+        // rief es `prepareNextQuestionAction('')`, was der Server zu Recht mit
+        // `stale` beantwortete, und die Karte lief in sich selbst zurück.
+        if (!roundIdRef.current) {
+          startRound()
+          return
+        }
+
         // Die Frage steht noch — es war ihr Bild, das nicht kam (BUG-111). Erneut
         // anfordern, ohne eine neue Frage zu ziehen: Die alte bleibt gültig, und
         // ein Bildfehler darf kein Überspringen werden (EC-12).
@@ -461,7 +492,7 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         setRetrying(false)
       }
     })()
-  }, [prepareNext, submit])
+  }, [prepareNext, startRound, submit])
 
   const endRound = useCallback(async () => {
     // Die Runden-Kennung ist Pflicht (BUG-120): Ohne sie beendete der Aufruf,
@@ -525,12 +556,16 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       <>
         {probe}
         <LoadErrorCard
+          // Drei Sorten, drei Auswege (BUG-134, BUG-135): Eine Runde, die
+          // anderswo weiterlief, ist gegenstandslos; ein gescheiterter Start hat
+          // nichts zu beenden; alles andere ist eine fortsetzbare Runde.
+          kind={errorMessage ? 'stale-round' : hasRound ? 'question' : 'no-round'}
           streak={streak}
           retrying={retrying}
-          message={errorMessage}
           timeKeepsRunning={current !== null}
           onRetry={retryAfterError}
           onEndRound={() => void endRound()}
+          onStartNewRound={startRound}
         />
       </>
     )

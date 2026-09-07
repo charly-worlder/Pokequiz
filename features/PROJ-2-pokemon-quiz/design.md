@@ -366,6 +366,26 @@ Damit sind BUG-122 und BUG-131 nicht nur behoben, sondern gegen einen künftigen
 
 **Verifikation nach dem Nachtrag:** `npm test` **260/260**, `npm run lint` **Exit 0**, `npm run build` **Exit 0**, `npx playwright test` **75/75** in drei Engines; `supabase db reset` über **0001–0014**.
 
+
+## Notizen aus dem vierten Fix-Lauf (2026-09-07)
+
+Vier Befunde, **eine** Ursache: Der Client kannte für drei Zustände, die der Server korrekt behandelt, keinen Weg nach vorn. Der Umbau auf die serverseitig geführte Runde hat die Autorität sauber verschoben — die Oberfläche ist an drei Stellen nicht mitgegangen.
+
+**BUG-133 — die Frage-Ansicht kennt nur den Weg über die falsche Antwort.** `ResultView` erscheint ausschließlich bei `phase === 'finished'`, gesetzt allein von `showResult`. Der Zweig, der eine Runde per **richtiger** Antwort beendet, rief `showResult` nicht auf; „Weiter zum Ergebnis" wiederum erscheint nur bei einer falschen Antwort (`answeredWrong`). Wer alle 386 richtig hatte, blieb auf der Frage stehen — mit dem Ergebnis längst in der Datenbank. Nebenwirkung: Die Gewinner-Meldung war auf dem vorgesehenen Weg **unerreichbar**. Jetzt geht eine richtige, beendende Antwort nach `CORRECT_FEEDBACK_MS` ins Ergebnis; die falsche behält ihre stehende Auflösung (AC-6).
+
+**BUG-134 / BUG-135 — die Fehlerkarte war für einen Fall gebaut und für drei benutzt.** Sie hieß immer „Die nächste Frage lädt gerade nicht" und bot immer dieselben zwei Knöpfe an. Bei einem gescheiterten **Start** gab es keine Runde: „Erneut versuchen" rief `prepareNextQuestionAction('')`, was der Server zu Recht mit `stale` beantwortete — die Karte lief in sich selbst zurück. Nach der EC-15-Meldung stand „Starte eine neue Runde", ohne dass es dafür einen Knopf gab. Beides nur mit Neuladen verlassbar.
+
+Die Karte kennt jetzt drei Sorten und leitet daraus Überschrift **und** Ausweg ab: `question` (fortsetzbar, zwei Knöpfe), `no-round` (nur „Erneut versuchen", das wirklich startet — nichts zu beenden), `stale-round` (nur „Neue Runde starten"). **BUG-121** fällt damit ab: Die Überschrift unterscheidet endlich die angezeigte von der nächsten Frage, so wie der Text darunter es schon tat.
+
+**Ein Lint-Fund unterwegs:** Die Sorte aus `roundIdRef` beim Rendern abzuleiten, war ein Ref-Zugriff im Render (`react-hooks/refs`). Ersetzt durch `hasRound` als State.
+
+### Verifikation
+
+- `npm test` **263/263** (23 Dateien), `npm run lint` **Exit 0**, `npm run build` **Exit 0**, `npx playwright test` **75/75** in drei Engines
+- **Rot-Gegenprobe je Fix**, einzeln eingebaut und zurückgenommen: Übergang zum Ergebnis entfernt → BUG-133-Test rot · Neustart bei fehlender Runde entfernt → BUG-134-Test rot · „Neue Runde starten" entfernt → BUG-135-Test rot. Nach Rücknahme jeweils grün
+- Zwei bestehende Tests mussten die neue Überschrift übernehmen — sie standen im Block „das Bild der **angezeigten** Frage", also genau dem Fall, dessen Titel BUG-121 als falsch gemeldet hatte
+- Der BUG-133-Test prüft die **Gewinner-Meldung** („Alle Pokémon geschafft … Mehr geht nicht"), nicht bloß den Ergebnis-Screen: Sie war der Teil, der nachweislich unerreichbar war
+
 ## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)
 
 > Alles ab hier beschreibt den **clientseitig geführten** Entwurf, den `/refine PROJ-2` am 2026-09-06 abgelöst hat. Er bleibt vollständig stehen, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde und Bug-Nummern verweisen — und weil die Begründungen zeigen, welche Überlegung damals wozu geführt hat.
