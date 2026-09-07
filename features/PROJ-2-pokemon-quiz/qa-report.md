@@ -2828,3 +2828,107 @@ select policyname, cmd from pg_policies where tablename='profiles';
 - **Empfehlung:** BUG-133, BUG-134 und BUG-135 **zusammen** beheben — sie sitzen alle drei in `quiz-screen.tsx` und `load-error-card.tsx` und teilen die Ursache „der Client kennt keinen Weg aus einem Endzustand". BUG-121 fällt dabei mit ab. Die vier Low danach in einem Aufräum-Durchgang
 
 > **Zur Erwartung, dies sei der letzte Zyklus:** Sie hat sich nicht erfüllt — aber die drei neuen Medium sind Oberflächen-Befunde, keine Sicherheits- oder Datenlücken. Die serverseitige Autorität, um die es in diesem Umbau ging, hält in allen geprüften Angriffen. Was fehlt, sind drei Wege zurück im Browser. Und: Darstellung und Responsive-Verhalten hat auch in diesem vierten Lauf **niemand** gesehen.
+
+---
+
+## QA-Lauf — 2026-09-07 (fünfter Durchgang, Abschlusslauf), nach den Fixes für BUG-133, BUG-134, BUG-135 und BUG-121
+
+**Anlass und Zuschnitt.** Der Nutzer hat vorab entschieden: Findet dieser Lauf nur noch Low, ist es der letzte Zyklus — der Rest wird **dokumentiert akzeptiert, nicht weiter gebaut**. Entsprechend war der Auftrag eng: prüfen, ob die vier Fixes halten und ob etwas kaputtgegangen ist, plus eine Security-**Bestätigungsrunde**. Ausdrücklich **keine** neue Erkundung der Angriffsfläche — die ist in vier Durchgängen abgearbeitet worden.
+
+**Umgebung:** laufender Dev-Server auf `http://localhost:3000`, lokale Supabase (Migrationen 0001–0014), Branch `feat/PROJ-2-server-authoritative-round`, Arbeitsbaum sauber auf `2c71351`.
+
+**Wie geprüft wurde:** **eine** `qa-engineer`-Bahn ohne Kenntnis des Baus, mit allen drei Scopes in der Reihenfolge 2 → 3 → 4. Der Prüfer hat **keinen mitgelieferten Test als Nachweis zitiert**, sondern eine eigene Sondendatei geschrieben und deren 14 Zusicherungen gegen **zwei** Fassungen gefahren: `HEAD` und die Vor-Fix-Fassung `e5f3813` (per `git show` daneben kopiert). Damit ist die Rot-Gegenprobe Bestandteil derselben Messung statt eine Behauptung des Bauenden. Zusätzlich wurde die Runde **live über das `Next-Action`-Protokoll** gespielt, mit eigener Sitzung und Kontrolle in der Datenbank. Die Sonden sind nach dem Lauf gelöscht.
+
+### Die vier Prüfungen
+
+| Prüfung | Kommando | Ergebnis |
+|---|---|---|
+| Tests | `npm test` | **263/263 grün**, 23 Dateien, Exit 0 |
+| Lint | `npm run lint` | **Exit 0**, keine Meldung |
+| Build | `npx next build` auf isolierter `git archive HEAD`-Kopie | **Exit 0**, 6 Routen, keine Warnung |
+| E2E | `npx playwright test` | **75/75 grün**, 0 flaky, drei Engines |
+
+> Einschränkung, vom Prüfer selbst benannt: Das `node_modules` der isolierten Kopie stammt aus dem `npm ci` des Vorlaufs. `package-lock.json` wurde byte-weise verglichen (identisch) und `.next` vor dem Bau gelöscht; ein frisches `npm ci` lief nicht.
+
+### Die vier Befunde des Vorlaufs — alle geschlossen
+
+- [x] **BUG-133 (brach EC-2) — behoben.** Die 386. **richtige** Antwort führt ohne Klick zum Ergebnis: „Alle Pokémon geschafft", „Mehr geht nicht", Serie 386, „Neue persönliche Bestleistung", „Nochmal spielen"; `endRoundAction` wird nicht aufgerufen. **Rot auf `e5f3813`** (blieb auf der Frage stehen, Timeout nach 3029 ms). Dass die Sonde den echten Fall nachbildet, ist am laufenden Server gegengemessen: `active_runs.streak=385`, richtig geantwortet → Serverantwort **wörtlich** `{"status":"answered","correct":true,"correctIndex":1,"streak":386,"result":{"streak":386,"durationMs":302,"isPersonalBest":true}}`, `runs`-Zeile `386 | 302`, `active_runs` danach 0
+- [x] **AC-6 nicht beschädigt.** Nach einer **falschen** Antwort steht die Auflösung auch 1200 ms später noch; kein Ergebnis-Screen erscheint von selbst, erst der Klick führt weiter. Grün auf **beiden** Fassungen — die stehende Auflösung wurde nicht mitgerissen
+- [x] **BUG-134 (brach AC-17/AC-18 im Teilfall) — behoben.** Gescheiterter Start → „Erneut versuchen" ruft `startRoundAction` ein **zweites** Mal, die Frage erscheint; `prepareNextQuestionAction('')` und `endRoundAction('')` werden nie mehr aufgerufen. Überschrift jetzt „Die Runde konnte nicht gestartet werden". Beides rot auf `e5f3813`. **Bemerkenswert:** Serverseitig existiert die Sackgasse weiter (`prepareNextQuestionAction('')` → `stale`, `endRoundAction('')` → `gone`) — der Client läuft nur nicht mehr hinein
+- [x] **BUG-135 (brach EC-15 in der Wirkung) — behoben.** Nach „Diese Runde ist nicht mehr offen" gibt es genau einen Knopf, **„Neue Runde starten"**, und er startet wirklich eine Runde. Rot auf `e5f3813`. Der Zustand ist echt erreichbar: Runde A → Runde B verdrängt sie → Antwort mit A-Token → `stale`, A **nicht** in `runs`
+- [x] **BUG-121 — behoben, mit Gegenprobe.** Bildausfall der **angezeigten** Frage → „Das Bild dieser Frage lädt nicht"; fällt die **nächste** aus, steht weiterhin „Die nächste Frage lädt gerade nicht". Die Unterscheidung ist echt und nicht ein pauschal umbenannter Titel
+
+### Regression
+
+- [x] **Kernschleife live gespielt** — Start 150 ms → Bild `200 image/png, private, 125 547 B` (gesamt 285 ms) → richtig (`streak 1`, Folgefrage befördert) → derselbe Token nochmal → `stale` → falsch (`correctIndex` erst mit dem Urteil) → `active_runs` **0**, `runs`-Zeile `1 | 855 ms` — **exakt die Summe der beiden gemessenen Intervalle** (312 + 543) → Neustart `streak 0, ms 0, neue round_id`
+- [x] **AC-4, AC-6, AC-7, AC-9, AC-16, AC-17, AC-18, AC-19** — alle bestanden, je mit eigener Messung oder Sonde. **AC-17 und AC-18 jetzt in beiden Teilfällen**, also einschließlich der im Vorlauf gebrochenen
+- [x] **EC-2 in beiden Wegen** — „Vorrat erschöpft" und „386. richtig beantwortet". Der im Vorlauf defekte Weg ist zu
+- [x] **EC-6, EC-10, EC-12, EC-15** — bestanden; EC-15 jetzt vollständig, weil der Ausweg existiert
+- [x] **Der stärkste Regressionsbeleg:** **9 der 14 Sonden sind auf beiden Fassungen grün.** Nur die fünf zu den vier Befunden schlagen um — die Änderung hat an keinem anderen Pfad etwas verschoben
+- [x] **PROJ-1 als Stichprobe** — Registrierung samt Anlege-Trigger, Routenschutz (`/` ohne Sitzung → 307, mit Sitzung → 200), Abmeldeformular als **POST**. Login und Logout als Ablauf nur über die E2E-Suite belegt, siehe „Nicht verifiziert"
+
+### Security — Bestätigungsrunde
+
+Die Änderung berührt ausschließlich Client-Dateien (`git show --stat e09d55a`): keine Migration, keine Server Action, keine Route. Gezielt nachgemessen, **6 von 6 dicht**:
+
+- [x] `POST /rest/v1/runs` mit Nutzersitzung → **403 `permission denied for table runs`** (am Tabellenrecht, nicht erst an der Policy)
+- [x] Startantwort und HTML enthalten **keine** Pokémon-Nummer und keine Markierung der richtigen Option
+- [x] Fremdes Token: Antwort → `stale`, Bild → 404; erfundenes Token → 404; Bild ohne Sitzung → 307. A's Runde bleibt unverändert (mit Kontrollmessung, dass A's eigene Kennung weiter wirkt)
+- [x] Lösungs-Orakel: `GET /rest/v1/active_runs` → 403; `rpc/resolve_question_image` mit echten Parametern → **403 `permission denied for function`**
+- [x] Fremde Runden lesen → `200 []`
+- [x] Produktions-Bundle: `service_role` **0 Treffer**, `SUPABASE_SERVICE_ROLE_KEY` 0, CDN-Adresse 0 in `.next/static`
+
+**Kein neuer Weg entstanden.**
+
+### Neue Befunde
+
+**Keine Critical, keine High, keine Medium.** Zwei Low, beide Vertragsfragen ohne Verhaltensfehler:
+
+#### BUG-139: Die Fehlerkarte nach gescheitertem Start bietet nur eine der beiden in AC-16 genannten Aktionen
+- **Severity:** Low — **Vertrag, kein Codefehler**
+- **Nachweis:** `load-error-card.tsx:113` zeigt „Runde beenden" nur bei `kind === 'question'`. Bei `no-round` fehlt er
+- **Warum das trotzdem richtig gebaut ist:** Es gibt keine Runde zu beenden, und der alte `endRoundAction('')` war genau die Sackgasse aus BUG-134. AC-16 nennt aber beide Aktionen ohne Fallunterscheidung
+- **Zu tun:** entweder gar nichts (bewusst tragen) oder AC-16 per `/refine` um den Fall ergänzen. Dieselbe Klasse wie BUG-125
+
+#### BUG-140: Der Text der `no-round`-Karte nennt einen Grund, der nicht feststeht
+- **Severity:** Low
+- **Nachweis:** „Die Pokémon-Datenquelle antwortet gerade nicht." (`load-error-card.tsx:83`) erscheint bei **jedem** `status !== 'ok'` des Rundenstarts, also auch bei einem Datenbank- oder Transportfehler
+- Dieselbe Klasse wie BUG-136. Kein Verhaltensfehler
+
+### Nicht verifiziert in diesem Lauf
+
+- [!] **Alles Sichtbare** — AC-24 (Responsive), Uhrstart aus AC-2, Färbung/`pop`/`nudge` aus AC-4/AC-6/AC-8, Puls der Skelettfläche (AC-25), Browser-Dialog aus AC-19. **Kein Browser, kein Viewport, keine DevTools.** Auch dieser fünfte Lauf hat die Darstellung nicht gesehen
+- [!] **AC-2 als Nutzererlebnis** — gemessen sind Server- und Bildzeit (285 ms), nicht „bis zum ersten sichtbaren Pokémon"
+- [!] **PROJ-1 Login/Logout als eigener Beleg** — nur über die E2E-Suite (`PROJ-2-access-guard.spec.ts`, drei Engines grün); der eigene Aufruf scheiterte an der FormData-Kodierung des Prüfers, nicht an der App, und wird deshalb ehrlich nicht als Beleg gezählt
+- [!] **Frisches `npm ci` für den Build** — siehe Einschränkung oben
+- [!] **`next start` gegen den Produktions-Build** — Port vom Dev-Server belegt
+- [!] **Security-Header gegen eine Live-URL** und **BUG-61** — kein Deploy-Ziel (`deploy: null`)
+- [!] **EC-8 / AC-15 gegen eine real ausfallende PokeAPI** — von hier nicht provozierbar
+- [!] **T36 / T37** — offene `[user]`-Aufgaben für das gehostete Projekt; kein Zugangsdaten-Pfad
+- [!] **Visuelle Regressionen** — keine Screenshot-Vergleiche in der Suite
+
+### Verdikt: PRODUCTION READY — mit benannten offenen Punkten
+
+**Kein Critical, kein High, kein Medium.** Die Laufzeit-Kriterien wurden tatsächlich ausgeführt, nicht bloß gelesen. Damit ist die Bedingung erfüllt, die der Nutzer vorab gesetzt hat, und **dies ist der letzte Zyklus** für PROJ-2.
+
+**„Production Ready" ist eine Aussage über gefundene Fehler, nicht über Abdeckung.** Was offen bleibt, steht unten — und die Liste „Nicht verifiziert" oben gilt unverändert: **Darstellung und Responsive-Verhalten hat in fünf Läufen niemand gesehen.** Das ist die größte bekannte Lücke dieses Features, und sie schließt `/e2e-tests`, nicht `/qa`.
+
+### Dokumentiert akzeptiert — nicht mehr gebaut
+
+Entscheidung des Nutzers vom 2026-09-07. Keiner dieser Punkte trägt ein Sicherheits- oder Datenrisiko:
+
+| # | Was | Severity | Warum es getragen wird |
+|---|---|---|---|
+| **BUG-112** | AC-25: Textzeile statt Skelettfläche beim Rundenstart | Low | Kosmetik; für das Quizbild existiert die Skelettfläche |
+| **BUG-125** | AC-34 Satz 2 beschreibt das gebaute Verhalten nicht mehr | Low | Vertragsfrage. Die Alternative wäre eine vom Client anhaltbare Serveruhr gewesen — bewusst verworfen |
+| **BUG-136** | EC-3 im Wortlaut nicht erfüllt; Meldung nennt den falschen Grund | Low | Die Wiederholung funktioniert, das Ergebnis ist nachlesbar |
+| **BUG-137** | Die Drei-Verwürfe-Grenze aus EC-10 liegt nur im Client | Low | `design.md` schreibt sie dem Server zu — Dokumentfehler oder kleiner Umbau |
+| **BUG-138** | Entwicklungs-Build protokolliert Sprite-Adressen | Low | Nur Entwicklung, in Produktion unwirksam |
+| **BUG-139 / BUG-140** | Fehlerkarte: fehlende zweite Aktion, unbelegter Grund | Low | Neu in diesem Lauf; beide Vertrags-, keine Verhaltensfragen |
+| **BUG-126** | `replacePreparedQuestionAction` unbegrenzt aufrufbar | Low | Externe Last gegen die Fair-Use-Zusage; kein Zugangsdaten-Pfad |
+| **BUG-132** | `auth_throttle` mit weiten Tabellenrechten (PROJ-1) | Low | RLS hält, kein erreichbarer Weg; fehlende zweite Schicht |
+| **BUG-121-Rest / BUG-97 u. a.** | ältere Low aus PROJ-1 | Low | unverändert |
+
+**Vor dem Start weiterhin zwingend** — das steht in der Deploy-Blocker-Tabelle in `features/INDEX.md` und nicht hier: BUG-12/BUG-116 (Security-Header), BUG-18 (`X-Forwarded-Host`), BUG-61 (`x-forwarded-for`, PROJ-1), T18 (Reset-Mail-Vorlage), T36/T37 (`pg_cron` im gehosteten Projekt), Site-URL und eigener SMTP-Dienst.
+
+> **Rückblick auf fünf Durchgänge, in einem Satz:** Gefunden und geschlossen wurden ein Critical (Ergebnisse ließen sich an der Runde vorbei einreichen), ein gebrochenes EC-2 (der Sieger sah sein Ergebnis nie) und eine Reihe von Autoritätslücken, die alle dieselbe Wurzel hatten — eine Zuständigkeit, die beim Falschen lag. Was übrig bleibt, ist Text, Kosmetik und eine zweite Verteidigungsschicht an einer Tabelle, die niemand erreicht.

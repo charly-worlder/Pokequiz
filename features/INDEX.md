@@ -23,7 +23,7 @@
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
-| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | In Review | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
+| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Planned | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
@@ -89,5 +89,38 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 **Falls die Test-Abdeckungslücke später doch geschlossen wird, ist BUG-101 der Anfang** — nicht BUG-102: Ein literaler Test je Grenzwert (wie er für zwei der sechs Limits bereits existiert) deckt vier Kriterien auf einmal ab und ist der billigste Schritt. Die Mutationen liegen mit genauem Diff und gemessenem Rot/Grün-Verhalten als fertiges Abnahmekriterium im `qa-report.md` → QA-Abschlusslauf 2026-09-06.
 
 **Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
+
+
+## Bekannte Restrisiken — PROJ-2 (Stand 2026-09-07)
+
+> **PROJ-2 steht auf `Approved` mit offenen Punkten.** Entscheidung des Nutzers vom 2026-09-07 nach dem fünften QA-Durchgang: Findet der Abschlusslauf nur noch Low, wird der Rest **dokumentiert akzeptiert statt weiter gebaut**. Er fand nur Low. Diese Liste ist der Preis dieser Entscheidung — sie steht hier, damit niemand `Approved` für „nichts mehr offen" hält.
+>
+> **Kein einziger dieser Punkte trägt ein Sicherheits- oder Datenrisiko.** Der Critical des ersten Laufs (Ergebnisse an der Runde vorbei einreichbar) und alle Autoritätslücken sind geschlossen und mehrfach von Kontexten bestätigt worden, die den Fix nicht gebaut haben.
+
+### Die größte Lücke ist keine Bug-Nummer
+
+**Darstellung und Responsive-Verhalten hat in fünf Läufen niemand gesehen.** `/qa` hat keinen Browser: AC-24, der Uhrstart aus AC-2, die Färbung und die Animationen aus AC-4/AC-6/AC-8, der Puls der Skelettfläche und der Browser-Dialog aus AC-19 sind ausschließlich über Quelltext und Unit-Tests belegt. Das schließt `/e2e-tests`, nicht ein weiterer QA-Durchgang.
+
+### Offen, nach Gewicht
+
+| # | Risiko | Severity | Warum es liegen bleibt |
+| --- | --- | --- | --- |
+| **BUG-112** | AC-25: Textzeile statt Skelettfläche beim Rundenstart und beim Warten | Low | Kosmetik. Für das Quizbild existiert die Skelettfläche |
+| **BUG-125** | AC-34 Satz 2 beschreibt das gebaute Verhalten nicht mehr | Low | Vertragsfrage. Die Alternative — eine vom Client anhaltbare Serveruhr — wurde bewusst verworfen, sie wäre freie Bedenkzeit auf dem Tie-Breaker |
+| **BUG-136** | EC-3 im Wortlaut nicht erfüllt; die Meldung nennt den falschen Grund | Low | Wiederholung funktioniert, Ergebnis ist über die Runden-Kennung nachlesbar |
+| **BUG-137** | Die Drei-Verwürfe-Grenze aus EC-10 liegt nur im Client, `design.md` schreibt sie dem Server zu | Low | Entweder Dokumentfehler oder kleiner Umbau; kein Nutzerschaden |
+| **BUG-138** | Der Entwicklungs-Build protokolliert Sprite-Adressen samt Pokémon-Nummer | Low | Nur Entwicklung, in Produktion unwirksam |
+| **BUG-139** | Die Fehlerkarte nach gescheitertem Start bietet nur eine der beiden in AC-16 genannten Aktionen | Low | Sachlich richtig — es gibt nichts zu beenden. AC-16 kennt den Fall nur nicht |
+| **BUG-140** | Der Text der `no-round`-Karte nennt einen Grund, der nicht feststeht | Low | Dieselbe Klasse wie BUG-136 |
+| **BUG-126** | `replacePreparedQuestionAction` unbegrenzt aufrufbar, erzeugt PokeAPI-Verkehr | Low | Spannung zur Fair-Use-Zusage; kein Zugangsdaten-Pfad, Selbstschaden am eigenen Ziehungsvorrat |
+| **BUG-121** | ~~Fehlerkarte betitelt die angezeigte Frage als „die nächste"~~ | — | **behoben am 2026-09-07**, mit Gegenprobe |
+
+**Vier der neun sind Vertragsfragen**, keine Codefehler: BUG-125, BUG-136, BUG-139, BUG-140 beschreiben Stellen, an denen `spec.md` etwas anderes sagt als das, was mit gutem Grund gebaut wurde. Wer sie schließen will, tut das mit **einem** `/refine PROJ-2`, nicht mit einem Build.
+
+### Wie es mit PROJ-2 weitergeht
+
+**Kein weiterer Fix-Zyklus.** PROJ-2 ist abgenommen. Was tatsächlich vor dem Start passieren muss, steht in der **Deploy-Blocker**-Tabelle und nirgends sonst — für PROJ-2 sind das BUG-12/BUG-116 (Security-Header), BUG-18 (`X-Forwarded-Host`) und T36/T37 (`pg_cron` im gehosteten Projekt).
+
+**Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
 ## Next Available ID: PROJ-5
