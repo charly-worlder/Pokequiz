@@ -1,127 +1,160 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-const { createClient, fetchGermanName, fetchGermanNames, withTimeoutAndOneRetry, spriteUrlFor } =
-  vi.hoisted(() => ({
-    createClient: vi.fn(),
-    fetchGermanName: vi.fn(),
-    fetchGermanNames: vi.fn(),
-    withTimeoutAndOneRetry: vi.fn(),
-    spriteUrlFor: vi.fn((id: number) => `https://sprites.test/${id}.png`),
-  }))
-
+const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createClient }))
-vi.mock('@/lib/pokeapi/client', () => ({
-  fetchGermanName,
-  fetchGermanNames,
-  withTimeoutAndOneRetry,
-  spriteUrlFor,
-  REQUEST_TIMEOUT_MS: 5000,
+
+const { drawQuestion } = vi.hoisted(() => ({ drawQuestion: vi.fn() }))
+vi.mock('./draw-question', () => ({ drawQuestion }))
+
+const state = vi.hoisted(() => ({
+  startRound: vi.fn(),
+  setPreparedQuestion: vi.fn(),
+  discardPreparedQuestion: vi.fn(),
+  getRoundSnapshot: vi.fn(),
 }))
+vi.mock('./round-state', () => state)
 
-import { getNextQuestion } from './question-action'
-import { POOL_SIZE } from '@/lib/validation/quiz'
+import {
+  startRoundAction,
+  replacePreparedQuestionAction,
+  prepareNextQuestionAction,
+} from './question-action'
 
-const signedIn = () => ({ auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }) } })
-const signedOut = () => ({ auth: { getUser: async () => ({ data: { user: null } }) } })
+function session(user: { id: string } | null = { id: 'user-1' }) {
+  createClient.mockResolvedValue({ auth: { getUser: async () => ({ data: { user } }) } })
+}
 
-/** Runs the real assembly logic instead of stubbing it away. */
-const runOperation = async (op: (s: AbortSignal) => Promise<unknown>) =>
-  op(new AbortController().signal)
+const drawn = (answerId: number, correctIndex: number, alsoSeen: number[] = []) => ({
+  answerId,
+  correctIndex,
+  options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'],
+  alsoSeen,
+})
 
-describe('getNextQuestion', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    createClient.mockResolvedValue(signedIn())
-    withTimeoutAndOneRetry.mockImplementation(runOperation)
-    fetchGermanName.mockImplementation(async (id: number) => `Name${id}`)
-    fetchGermanNames.mockImplementation(async (ids: number[]) => ids.map((id) => `Name${id}`))
-  })
+beforeEach(() => {
+  vi.clearAllMocks()
+  session()
+})
 
-  it('EC-7: weist einen Aufruf ohne Sitzung ab', async () => {
-    createClient.mockResolvedValue(signedOut())
-    expect(await getNextQuestion([])).toEqual({ status: 'unauthenticated' })
-  })
-
-  // BUG-12: `seenIds` ging ungeprüft in `.filter()`. Alles, was kein Array war,
-  // erzeugte eine unbehandelte TypeError und damit HTTP 500 — im Dev-Modus samt
-  // absoluter Dateipfade in der Antwort. Ein Server Action ist ein öffentlicher
-  // Endpunkt; `saveRun` hatte sein Zod-Schema von Anfang an, diese Grenze nicht.
-  it('BUG-12: weist unbrauchbare Eingaben ab, statt zu werfen', async () => {
-    for (const bad of [undefined, null, 'abc', 42, {}, [null], ['7'], [1.5], [{}]]) {
-      await expect(getNextQuestion(bad)).resolves.toEqual({ status: 'unavailable' })
-    }
-  })
-
-  // BUG-17: Der Ausschlussliste wurden beliebige Zahlen geglaubt. 386 Nummern
-  // *außerhalb* des Pools ergaben „Pool leer" — und damit die Gewinner-Meldung
-  // aus EC-2, ohne dass je eine Frage beantwortet worden wäre.
-  it('BUG-17: Nummern außerhalb des Pools erzeugen kein „Pool leer"', async () => {
-    const outside = Array.from({ length: POOL_SIZE }, (_, i) => 100_000 + i)
-    await expect(getNextQuestion(outside)).resolves.toEqual({ status: 'unavailable' })
-  })
-
-  it('AC-3: liefert genau vier verschiedene Namen, einer davon der richtige', async () => {
-    const result = await getNextQuestion([])
-    expect(result.status).toBe('ok')
-    if (result.status !== 'ok') return
-
-    const { options, correctIndex, pokemonId } = result.question
-    expect(options).toHaveLength(4)
-    expect(new Set(options).size).toBe(4)
-    expect(options[correctIndex]).toBe(`Name${pokemonId}`)
-  })
-
-  it('AC-3: die Bildadresse gehört zum gesuchten Pokémon', async () => {
-    const result = await getNextQuestion([])
-    if (result.status !== 'ok') throw new Error('erwartet: ok')
-    expect(result.question.imageUrl).toBe(`https://sprites.test/${result.question.pokemonId}.png`)
-  })
-
-  it('AC-5: zieht nie ein bereits gezeigtes Pokémon erneut', async () => {
-    // Alle bis auf die 42 sind verbraucht — es muss die 42 kommen.
-    const seen = Array.from({ length: POOL_SIZE }, (_, i) => i + 1).filter((id) => id !== 42)
-    const result = await getNextQuestion(seen)
-    if (result.status !== 'ok') throw new Error('erwartet: ok')
-    expect(result.question.pokemonId).toBe(42)
-  })
-
-  it('EC-2: meldet einen leeren Pool, wenn alle 386 verbraucht sind', async () => {
-    const seen = Array.from({ length: POOL_SIZE }, (_, i) => i + 1)
-    expect(await getNextQuestion(seen)).toEqual({ status: 'pool-empty' })
-  })
-
-  it('EC-5: verwirft ein Pokémon ohne deutschen Namen und zieht ein anderes', async () => {
-    let firstCall = true
-    fetchGermanName.mockImplementation(async (id: number) => {
-      if (firstCall) {
-        firstCall = false
-        return null
-      }
-      return `Name${id}`
+describe('startRoundAction', () => {
+  it('gibt weder die Pokémon-Nummer noch die richtige Option an den Browser (AC-32)', async () => {
+    drawQuestion.mockResolvedValueOnce(drawn(25, 2)).mockResolvedValueOnce(drawn(6, 0))
+    state.startRound.mockResolvedValue({
+      roundId: 'r-1',
+      currentToken: 't-1',
+      preparedToken: 't-2',
     })
 
-    const result = await getNextQuestion([])
-    expect(result.status).toBe('ok')
-    // Zwei Lösungsversuche: der erste ohne Namen, der zweite mit.
-    expect(fetchGermanName.mock.calls.length).toBeGreaterThanOrEqual(2)
+    const result = await startRoundAction()
+
+    expect(result).toEqual({
+      status: 'ok',
+      roundId: 'r-1',
+      current: { token: 't-1', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
+      prepared: { token: 't-2', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
+    })
+
+    // Der eigentliche Punkt: In der ganzen Antwort steht keine Nummer und kein
+    // Hinweis auf die Lösung — auch nicht in einem Feld, das niemand anzeigt.
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('answerId')
+    expect(serialized).not.toContain('correctIndex')
+    expect(serialized).not.toContain('25')
   })
 
-  it('AC-16: meldet "nicht ladbar", wenn die Quelle nichts liefert', async () => {
-    withTimeoutAndOneRetry.mockResolvedValue(null)
-    expect(await getNextQuestion([])).toEqual({ status: 'unavailable' })
+  it('zieht die zweite Frage ohne die Nummer der ersten (AC-5)', async () => {
+    drawQuestion.mockResolvedValueOnce(drawn(25, 2, [113])).mockResolvedValueOnce(drawn(6, 0))
+    state.startRound.mockResolvedValue({ roundId: 'r', currentToken: 'a', preparedToken: 'b' })
+
+    await startRoundAction()
+
+    const excludedForSecond = drawQuestion.mock.calls[1][0] as Set<number>
+    expect(excludedForSecond.has(25)).toBe(true)
+    expect(excludedForSecond.has(113)).toBe(true)
   })
 
-  // **Vertrag geändert am 2026-09-04 (BUG-12).** Dieser Test hieß „ignoriert
-  // unsinnige Einträge in der Ausschlussliste" und verlangte `ok`: Unsinn wurde
-  // stillschweigend herausgefiltert und weitergemacht. Genau diese Nachsicht war
-  // die Lücke — sie ließ auch `[null]` oder `"abc"` bis in `.filter()` durch,
-  // und dort gab es dann HTTP 500 statt einer Antwort.
-  //
-  // Die Grenze weist jetzt ab, statt zu reparieren. Unser eigener Client schickt
-  // so etwas nie; was es schickt, ist ein Aufruf von Hand, und der bekommt eine
-  // saubere Absage.
-  it('BUG-12: weist eine Ausschlussliste mit unsinnigen Einträgen ab, statt sie zu säubern', async () => {
-    const result = await getNextQuestion([NaN, 1.5, -3] as number[])
-    expect(result.status).toBe('unavailable')
+  it('reicht die verworfenen Nummern in den Rundenzustand (EC-5)', async () => {
+    drawQuestion.mockResolvedValueOnce(drawn(25, 2, [113])).mockResolvedValueOnce(drawn(6, 0, [201]))
+    state.startRound.mockResolvedValue({ roundId: 'r', currentToken: 'a', preparedToken: 'b' })
+
+    await startRoundAction()
+
+    expect(state.startRound.mock.calls[0][3]).toEqual([113, 201])
+  })
+
+  it('meldet „nicht ladbar", wenn keine Frage zustande kommt (AC-16)', async () => {
+    drawQuestion.mockResolvedValue(null)
+    expect(await startRoundAction()).toEqual({ status: 'unavailable' })
+    expect(state.startRound).not.toHaveBeenCalled()
+  })
+
+  it('weist einen Aufruf ohne Sitzung ab (EC-7)', async () => {
+    session(null)
+    expect(await startRoundAction()).toEqual({ status: 'unauthenticated' })
+    expect(drawQuestion).not.toHaveBeenCalled()
+  })
+})
+
+describe('replacePreparedQuestionAction', () => {
+  it('verwirft die vorbereitete Frage und zieht eine neue (EC-6)', async () => {
+    state.getRoundSnapshot.mockResolvedValue({
+      roundId: 'r-1',
+      seenIds: [25, 6],
+      streak: 1,
+      hasCurrent: true,
+      hasPrepared: false,
+    })
+    drawQuestion.mockResolvedValue(drawn(150, 1))
+    state.setPreparedQuestion.mockResolvedValue('t-neu')
+
+    const result = await replacePreparedQuestionAction()
+
+    expect(state.discardPreparedQuestion).toHaveBeenCalledWith('user-1')
+    expect(result).toEqual({
+      status: 'ok',
+      prepared: { token: 't-neu', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
+    })
+  })
+
+  it('zieht ausschließlich aus den noch nicht verbrauchten Nummern (AC-5)', async () => {
+    state.getRoundSnapshot.mockResolvedValue({
+      roundId: 'r-1',
+      seenIds: [25, 6, 113],
+      streak: 1,
+      hasCurrent: true,
+      hasPrepared: false,
+    })
+    drawQuestion.mockResolvedValue(drawn(150, 1))
+    state.setPreparedQuestion.mockResolvedValue('t-neu')
+
+    await replacePreparedQuestionAction()
+
+    expect([...(drawQuestion.mock.calls[0][0] as Set<number>)]).toEqual([25, 6, 113])
+  })
+
+  it('weist einen Aufruf ohne Sitzung ab (EC-7)', async () => {
+    session(null)
+    expect(await replacePreparedQuestionAction()).toEqual({ status: 'unauthenticated' })
+    expect(state.discardPreparedQuestion).not.toHaveBeenCalled()
+  })
+})
+
+describe('prepareNextQuestionAction', () => {
+  it('meldet „Pool leer", wenn keine Nummer mehr übrig ist (EC-2)', async () => {
+    state.getRoundSnapshot.mockResolvedValue({
+      roundId: 'r-1',
+      seenIds: [],
+      streak: 386,
+      hasCurrent: false,
+      hasPrepared: false,
+    })
+    drawQuestion.mockResolvedValue('pool-empty')
+
+    expect(await prepareNextQuestionAction()).toEqual({ status: 'pool-empty' })
+  })
+
+  it('meldet „nicht ladbar", wenn es gar keine laufende Runde gibt', async () => {
+    state.getRoundSnapshot.mockResolvedValue(null)
+    expect(await prepareNextQuestionAction()).toEqual({ status: 'unavailable' })
   })
 })

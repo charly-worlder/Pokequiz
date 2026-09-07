@@ -3,39 +3,58 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { runClientAction } from '@/lib/actions/run-action'
-import { getNextQuestion, type Question } from '@/lib/quiz/question-action'
-import { saveRun, type PersonalBest } from '@/lib/quiz/run-actions'
+import {
+  prepareNextQuestionAction,
+  promoteQuestionAction,
+  replacePreparedQuestionAction,
+  startRoundAction,
+  type ClientQuestion,
+} from '@/lib/quiz/question-action'
+import {
+  answerAction,
+  endRoundAction,
+  getRunByRoundIdAction,
+  type AnswerResult,
+  type PersonalBest,
+  type RoundResult,
+} from '@/lib/quiz/run-actions'
 import { POOL_SIZE } from '@/lib/validation/quiz'
-import { ImageProbe } from './pokemon-image'
+import { ImageProbe, questionImageUrl } from './pokemon-image'
 import { StartView } from './start-view'
 import { QuestionView } from './question-view'
 import { LoadErrorCard } from './load-error-card'
-import { ResultView, type SaveState } from './result-view'
+import { ResultView } from './result-view'
 
 /**
- * The round's state machine (design.md → Component Structure). Every transition
- * lives here; the views are presentation only.
+ * Die Zustandsmaschine der **Anzeige** (design.md → Component Structure).
  *
- *   ready --start--> loading --question ready--> open
- *   loading --failed--> error
- *   open --correct--> (brief green) --> open        (next question, usually preloaded)
- *   open --wrong--> resolved --click--> finished
- *   open --pool empty--> finished (winner)
- *   error --retry ok--> open      error --end round--> finished
- *   finished --play again--> loading      (AC-9: one click, a new round)
+ * Seit dem 2026-09-06 besitzt dieser Bildschirm die Wahrheit nicht mehr: Serie,
+ * Zeit und richtige Antwort kommen mit jeder Serverantwort mit. Er hält sie, um
+ * sie zu zeigen, nicht um sie zu berechnen — deshalb gibt es hier weder einen
+ * `correctIndex` vor der Antwort noch eine Ausschlussliste (spec.md AC-32,
+ * AC-33).
  *
- * There is no path from `finished` back to `open`: a finished round is
- * immutable, exactly like its row in the database. „Nochmal spielen" does not
- * lead back to `ready` either — AC-9 promises a started round, not the start
- * screen a second time (BUG-10, qa-report.md 2026-09-04).
+ *   bereit --Runde starten--> lädt --Frage da--> offen
+ *   offen --Klick--> wartet
+ *   wartet --Urteil richtig--> offen        (die vorbereitete Frage rückt nach)
+ *   wartet --Urteil richtig, nichts vorbereitet--> fehler
+ *   wartet --Urteil falsch / Pool leer--> aufgelöst --Klick--> beendet
+ *   fehler --Erneut versuchen--> offen      fehler --Runde beenden--> beendet
+ *   beendet --Nochmal spielen--> lädt       (AC-9: ein Klick, eine neue Runde)
+ *
+ * Aus `beendet` führt kein Weg zurück nach `offen`: Eine beendete Runde ist
+ * unveränderlich, genau wie ihre Zeile in der Datenbank.
  */
-type Phase = 'ready' | 'loading' | 'open' | 'resolved' | 'error' | 'finished'
+type Phase = 'ready' | 'loading' | 'open' | 'waiting' | 'resolved' | 'error' | 'finished'
 
-/** spec.md EC-10 — three discarded questions in a row is a broken source, not bad luck. */
+/** spec.md EC-10 — drei verworfene Fragen in Folge sind eine gebrochene Quelle. */
 const MAX_CONSECUTIVE_DISCARDS = 3
 
-/** How long the green stays visible before the next question replaces it (AC-4). */
+/** Wie lange die Auflösung einer richtigen Antwort sichtbar bleibt (AC-4). */
 const CORRECT_FEEDBACK_MS = 350
+
+const STALE_MESSAGE =
+  'Diese Runde lief auf einem anderen Gerät oder in einem anderen Tab weiter. Starte eine neue Runde.'
 
 export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: PersonalBest | null }) {
   const router = useRouter()
@@ -43,52 +62,77 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   const [phase, setPhase] = useState<Phase>('ready')
   const [personalBest, setPersonalBest] = useState(initialPersonalBest)
 
-  const [current, setCurrent] = useState<Question | null>(null)
-  /** Validated and waiting — what makes the swap free of a loading state (AC-10). */
-  const [reserve, setReserve] = useState<Question | null>(null)
-  /** Fetched, image not yet proven loadable. */
-  const [probing, setProbing] = useState<Question | null>(null)
+  const [current, setCurrent] = useState<ClientQuestion | null>(null)
+  /** Geprüft und wartend — das macht den Wechsel frei von einem Ladezustand (AC-10). */
+  const [reserve, setReserve] = useState<ClientQuestion | null>(null)
+  /** Vorbereitet, Bild noch nicht als ladbar erwiesen. */
+  const [probing, setProbing] = useState<ClientQuestion | null>(null)
 
   const [chosenIndex, setChosenIndex] = useState<number | null>(null)
+  /** Erst nach dem Urteil des Servers bekannt (AC-6) — vorher weiß das niemand hier. */
+  const [correctIndex, setCorrectIndex] = useState<number | null>(null)
   const [streak, setStreak] = useState(0)
-  const [poolCleared, setPoolCleared] = useState(false)
+  const [result, setResult] = useState<RoundResult | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [starting, setStarting] = useState(false)
-  const [saveState, setSaveState] = useState<SaveState>('saving')
-  const [isPersonalBest, setIsPersonalBest] = useState(false)
-  /** The stopped time, frozen into state so the result screen never reads a ref while rendering. */
-  const [finalDurationMs, setFinalDurationMs] = useState(0)
 
   /**
-   * Spiegelt `streak` **synchron** (BUG-33).
+   * Spiegelt `current` **synchron**.
    *
-   * `answer` plant `window.setTimeout(advance, …)` aus dem Render **vor**
-   * `setStreak(nextStreak)`. Das eingefangene `advance` hält das `fetchQuestion`
-   * desselben Renders, und dieses hielt `streak` in seiner Closure — der Zweig
-   * „Pool leer" speicherte deshalb eine richtige Antwort **zu wenig**, dauerhaft
-   * und ranglistenrelevant. Ein Ref, der neben `setStreak` gesetzt wird, ist zum
-   * Zeitpunkt des Timeouts bereits aktuell.
-   *
-   * Die Anzeige liest weiterhin den State — ein Ref löst kein Rendern aus.
+   * `advance` setzt `setCurrent(null)` und ruft im selben Durchlauf
+   * `prepareNext()` auf. Dessen Closure hielt bis zum ersten Testlauf am
+   * 2026-09-06 noch die *alte*, gefüllte `current` — die Fehlerkarte blieb
+   * deshalb aus, und der Bildschirm stand für immer auf „Runde wird
+   * vorbereitet …". Dieselbe Fehlerklasse wie BUG-33 im alten Aufbau.
    */
-  const streakRef = useRef(0)
+  const currentRef = useRef<ClientQuestion | null>(null)
+  const showCurrent = useCallback((question: ClientQuestion | null) => {
+    currentRef.current = question
+    setCurrent(question)
+  }, [])
 
-  const seenIdsRef = useRef<number[]>([])
+  /**
+   * Spiegelt `probing` synchron. `advance` entscheidet damit, ob es überhaupt
+   * eine neue Frage anfordern darf — siehe unten.
+   */
+  /**
+   * Spiegelt `reserve` **synchron**.
+   *
+   * `advance` läuft aus einem `setTimeout` und hielt die Reserve aus dem Render
+   * fest, in dem die Antwort abgeschickt wurde. Füllte die Bildprüfung sie
+   * dazwischen, sah `advance` sie nicht, zog eine überflüssige Frage nach — und
+   * die konnte der Server nicht mehr zur aktuellen machen, weil er die richtige
+   * längst befördert hatte. Die Runde blieb auf „Runde wird vorbereitet …"
+   * stehen (E2E-Lauf 2026-09-06, 11 von 57 rot). Dieselbe Fehlerklasse wie
+   * BUG-33 im abgelösten Aufbau.
+   */
+  const reserveRef = useRef<ClientQuestion | null>(null)
+  const setReserveQuestion = useCallback((question: ClientQuestion | null) => {
+    reserveRef.current = question
+    setReserve(question)
+  }, [])
+
+  const probingRef = useRef<ClientQuestion | null>(null)
+  const setProbingQuestion = useCallback((question: ClientQuestion | null) => {
+    probingRef.current = question
+    setProbing(question)
+  }, [])
+
   const discardsRef = useRef(0)
+  const preparingRef = useRef(false)
+  /** Die Runden-Kennung, mit der ein verlorengegangenes Ergebnis nachlesbar ist (EC-3). */
   const roundIdRef = useRef<string>('')
-  const fetchingRef = useRef(false)
   /**
-   * Mirrors `current` so fetchQuestion can tell "the player is waiting for this
-   * question" from "this was only a prefetch". A prefetch failure must never
-   * interrupt a question the player is still answering.
+   * Die Antwort, deren Urteil unterwegs verlorenging. Ist sie gesetzt, wiederholt
+   * „Erneut versuchen" die Antwort statt eine Frage nachzuladen (EC-3).
    */
-  const hasCurrentRef = useRef(false)
-  useEffect(() => {
-    hasCurrentRef.current = current !== null
-  }, [current])
+  const pendingAnswerRef = useRef<{ token: string; choice: number } | null>(null)
 
-  // --- Clock: starts with the first visible picture (AC-2), stands still while
-  // the error card is up (AC-16), resumes on recovery (AC-17) ----------------
+  // --- Uhr: reine Anzeige ---------------------------------------------------
+  // Gewertet wird die servergemessene Zeit (AC-34, EC-13); diese hier läuft nur,
+  // damit der Spieler etwas laufen sieht. Sie startet mit dem ersten sichtbaren
+  // Bild (AC-2) und steht still, während die Fehlerkarte oben ist (AC-16).
   const [elapsedMs, setElapsedMs] = useState(0)
   const accumulatedRef = useRef(0)
   const startedAtRef = useRef<number | null>(null)
@@ -115,23 +159,18 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
   }, [])
 
   /**
-   * spec.md AC-19 — warn before leaving a round that has something to lose.
-   * Only from a streak of 1: at 0 there is nothing to rescue, and a dialog on
-   * every reload would be noise. The round itself stays unrecoverable by
-   * design (docs/app-shell.md) — this saves the accidental F5, it does not
-   * pretend the state survives.
+   * spec.md AC-19 — vor dem Verlassen einer Runde warnen, die etwas zu verlieren
+   * hat. Erst ab Serie 1: Bei 0 gibt es nichts zu retten.
    *
-   * BUG-1 (qa-report.md): this was lost when the state machine was rewritten
-   * during /build and shipped missing. `quiz-screen.error-states.test.tsx` is
-   * its acceptance test.
-   *
-   * BUG-6 (qa-report.md): `loading` used to be missing here. It is the phase
-   * `advance` sets when the next question was not preloaded in time, so the
-   * round kept running with the full streak while the warning was off —
-   * measured at ~400ms per round, 5.2% of it.
+   * Die Runde bleibt bewusst nicht wiederherstellbar (spec.md → Out of Scope);
+   * das rettet den versehentlichen Reload, ohne eine Wiederaufnahme vorzutäuschen.
    */
   const roundInFlight =
-    phase === 'open' || phase === 'resolved' || phase === 'error' || phase === 'loading'
+    phase === 'open' ||
+    phase === 'waiting' ||
+    phase === 'resolved' ||
+    phase === 'error' ||
+    phase === 'loading'
   useEffect(() => {
     if (!roundInFlight || streak < 1) return
     const warn = (event: BeforeUnloadEvent) => event.preventDefault()
@@ -139,293 +178,292 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
     return () => window.removeEventListener('beforeunload', warn)
   }, [roundInFlight, streak])
 
-  /** spec.md EC-7 — session gone mid-round: the round is dropped, never reassigned. */
+  /** spec.md EC-7 — Sitzung weg: Die Runde ist verloren, nie einem fremden Konto zugeordnet. */
   const bailToLogin = useCallback(() => router.push('/login'), [router])
 
-  // --- Ending the round -----------------------------------------------------
+  const showResult = useCallback((round: RoundResult) => {
+    pendingAnswerRef.current = null
+    setResult(round)
+    setStreak(round.streak)
+    setPhase('finished')
+    if (round.isPersonalBest) {
+      setPersonalBest({ streak: round.streak, durationMs: round.durationMs })
+    }
+  }, [])
 
-  const finishRound = useCallback(
-    async (finalStreak: number, cleared: boolean) => {
+  const goToError = useCallback(
+    (message: string | null) => {
       pauseClock()
-      setPoolCleared(cleared)
-      setPhase('finished')
-      setSaveState('saving')
-
-      const durationMs = Math.round(accumulatedRef.current)
-      setFinalDurationMs(durationMs)
-
-      // BUG-7 (qa-report.md 2026-09-04): Ohne diesen Fänger lief ein
-      // Transport-Fehler an allen folgenden Zeilen vorbei — `saveState` blieb
-      // auf 'saving', der Ergebnis-Screen sah aus wie ein gespeichertes
-      // Ergebnis, und die Fehler-UI aus EC-3 wurde nie erreicht. Genau der
-      // Fehlertyp, den PROJ-1 mit `runAuthAction` längst behoben hatte.
-      const result = await runClientAction(
-        () =>
-          saveRun({
-            streak: finalStreak,
-            durationMs,
-            clientRoundId: roundIdRef.current,
-          }),
-        { status: 'failed' as const }
-      )
-
-      if (result.status === 'unauthenticated') return bailToLogin()
-      if (result.status === 'saved') {
-        setSaveState('saved')
-        setIsPersonalBest(result.isPersonalBest)
-        if (result.isPersonalBest) setPersonalBest({ streak: finalStreak, durationMs })
-        return
-      }
-      // spec.md EC-3 — result stays on screen, with a retry.
-      setSaveState('failed')
+      setErrorMessage(message)
+      setPhase('error')
     },
-    [pauseClock, bailToLogin]
+    [pauseClock]
   )
 
-  // --- Fetching -------------------------------------------------------------
-
-  const fetchQuestion = useCallback(async () => {
-    if (fetchingRef.current) return
-    fetchingRef.current = true
-    try {
-      // Ein Transport-Fehler ist für den Spieler dasselbe wie eine nicht
-      // lieferbare Frage: Wartet er darauf, zeigt AC-16 die Fehlerkarte
-      // (BUG-7, gleiche Wurzel).
-      const result = await runClientAction(() => getNextQuestion(seenIdsRef.current), {
-        status: 'unavailable' as const,
-      })
-
-      if (result.status === 'unauthenticated') {
-        bailToLogin()
-        return
-      }
-
-      if (result.status === 'pool-empty') {
-        // Only ends the round if the player is actually waiting for this
-        // question; during a prefetch it just means there is nothing left to
-        // preload, and answer() ends the round after the last correct answer.
-        //
-        // BUG-23: `cleared` used to be a flat `true` here — „Pool leer" was
-        // treated as „alle geschafft". Those are not the same thing. Questions
-        // discarded under EC-6 still consume pool entries, so the pool can run
-        // out while the streak is below 386, and the player would have read
-        // „Du hast jedes Pokémon aus dem Pool richtig erkannt" without having
-        // done it. EC-2 asks about correct answers, so the streak decides.
-        //
-        // This is the second half of BUG-17. The first half fixed `answer()`
-        // and its comment called this path „the honest place for it" — it was
-        // not, and nobody looked twice.
-        if (!hasCurrentRef.current) {
-          await finishRound(streakRef.current, streakRef.current >= POOL_SIZE)
-        }
-        return
-      }
-
-      if (result.status === 'unavailable') {
-        // A failed *prefetch* is invisible: the player is still answering the
-        // current question. The error card appears only when the next question
-        // is genuinely due (spec.md AC-16).
-        if (!hasCurrentRef.current) {
-          pauseClock()
-          setPhase('error')
-        }
-        return
-      }
-
-      seenIdsRef.current = [...seenIdsRef.current, result.question.pokemonId]
-      setProbing(result.question)
-    } catch {
-      if (!hasCurrentRef.current) {
-        pauseClock()
-        setPhase('error')
-      }
-    } finally {
-      fetchingRef.current = false
-    }
-    // `streak` steht bewusst nicht in dieser Liste: Der einzige Lesezugriff läuft
-    // über `streakRef` (BUG-33). Das hält die Identität von `fetchQuestion` über
-    // eine ganze Runde stabil — und damit auch die von `advance`, das in einem
-    // Timeout eingefangen wird.
-  }, [bailToLogin, finishRound, pauseClock])
-
-  /** The probe loaded the picture — promote the question (AC-10). */
-  const onProbeOk = useCallback(() => {
-    const pending = probing
-    if (!pending) return
-
-    discardsRef.current = 0
-    setProbing(null)
-
-    if (hasCurrentRef.current) {
-      setReserve(pending)
-      return
-    }
-
-    // This question becomes the visible one. The ref is set here rather than
-    // waiting for the effect, so the prefetch below is correctly treated as a
-    // prefetch and not as "the player is waiting".
-    hasCurrentRef.current = true
-    setCurrent(pending)
-    setPhase('open')
-
-    // spec.md AC-10 — start loading the *next* question straight away, while
-    // this one is still being answered. Without this the reserve is never
-    // filled and every question shows a loading state.
-    void fetchQuestion()
-  }, [probing, fetchQuestion])
+  // --- Fragen vorbereiten ---------------------------------------------------
 
   /**
-   * spec.md EC-6 → EC-10: verwerfen, und nach dreien die Quelle für gebrochen
-   * erklären.
+   * Holt die nächste vorbereitete Frage und prüft ihr Bild (AC-10).
    *
-   * **Hier gab es bis zum 2026-09-04 eine Reparaturstufe** (EC-11): Bei einem
-   * kaputten Bild wurde die offizielle Adresse über `/pokemon/{id}` nachgeschlagen
-   * und erneut versucht. Sie ist ersatzlos entfallen (BUG-16) — die offizielle
-   * Adresse ist für den Pool 1–386 zeichengleich mit der konstruierten, das
-   * Nachschlagen konnte also nie ein anderes Ergebnis liefern. Es kostete über
-   * 100 KB je verworfener Frage und arbeitete damit gegen die Fair-Use-Zusage aus
-   * AC-31. Ein nicht ladbares Bild führt jetzt unmittelbar zum Verwurf.
+   * `replace` unterscheidet die beiden Anlässe: nach einer richtigen Antwort eine
+   * neue vorbereiten, oder eine vorbereitete ersetzen, deren Bild nicht lud
+   * (EC-6). In beiden Fällen bleibt die **aktuelle** Frage unangetastet — das ist
+   * EC-12, und deshalb ist „Bild kaputt" kein Überspringen-Knopf.
    */
-  const onProbeFail = useCallback(() => {
-    if (!probing) return
+  const prepareNext = useCallback(
+    async (replace = false) => {
+      if (preparingRef.current) return
+      preparingRef.current = true
+      try {
+        const action = replace ? replacePreparedQuestionAction : prepareNextQuestionAction
+        const result = await runClientAction(() => action(), { status: 'unavailable' as const })
 
-    setProbing(null)
-    discardsRef.current += 1
-
-    // spec.md EC-10 — drei Verwürfe in Folge sind eine gebrochene Quelle.
-    // BUG-13 (qa-report.md 2026-09-04): Die Grenze griff nur, wenn der Spieler
-    // wartete. Fiel die Bildquelle aus, *während* er noch antwortete, zog das
-    // Vorladen endlos neue Fragen — je vier Namensabfragen an die PokeAPI, ohne
-    // Backoff, gegen genau die Fair-Use-Zusage, um die dieses Feature sich
-    // sonst bemüht (AC-31). Die Grenze stoppt die Schleife jetzt in beiden
-    // Fällen; die Fehlerkarte zeigt sie nur dem, der wartet.
-    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) {
-      if (!hasCurrentRef.current) {
-        pauseClock()
-        setPhase('error')
+        if (result.status === 'unauthenticated') return bailToLogin()
+        if (result.status === 'ok') {
+          setProbingQuestion(result.prepared)
+          return
+        }
+        // „Pool leer" heißt hier nur: nichts mehr vorzubereiten. Die Runde endet
+        // erst, wenn der Server sie auf die letzte richtige Antwort hin beendet.
+        if (result.status === 'pool-empty') return
+        if (!currentRef.current) goToError(null)
+      } finally {
+        preparingRef.current = false
       }
+    },
+    [bailToLogin, goToError, setProbingQuestion]
+  )
+
+  /** Das Bild der vorbereiteten Frage lädt — sie darf nachrücken (AC-10). */
+  const onProbeOk = useCallback(() => {
+    if (!probing) return
+    discardsRef.current = 0
+    const ready = probing
+    setProbingQuestion(null)
+
+    // Wartet der Spieler gerade auf eine Frage, wird die geprüfte **sofort** die
+    // aktuelle. Ohne diesen Zweig landete sie nur in der Reserve, und der
+    // Bildschirm blieb auf „Runde wird vorbereitet …" stehen — gefunden vom
+    // E2E-Journey am 2026-09-06, nachdem zwei richtige Antworten die Reserve
+    // geleert hatten.
+    if (!currentRef.current) {
+      // Der Server hält diese Frage als *vorbereitete*. Erst mit der Beförderung
+      // wird sie dort die aktuelle — und erst dann beginnt ihre Messung (AC-34).
+      // Ohne diesen Schritt zeigte der Browser eine Frage, die der Server nicht
+      // als offen kennt, und jede Antwort darauf liefe ins Leere.
+      void (async () => {
+        const { promoted } = await runClientAction(() => promoteQuestionAction(ready.token), {
+          promoted: false,
+        })
+        if (!promoted) return
+        showCurrent(ready)
+        setPhase('open')
+        void prepareNext()
+      })()
       return
     }
-    void fetchQuestion()
-  }, [probing, pauseClock, fetchQuestion])
 
-  // --- Round lifecycle ------------------------------------------------------
+    setReserveQuestion(ready)
+  }, [probing, showCurrent, prepareNext, setProbingQuestion, setReserveQuestion])
+
+  /** spec.md EC-6 → EC-10: verwerfen, und nach dreien die Quelle für gebrochen erklären. */
+  const onProbeFail = useCallback(() => {
+    if (!probing) return
+    setProbingQuestion(null)
+    discardsRef.current += 1
+
+    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) {
+      if (!currentRef.current) goToError(null)
+      return
+    }
+    void prepareNext(true)
+  }, [probing, goToError, prepareNext, setProbingQuestion])
+
+  // --- Runde ----------------------------------------------------------------
 
   const startRound = useCallback(() => {
-    if (starting) return // spec.md EC-9 — repeated clicks start exactly one round
+    if (starting) return // spec.md EC-9 — mehrere Klicks starten genau eine Runde
     setStarting(true)
 
-    seenIdsRef.current = []
-    streakRef.current = 0
     discardsRef.current = 0
-    roundIdRef.current = crypto.randomUUID()
     accumulatedRef.current = 0
     startedAtRef.current = null
-    hasCurrentRef.current = false
+    pendingAnswerRef.current = null
 
     setElapsedMs(0)
     setStreak(0)
     setChosenIndex(null)
-    setCurrent(null)
-    setReserve(null)
-    setProbing(null)
-    setPoolCleared(false)
-    setIsPersonalBest(false)
+    setCorrectIndex(null)
+    showCurrent(null)
+    setReserveQuestion(null)
+    setProbingQuestion(null)
+    setResult(null)
+    setErrorMessage(null)
     setPhase('loading')
 
-    void fetchQuestion().finally(() => setStarting(false))
-  }, [starting, fetchQuestion])
+    void (async () => {
+      try {
+        const started = await runClientAction(() => startRoundAction(), {
+          status: 'unavailable' as const,
+        })
 
+        if (started.status === 'unauthenticated') return bailToLogin()
+        if (started.status !== 'ok') return goToError(null)
+
+        roundIdRef.current = started.roundId
+        showCurrent(started.current)
+        setProbingQuestion(started.prepared)
+        setPhase('open')
+      } finally {
+        setStarting(false)
+      }
+    })()
+  }, [starting, bailToLogin, goToError, showCurrent, setProbingQuestion, setReserveQuestion])
+
+  /** Nach einer richtigen Antwort: die vorbereitete Frage wird die aktuelle. */
   const advance = useCallback(() => {
     setChosenIndex(null)
-    if (reserve) {
-      setCurrent(reserve)
-      setReserve(null)
+    setCorrectIndex(null)
+
+    const ready = reserveRef.current
+    if (ready) {
+      showCurrent(ready)
+      setReserveQuestion(null)
       setPhase('open')
-      void fetchQuestion()
+      void prepareNext()
       return
     }
-    // Nothing preloaded — the player waits, so a failure now is visible.
-    hasCurrentRef.current = false
-    setCurrent(null)
-    // Das Vorladen kann an der Verwurfsgrenze stehengeblieben sein, während der
-    // Spieler noch antwortete (BUG-13). Jetzt wartet er — das ist der Fall aus
-    // EC-10, also die Fehlerkarte statt eines neuen Anlaufs.
-    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) {
-      pauseClock()
-      setPhase('error')
-      return
-    }
+
+    // Nichts vorbereitet — jetzt wartet der Spieler, ein Fehlschlag ist also
+    // sichtbar (AC-16). Die Uhr steht dabei, weil serverseitig keine Frage offen
+    // ist (AC-34).
+    showCurrent(null)
+    if (discardsRef.current >= MAX_CONSECUTIVE_DISCARDS) return goToError(null)
     setPhase('loading')
-    void fetchQuestion()
-  }, [reserve, fetchQuestion, pauseClock])
+
+    // **Nur, wenn nichts in Prüfung ist.** Sonst zöge der Browser eine zweite
+    // Frage nach, der Server überschriebe seine vorbereitete mit ihr, und die
+    // Beförderung der ersten liefe ins Leere — der Bildschirm bliebe auf „Runde
+    // wird vorbereitet …" stehen. Gefunden vom E2E-Journey am 2026-09-06 beim
+    // zweiten Wechsel in Folge; die laufende Sonde befördert selbst, sobald ihr
+    // Bild geladen ist.
+    if (!probingRef.current) void prepareNext()
+  }, [prepareNext, goToError, showCurrent, setReserveQuestion])
+
+  const submit = useCallback(
+    async (token: string, choice: number) => {
+      pendingAnswerRef.current = { token, choice }
+
+      const outcome = await runClientAction<AnswerResult | { status: 'transport-error' }>(() => answerAction({ token, choice }), {
+        status: 'transport-error' as const,
+      })
+
+      if (outcome.status === 'unauthenticated') return bailToLogin()
+
+      if (outcome.status === 'stale') {
+        // Zwei Möglichkeiten: Das Urteil ging beim ersten Versuch verloren,
+        // *nachdem* der Server geschrieben hatte — dann liegt das Ergebnis in der
+        // Datenbank und wird hier nachgelesen (EC-3). Oder die Runde lief
+        // anderswo weiter (EC-15).
+        const stored = await runClientAction(() => getRunByRoundIdAction(roundIdRef.current), null)
+        if (stored) return showResult(stored)
+        return goToError(STALE_MESSAGE)
+      }
+
+      if (outcome.status !== 'answered') {
+        // Transport abgerissen oder abgelehnt: Der Rundenzustand steht noch, die
+        // Antwort ist wiederholbar (EC-3).
+        return goToError(null)
+      }
+
+      pendingAnswerRef.current = null
+      setCorrectIndex(outcome.correctIndex)
+      setStreak(outcome.streak)
+
+      if (outcome.result) {
+        pauseClock()
+        setPhase('resolved')
+        setResult(outcome.result)
+        if (outcome.result.isPersonalBest) {
+          setPersonalBest({
+            streak: outcome.result.streak,
+            durationMs: outcome.result.durationMs,
+          })
+        }
+        return
+      }
+
+      window.setTimeout(advance, CORRECT_FEEDBACK_MS)
+    },
+    [advance, bailToLogin, goToError, pauseClock, showResult]
+  )
 
   const answer = useCallback(
     (index: number) => {
-      if (chosenIndex !== null || !current) return // spec.md EC-1
+      // spec.md EC-1 — der zweite Klick bleibt wirkungslos. Serverseitig hält das
+      // ohnehin (Migration 0009); hier verhindert es nur die doppelte Anfrage.
+      if (chosenIndex !== null || !current || phase !== 'open') return
       setChosenIndex(index)
-
-      if (index !== current.correctIndex) {
-        pauseClock()
-        setPhase('resolved')
-        return
-      }
-
-      const nextStreak = streak + 1
-      streakRef.current = nextStreak
-      setStreak(nextStreak)
-
-      // spec.md EC-2 — every Pokémon in the pool answered correctly.
-      //
-      // Counted on the streak, not on `seenIdsRef` (BUG-17): that list also holds
-      // questions that were *discarded* because their picture would not load
-      // (EC-6), so it could reach the pool size while the player had answered
-      // fewer. The winner message would then have been handed out for a round
-      // that never earned it. The streak is exactly „richtig beantwortet", which
-      // is what EC-2 asks about.
-      //
-      // A round with discards therefore no longer ends here — it ends when the
-      // server reports „Pool leer", which is the honest place for it.
-      if (nextStreak >= POOL_SIZE && !reserve) {
-        window.setTimeout(() => void finishRound(nextStreak, true), CORRECT_FEEDBACK_MS)
-        return
-      }
-      window.setTimeout(advance, CORRECT_FEEDBACK_MS)
+      setPhase('waiting')
+      void submit(current.token, index)
     },
-    [chosenIndex, current, streak, reserve, pauseClock, advance, finishRound]
+    [chosenIndex, current, phase, submit]
   )
 
-  /** spec.md AC-17 — unlimited manual retries; the streak and clock are untouched. */
+  /** spec.md AC-17 — beliebig oft wiederholbar; Serie und Zeit bleiben unangetastet. */
   const retryAfterError = useCallback(() => {
     setRetrying(true)
+    setErrorMessage(null)
     discardsRef.current = 0
-    void fetchQuestion().finally(() => setRetrying(false))
-  }, [fetchQuestion])
 
-  /** spec.md AC-2 — the clock runs from the moment the picture is on screen. */
+    void (async () => {
+      try {
+        const pending = pendingAnswerRef.current
+        if (pending) {
+          setPhase('waiting')
+          await submit(pending.token, pending.choice)
+          return
+        }
+        setPhase('loading')
+        await prepareNext()
+        // Nichts vorbereitet bekommen: zurück in die Fehlerkarte.
+        setPhase((previous) => (previous === 'loading' ? 'error' : previous))
+      } finally {
+        setRetrying(false)
+      }
+    })()
+  }, [prepareNext, submit])
+
+  const endRound = useCallback(async () => {
+    const outcome = await runClientAction(() => endRoundAction(), { status: 'gone' as const })
+    if (outcome.status === 'unauthenticated') return bailToLogin()
+    if (outcome.status === 'ended') return showResult(outcome.result)
+
+    // Es gab keinen Rundenzustand mehr — vielleicht war die Runde schon
+    // geschrieben. Nachlesen statt den Spieler ohne Ergebnis stehenzulassen.
+    const stored = await runClientAction(() => getRunByRoundIdAction(roundIdRef.current), null)
+    if (stored) return showResult(stored)
+    goToError(STALE_MESSAGE)
+  }, [bailToLogin, goToError, showResult])
+
+  /** spec.md AC-2 — die angezeigte Uhr läuft ab dem ersten sichtbaren Bild. */
   const onPictureVisible = useCallback(() => {
-    if (phase === 'open') startClock()
+    if (phase === 'open' || phase === 'waiting') startClock()
   }, [phase, startClock])
 
-  // --- Render ---------------------------------------------------------------
+  // --- Darstellung ----------------------------------------------------------
 
   const probe = probing ? (
-    <ImageProbe src={probing.imageUrl} onOk={onProbeOk} onFail={onProbeFail} />
+    <ImageProbe src={questionImageUrl(probing.token)} onOk={onProbeOk} onFail={onProbeFail} />
   ) : null
 
-  if (phase === 'finished') {
-    // spec.md AC-9 — „Nochmal spielen" startet die neue Runde unmittelbar. Der
-    // Umweg über den Startbildschirm war BUG-10 (qa-report.md 2026-09-04): ein
-    // zusätzlicher Klick, der gegen das PRD-Erfolgskriterium „direkt eine
-    // zweite Runde" arbeitet.
+  if (phase === 'finished' && result) {
     return (
       <ResultView
-        streak={streak}
-        durationMs={finalDurationMs}
-        poolCleared={poolCleared}
-        isPersonalBest={isPersonalBest}
-        saveState={saveState}
-        onRetrySave={() => void finishRound(streak, poolCleared)}
+        streak={result.streak}
+        durationMs={result.durationMs}
+        poolCleared={result.streak >= POOL_SIZE}
+        isPersonalBest={result.isPersonalBest}
         onPlayAgain={startRound}
       />
     )
@@ -447,8 +485,9 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         <LoadErrorCard
           streak={streak}
           retrying={retrying}
+          message={errorMessage}
           onRetry={retryAfterError}
-          onEndRound={() => void finishRound(streak, false)}
+          onEndRound={() => void endRound()}
         />
       </>
     )
@@ -473,8 +512,10 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
         streak={streak}
         elapsedMs={elapsedMs}
         chosenIndex={chosenIndex}
+        correctIndex={correctIndex}
+        waiting={phase === 'waiting'}
         onAnswer={answer}
-        onContinue={() => void finishRound(streak, false)}
+        onContinue={() => result && showResult(result)}
         onPictureVisible={onPictureVisible}
       />
     </>

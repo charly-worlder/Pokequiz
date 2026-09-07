@@ -5,7 +5,6 @@ import {
   answerOptions,
   clockValue,
   register,
-  runSavedResponse,
   streakValue,
   waitForQuestion,
 } from './helpers'
@@ -21,7 +20,6 @@ import {
 
 test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-11, EC-1)', async ({
   page,
-  request,
 }) => {
   await register(page, 'e2eRun')
 
@@ -51,17 +49,20 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   await expect(streakValue(page)).toHaveText('0')
   const seen: string[] = []
   for (let answered = 1; answered <= 3; answered++) {
-    const { id } = await answerCorrectly(page, request)
-    seen.push(id)
+    const { german } = await answerCorrectly(page)
+    seen.push(german)
     await expect(streakValue(page)).toHaveText(String(answered))
   }
 
   // AC-5 — kein Pokémon kommt innerhalb einer Runde zweimal als Lösung vor.
+  // Gemessen an den deutschen Namen der richtigen Antworten: Die Pokémon-Nummer
+  // ist seit dem 2026-09-06 aus der Seite nicht mehr ablesbar (AC-32), und der
+  // Name ist im Pool eindeutig.
   expect(new Set(seen).size, `Pokémon doppelt gezogen: ${seen.join(', ')} (AC-5)`).toBe(seen.length)
 
   // AC-6 — die falsche Antwort löst auf und beendet die Runde, ohne weiterzuspringen.
   await waitForQuestion(page)
-  const { german } = await answerWrongly(page, request)
+  const { german } = await answerWrongly(page)
 
   const resolution = page.getByRole('status')
   await expect(resolution).toContainText('Richtig wäre')
@@ -87,9 +88,11 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   // gebaut hat; vorher stand hier ein Link auf eine 404. Dieser Test dreht sich
   // um, sobald LEADERBOARD_PAGE_EXISTS auf true steht — dann muss der Link da
   // sein, und wer den Schalter umlegt, sieht sofort, wo nachzuziehen ist.
-  const runSaved = runSavedResponse(page)
+  // **Gespeichert ist zu diesem Zeitpunkt schon.** Seit dem 2026-09-06 schreibt
+  // der Server die Zeile, bevor er das Urteil zurückgibt (AC-35) — es gibt keinen
+  // Speichern-Aufruf mehr, auf den dieser Test warten könnte. Der Klick führt nur
+  // noch zur Anzeige.
   await page.getByRole('button', { name: 'Weiter zum Ergebnis' }).click()
-  await runSaved
   await expect(page.getByText('Runde beendet')).toBeVisible()
   await expect(page.getByText('richtige Antworten in')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Nochmal spielen' })).toBeVisible()

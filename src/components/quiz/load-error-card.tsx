@@ -14,11 +14,18 @@ import { Button } from '@/components/ui/button'
 export function LoadErrorCard({
   streak,
   retrying,
+  message,
   onRetry,
   onEndRound,
 }: {
   streak: number
   retrying: boolean
+  /**
+   * Abweichender Grund, falls die Frage nicht am Laden liegt — etwa eine Runde,
+   * die in einem anderen Tab weiterlief (spec.md EC-15). Ohne Angabe steht hier
+   * der Ausfall der Datenquelle (AC-16).
+   */
+  message?: string | null
   onRetry: () => void
   onEndRound: () => void
 }) {
@@ -29,12 +36,16 @@ export function LoadErrorCard({
     >
       <div className="space-y-2">
         <h2 className="text-[21px] font-bold tracking-[-0.02em]">
-          Die nächste Frage lädt gerade nicht
+          {message ? 'Diese Runde ist nicht mehr offen' : 'Die nächste Frage lädt gerade nicht'}
         </h2>
         <p className="mx-auto max-w-[40ch] text-[15px] text-muted-foreground text-pretty">
-          Die Pokémon-Datenquelle antwortet nicht. Deine Serie von{' '}
-          <span className="tabular font-semibold text-foreground">{streak}</span> bleibt erhalten,
-          und die Uhr steht so lange still.
+          {message ?? (
+            <>
+              Die Pokémon-Datenquelle antwortet nicht. Deine Serie von{' '}
+              <span className="tabular font-semibold text-foreground">{streak}</span> bleibt
+              erhalten, und die Uhr steht so lange still.
+            </>
+          )}
         </p>
       </div>
 

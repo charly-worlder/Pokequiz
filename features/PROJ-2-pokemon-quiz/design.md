@@ -244,6 +244,30 @@ Persoenliche Bestleistung lesen (Server-Komponente)
 - [ ] Ob das gehostete Projekt `create extension pg_cron` aus einer Migration heraus zulaesst, ist erst am echten Projekt zu sehen. Faellt es durch, greift die Dashboard-Zeile aus „Settings the user makes".
 - [ ] Ob die 110 KB des rohen PNG die 3-Sekunden-Zusage aus AC-2 gefaehrden, ist eine Messung wert, sobald die erste Runde laeuft. Hebel waere eine serverseitige Verkleinerung im Route Handler; sie kostet Rechenzeit je Pokemon einmalig und liesse sich neben den Zwischenspeicher legen.
 
+## Notizen aus dem Bau (2026-09-06)
+
+Fünf Abweichungen bzw. Präzisierungen gegenüber dem genehmigten Entwurf, alle innerhalb seiner Zusagen.
+
+**1. Eine siebte Datenbankfunktion: `promote_prepared_question`.** Der Entwurf nannte sechs. Beim Bau zeigte sich, dass „vorbereitete Frage" und „aktuelle Frage" einen eigenen Übergang brauchen: Wartet der Spieler (nach einer richtigen Antwort lag nichts bereit), muss die nachgezogene Frage aktuell werden — und zwar **erst, wenn ihr Bild geladen ist**, weil dort der Ausgabezeitpunkt und damit die Messung beginnt (AC-34). Der naheliegende Weg, sie gleich als aktuelle entstehen zu lassen, wurde verworfen: Eine aktuelle Frage ist nach EC-12 nicht mehr verwerfbar, und lädt ihr Bild nicht, säße die Runde fest. Jede Frage entsteht deshalb als vorbereitete — dort ist sie verwerfbar — und wird separat befördert. Die Funktion ist **idempotent**: Hat `submit_answer` bereits befördert, meldet sie Erfolg statt Fehlschlag.
+
+**2. Ein eigenes Modul fürs Ziehen: `src/lib/quiz/draw-question.ts`.** Es gibt die Lösung zurück und darf deshalb nie ein Endpunkt sein; in einer Server-Action-Datei wäre jeder Export einer. Der Wächter über die Server Actions hat das beim ersten Lauf bestätigt — er hat sogar den bloßen *Kommentar* mit der Direktive angemahnt, was richtig war und den Kommentar gekostet hat, nicht die Regel.
+
+**3. `load-error-card.tsx` bekam eine optionale Meldung.** Die Fehlerkarte trug bisher nur den Ausfall der Datenquelle (AC-16); für EC-15 („die Runde lief anderswo weiter") braucht sie einen zweiten Text. Die Datei stand in keiner Aufgabe — die Änderung ist klein und berührt keine andere.
+
+**4. Zwei Wettläufe im Anzeige-Zustand, beide von den E2E-Journeys gefunden, beide dieselbe Klasse wie BUG-33 im abgelösten Aufbau.** `advance` läuft aus einem `setTimeout` und las Reserve und aktuelle Frage aus einer veralteten Closure; einmal zog es dadurch eine überflüssige Frage nach, die der Server nie zur aktuellen machte, und die Runde blieb auf „Runde wird vorbereitet …" stehen (11 von 57 E2E-Tests rot). Behoben mit Refs, die neben dem State gesetzt werden — `currentRef`, `reserveRef`, `probingRef`. **Kein Test der Unit-Ebene hat das gesehen**, weil dort keine echten Bilder laden; erst die drei Engines haben es aufgedeckt.
+
+**5. Zwei falsch-grüne Tests, gefunden durch die Rot-Gegenprobe zu T48.** Sie sind der Grund, warum die Gegenprobe verlangt war:
+- *„Ohne Sitzung kein Bild"* blieb grün, als die Sitzungsprüfung aus der Bild-Route entfernt wurde — der Proxy leitet unangemeldete Aufrufe schon vorher um. Der E2E-Test belegt also „ein Fremder bekommt kein Bild", nicht „die Route prüft selbst". Letzteres hält jetzt ausdrücklich der Unit-Test der Route fest, und der Umfang steht als Kommentar im E2E-Test.
+- *„Ein erfundenes Frage-Token liefert kein Bild"* blieb grün, weil das verwendete Token gar kein wohlgeformtes UUID war und schon am Schema scheiterte — die Token-Prüfung wurde nie erreicht. Mit einer formal gültigen, fremden UUID ist der Test rot, sobald die Prüfung fällt.
+
+### Verifikation
+
+- `npm test` **239/239**, `npm run lint` **0 Probleme**, `npm run build` **Exit 0**
+- `npx playwright test` **57/57** in drei Engines (Chromium, Firefox, Mobile Safari)
+- Die Funktionen aus Migration `0009` zusätzlich direkt in SQL durchgespielt (Start, Auflösen, richtig, falsch, Token-Wiederverwendung, Verwerfen, Beenden, zweites Beenden, Aufräum-Lauf) — dabei fiel ein mehrdeutiges `on conflict (round_id)` auf, bevor eine Zeile Anwendungscode existierte
+- Rot-Gegenprobe je T48-Test einzeln: Client schickt Serie mit → rot · Zustand wird nicht gelöscht → rot · Bildadresse zurück auf das CDN → rot · Lösung zu jedem Token → rot · Antwort ohne Token-Prüfung → rot · Sitzungsprüfung der Route entfernt → **grün, siehe Punkt 5**
+
+
 ---
 
 ## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)

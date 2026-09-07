@@ -4,7 +4,6 @@ import {
   answerWrongly,
   clockValue,
   register,
-  runSavedResponse,
   streakValue,
   waitForQuestion,
 } from './helpers'
@@ -22,22 +21,19 @@ import {
 
 test('Erste Runde setzt den Rekord, die schlechtere zweite nicht (AC-1, AC-8, AC-9)', async ({
   page,
-  request,
 }) => {
   await register(page, 'e2eBest')
 
   // --- Runde 1: zwei richtige Antworten, dann ein Fehler ---------------------
   await page.getByRole('button', { name: 'Runde starten' }).click()
-  await answerCorrectly(page, request)
+  await answerCorrectly(page)
   await expect(streakValue(page)).toHaveText('1')
-  await answerCorrectly(page, request)
+  await answerCorrectly(page)
   await expect(streakValue(page)).toHaveText('2')
 
   await waitForQuestion(page)
-  await answerWrongly(page, request)
-  const firstRunSaved = runSavedResponse(page)
+  await answerWrongly(page)
   await page.getByRole('button', { name: 'Weiter zum Ergebnis' }).click()
-  await firstRunSaved
 
   // AC-8 — die allererste Runde ist immer eine persönliche Bestleistung.
   await expect(page.getByText('Runde beendet')).toBeVisible()
@@ -64,10 +60,8 @@ test('Erste Runde setzt den Rekord, die schlechtere zweite nicht (AC-1, AC-8, AC
   await expect(streakValue(page)).toHaveText('0')
   await expect(clockValue(page)).toHaveText(/^0:0[0-2]$/)
 
-  await answerWrongly(page, request)
-  const secondRunSaved = runSavedResponse(page)
+  await answerWrongly(page)
   await page.getByRole('button', { name: 'Weiter zum Ergebnis' }).click()
-  await secondRunSaved
   await expect(page.getByText('Runde beendet')).toBeVisible()
 
   // AC-8 — eine schlechtere Runde wird NICHT als Rekord ausgewiesen. Das ist die

@@ -2,42 +2,53 @@
 
 import { Button } from '@/components/ui/button'
 import { AnswerOption, type AnswerState } from './answer-option'
-import { PokemonImage } from './pokemon-image'
+import { PokemonImage, questionImageUrl } from './pokemon-image'
 import { StatusBar } from './status-bar'
-import type { Question } from '@/lib/quiz/question-action'
+import type { ClientQuestion } from '@/lib/quiz/question-action'
 
 /**
- * One open or resolved question (spec.md AC-3 to AC-6).
+ * Eine offene, wartende oder aufgelöste Frage (spec.md AC-3 bis AC-6).
  *
- * `chosenIndex === null` means the question is still open. Once answered, the
- * chosen wrong option turns red and the correct one green *at the same time*,
- * and the resolution stays put until the player clicks on (AC-6) — this
- * component never advances by itself.
+ * **Was sich am 2026-09-06 geändert hat:** Diese Ansicht kennt die Lösung nicht
+ * mehr, bevor der Spieler geantwortet hat — `correctIndex` kommt mit dem Urteil
+ * des Servers (AC-32, AC-33). Dazwischen liegt ein dritter Zustand: `waiting`.
+ * Die geklickte Option ist dann sichtbar gedrückt, aber **noch nicht gefärbt** —
+ * die Farbe ist die Antwort des Servers, nicht eine Vermutung des Browsers.
  */
 export function QuestionView({
   question,
   streak,
   elapsedMs,
   chosenIndex,
+  correctIndex,
+  waiting,
   onAnswer,
   onContinue,
   onPictureVisible,
 }: {
-  question: Question
+  question: ClientQuestion
   streak: number
   elapsedMs: number
   chosenIndex: number | null
+  /** Erst nach dem Urteil gesetzt (AC-6). */
+  correctIndex: number | null
+  /** Der Klick ist abgeschickt, das Urteil steht aus. */
+  waiting: boolean
   onAnswer: (index: number) => void
   onContinue: () => void
-  /** spec.md AC-2 — the round's clock starts when the picture is actually on screen. */
+  /** spec.md AC-2 — die angezeigte Uhr startet mit dem sichtbaren Bild. */
   onPictureVisible: () => void
 }) {
-  const resolved = chosenIndex !== null
-  const answeredWrong = resolved && chosenIndex !== question.correctIndex
+  const resolved = correctIndex !== null
+  const answeredWrong = resolved && chosenIndex !== correctIndex
 
   function stateFor(index: number): AnswerState {
-    if (!resolved) return 'idle'
-    if (index === question.correctIndex) return 'correct'
+    if (!resolved) {
+      // Vor dem Urteil gibt es nur „gedrückt" — keine Färbung, weil hier niemand
+      // weiß, ob die Wahl richtig war.
+      return waiting && index === chosenIndex ? 'pending' : 'idle'
+    }
+    if (index === correctIndex) return 'correct'
     if (index === chosenIndex) return 'wrong'
     return 'dimmed'
   }
@@ -48,7 +59,7 @@ export function QuestionView({
 
       <div className="rounded-[var(--radius-card-value)] border border-border bg-card p-6 shadow-[0_18px_46px_-26px_rgb(23_28_44_/_0.5)]">
         <PokemonImage
-          src={question.imageUrl}
+          src={questionImageUrl(question.token)}
           alt="Welches Pokémon ist das?"
           onReady={onPictureVisible}
         />
@@ -61,11 +72,11 @@ export function QuestionView({
       >
         {question.options.map((option, index) => (
           <AnswerOption
-            key={`${question.pokemonId}-${option}`}
+            key={`${question.token}-${option}`}
             label={option}
             index={index}
             state={stateFor(index)}
-            disabled={resolved}
+            disabled={chosenIndex !== null}
             onSelect={() => onAnswer(index)}
           />
         ))}
@@ -76,7 +87,7 @@ export function QuestionView({
           <p className="text-[15px] text-muted-foreground text-pretty" role="status">
             Richtig wäre{' '}
             <strong className="font-semibold text-foreground">
-              {question.options[question.correctIndex]}
+              {question.options[correctIndex]}
             </strong>{' '}
             gewesen.
           </p>

@@ -5,29 +5,32 @@ import { Button } from '@/components/ui/button'
 import { LEADERBOARD_PAGE_EXISTS } from '@/lib/site-pages'
 import { formatDuration } from './status-bar'
 
-export type SaveState = 'saving' | 'saved' | 'failed'
-
 /**
- * spec.md AC-7 — streak, time, „Nochmal spielen" (primary) and „Zur Bestenliste".
- * AC-8 — the personal-best marker with `pop`.
- * EC-2 — a cleared pool ends with a winner message instead of a defeat.
- * EC-3 — a failed save keeps the result on screen and offers a retry.
+ * spec.md AC-7 — Serie, Zeit, „Nochmal spielen" (primär) und „Zur Bestenliste".
+ * AC-8 — der Bestleistungs-Hinweis mit `pop`.
+ * EC-2 — ein geleerter Pool endet mit einer Gewinner-Meldung statt einer Niederlage.
+ *
+ * **Die angezeigte Zeit ist die servergemessene** (AC-34), nicht der Stand der
+ * Anzeigeuhr aus der laufenden Runde. Die beiden dürfen um die Netzlatenz
+ * auseinanderliegen (EC-13); maßgeblich und gespeichert ist diese hier.
+ *
+ * **Kein Speichern-Zustand mehr, seit dem 2026-09-06.** Die Runde ist
+ * geschrieben, bevor dieser Bildschirm überhaupt erscheint (AC-35) — ein
+ * Ergebnis, das hier steht, ist gespeichert. Ging die Antwort des Servers
+ * unterwegs verloren, holt `quiz-screen` das Ergebnis über die Runden-Kennung
+ * nach (EC-3); erst dann kommt es hier an.
  */
 export function ResultView({
   streak,
   durationMs,
   poolCleared,
   isPersonalBest,
-  saveState,
-  onRetrySave,
   onPlayAgain,
 }: {
   streak: number
   durationMs: number
   poolCleared: boolean
   isPersonalBest: boolean
-  saveState: SaveState
-  onRetrySave: () => void
   onPlayAgain: () => void
 }) {
   return (
@@ -58,20 +61,6 @@ export function ResultView({
         <p className="animate-[pop_0.28s_ease-out] rounded-full border border-[hsl(var(--accent))] bg-[hsl(var(--accent)/0.15)] px-5 py-2 text-[15px] font-bold text-foreground">
           Neue persönliche Bestleistung
         </p>
-      )}
-
-      {saveState === 'failed' && (
-        <div
-          role="alert"
-          className="flex flex-col items-center gap-3 rounded-[var(--radius-card-value)] border border-border bg-card px-6 py-4"
-        >
-          <p className="text-[15px] text-muted-foreground text-pretty">
-            Dein Ergebnis konnte noch nicht gespeichert werden.
-          </p>
-          <Button variant="outline" size="sm" onClick={onRetrySave}>
-            Erneut speichern
-          </Button>
-        </div>
       )}
 
       <div className="flex flex-wrap items-center justify-center gap-3">

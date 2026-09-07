@@ -1,195 +1,169 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QuizScreen } from './quiz-screen'
-import type { Question } from '@/lib/quiz/question-action'
 
 /**
- * Von `/qa` am 2026-09-05 geschrieben — für den Pfad, den **keine** Prüfung des
- * Projekts je betreten hatte.
+ * Die falsche Antwort und das Ergebnis (spec.md AC-6, AC-7, AC-8, AC-34, EC-1).
  *
- * Der Befund, der dazu führte: Jede Fixture der Suite trägt `correctIndex: 0`,
- * und jeder Klick in jedem Test geht auf „Antwort A" — also immer auf die
- * richtige. Die Auflösung nach einer **falschen** Antwort ist damit der Ablauf,
- * mit dem jede Runde endet (AC-6), und er wurde ausschließlich von Hand
- * angesehen. Auch die E2E-Suite berührt ihn nur im Durchlauf, nicht in seinen
- * Einzelzusagen.
- *
- * Deckt AC-6 in vier Zusagen: die beiden Markierungen, das Stillstehen der Uhr,
- * das Ausbleiben eines automatischen Weiterlaufs und das Weiterklicken von Hand.
+ * Der Unterschied zum alten Aufbau steckt im ersten Test: Zwischen Klick und
+ * Färbung liegt jetzt ein Roundtrip. Solange das Urteil aussteht, darf **keine**
+ * Option grün oder rot sein — der Browser weiß es schlicht nicht.
  */
 
-const { getNextQuestion, saveRun, getPersonalBest, push } = vi.hoisted(() => ({
-  getNextQuestion: vi.fn(),
-  saveRun: vi.fn(),
-  getPersonalBest: vi.fn(),
+const actions = vi.hoisted(() => ({
+  startRoundAction: vi.fn(),
+  prepareNextQuestionAction: vi.fn(),
+  promoteQuestionAction: vi.fn(),
+  replacePreparedQuestionAction: vi.fn(),
+  answerAction: vi.fn(),
+  endRoundAction: vi.fn(),
+  getRunByRoundIdAction: vi.fn(),
   push: vi.fn(),
 }))
 
-vi.mock('@/lib/quiz/question-action', () => ({ getNextQuestion }))
-vi.mock('@/lib/quiz/run-actions', () => ({ saveRun, getPersonalBest }))
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push }), unstable_rethrow: () => {} }))
-vi.mock('next/image', () => ({
-  default: ({ src, alt, onLoad, onError }: Record<string, unknown>) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src as string}
-      alt={alt as string}
-      onLoad={onLoad as () => void}
-      onError={onError as () => void}
-    />
-  ),
+vi.mock('@/lib/quiz/question-action', () => ({
+  startRoundAction: actions.startRoundAction,
+  prepareNextQuestionAction: actions.prepareNextQuestionAction,
+  promoteQuestionAction: actions.promoteQuestionAction,
+  replacePreparedQuestionAction: actions.replacePreparedQuestionAction,
+}))
+vi.mock('@/lib/quiz/run-actions', () => ({
+  answerAction: actions.answerAction,
+  endRoundAction: actions.endRoundAction,
+  getRunByRoundIdAction: actions.getRunByRoundIdAction,
+}))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: actions.push }),
+  unstable_rethrow: () => {},
 }))
 
-/** `Antwort A` ist die Lösung, `Antwort B` die falsche Wahl dieses Tests. */
-const question = (id: number): Question => ({
-  pokemonId: id,
-  imageUrl: `https://example.test/${id}.png`,
-  options: [`Name${id}`, `FalschB${id}`, `FalschC${id}`, `FalschD${id}`],
-  correctIndex: 0,
+const question = (token: string, right = 'Glurak') => ({
+  token,
+  options: [right, 'Relaxo', 'Pikachu', 'Enton'],
 })
 
-const images = () => Array.from(document.querySelectorAll('img'))
+async function openRound() {
+  render(<QuizScreen initialPersonalBest={null} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+  await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+}
 
-/**
- * Optionen werden über ihr `aria-label` adressiert, nie über ihren Text: Nach
- * der Auflösung steht der Name der Lösung ein zweites Mal auf der Seite, im Satz
- * „Richtig wäre … gewesen." Eine Textsuche träfe dann zwei Knoten.
- */
-const option = (name: string) => screen.getByRole('button', { name })
+beforeEach(() => {
+  vi.clearAllMocks()
+  actions.promoteQuestionAction.mockResolvedValue({ promoted: true })
+  actions.startRoundAction.mockResolvedValue({
+    status: 'ok',
+    roundId: 'round-1',
+    current: question('t-1'),
+    prepared: question('t-2', 'Bisasam'),
+  })
+  actions.prepareNextQuestionAction.mockResolvedValue({
+    status: 'ok',
+    prepared: question('t-3', 'Schiggy'),
+  })
+})
 
-/** Der Uhrwert der Statusleiste — das `<p>` direkt hinter der Beschriftung „Zeit". */
-const clock = () => screen.getByText('Zeit').nextElementSibling?.textContent
+const wrongVerdict = {
+  status: 'answered' as const,
+  correct: false,
+  correctIndex: 0,
+  streak: 4,
+  result: { streak: 4, durationMs: 61_500, isPersonalBest: false },
+}
 
-/**
- * Die Uhr rechnet mit `performance.now()` (quiz-screen.tsx:97), und das fälscht
- * Vitest **nicht** von sich aus — ohne `toFake` bleibt sie über jede vorgespulte
- * Sekunde auf 0:00 stehen. Ein Test, der den Stillstand der Uhr prüft, wäre dann
- * grün, weil sie nie lief: genau die Sorte Test, die den Fehler durchwinkt, den
- * sie bewachen soll. Beim Schreiben ist er zuerst genau so rot geworden.
- */
-const CLOCK_TIMERS = [
-  'setTimeout',
-  'clearTimeout',
-  'setInterval',
-  'clearInterval',
-  'Date',
-  'performance',
-] as const
+describe('QuizScreen — falsche Antwort und Ergebnis', () => {
+  it('färbt nichts, solange das Urteil des Servers aussteht (AC-33)', async () => {
+    let resolveVerdict: (value: unknown) => void = () => {}
+    actions.answerAction.mockReturnValue(new Promise((resolve) => (resolveVerdict = resolve)))
 
-describe('QuizScreen — die Auflösung nach einer falschen Antwort (AC-6)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    let served = 0
-    getNextQuestion.mockImplementation(async () => ({
-      status: 'ok' as const,
-      question: question(++served),
-    }))
-    saveRun.mockResolvedValue({ status: 'saved', isPersonalBest: false })
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    // Während des Wartens: kein Häkchen, kein Kreuz, keine Auflösung.
+    expect(screen.queryByText(/Richtig wäre/)).not.toBeInTheDocument()
+    expect(screen.queryByText('✓')).not.toBeInTheDocument()
+    expect(screen.queryByText('✕')).not.toBeInTheDocument()
+
+    resolveVerdict(wrongVerdict)
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
   })
 
-  /** Runde starten, erste Frage sichtbar machen, Uhr laufen lassen. */
-  async function openFirstQuestion() {
-    render(<QuizScreen initialPersonalBest={null} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Runde starten' }))
+  it('zeigt nach dem Urteil die richtige Option und hält die Auflösung an (AC-6)', async () => {
+    actions.answerAction.mockResolvedValue(wrongVerdict)
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0)
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Weiter zum Ergebnis' })).toBeInTheDocument()
+    // Die Auflösung bleibt stehen: Es wird nicht von selbst weitergeschaltet.
+    expect(screen.queryByText('Runde beendet')).not.toBeInTheDocument()
+  })
+
+  it('lässt den zweiten Klick auf eine andere Option wirkungslos (EC-1)', async () => {
+    actions.answerAction.mockResolvedValue(wrongVerdict)
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort C: Pikachu' }))
+
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
+    expect(actions.answerAction).toHaveBeenCalledTimes(1)
+    expect(actions.answerAction).toHaveBeenCalledWith({ token: 't-1', choice: 1 })
+  })
+
+  it('zeigt im Ergebnis die servergemessene Zeit, nicht die Anzeigeuhr (AC-34)', async () => {
+    actions.answerAction.mockResolvedValue(wrongVerdict)
+
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Weiter zum Ergebnis' }))
+
+    // 61.500 ms sind 1:01,5 — ein Wert, den eine im Test kaum laufende
+    // Anzeigeuhr niemals erreichen könnte.
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
+    expect(screen.getByText(/1:01/)).toBeInTheDocument()
+    expect(screen.getByText('4')).toBeInTheDocument()
+  })
+
+  it('weist die persönliche Bestleistung aus, wenn der Server sie meldet (AC-8)', async () => {
+    actions.answerAction.mockResolvedValue({
+      ...wrongVerdict,
+      result: { streak: 9, durationMs: 30_000, isPersonalBest: true },
     })
 
-    // Mehrere Durchgänge, und das ist keine Vorsicht auf Verdacht: Zuerst hängt
-    // nur das Vorlade-Bild im Baum (ImageProbe). Erst dessen Ladeereignis
-    // befördert die Frage zur sichtbaren — und erst dann existiert das Bild,
-    // dessen onLoad über onReady die Uhr startet (AC-2).
-    for (let pass = 0; pass < 3; pass++) {
-      await act(async () => {
-        for (const img of images()) fireEvent.load(img)
-        await vi.advanceTimersByTimeAsync(0)
-      })
-    }
-  }
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Weiter zum Ergebnis' }))
 
-  it('markiert die gewählte Option rot und rüttelnd, die richtige gleichzeitig grün', async () => {
-    vi.useFakeTimers({ toFake: [...CLOCK_TIMERS] })
-    try {
-      await openFirstQuestion()
-
-      fireEvent.click(option('Antwort B: FalschB1'))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
-
-      // Die gewählte, falsche Option: rot + `nudge` (AC-6 nennt beides).
-      const chosen = option('Antwort B: FalschB1')
-      expect(chosen.className).toContain('animate-[nudge_0.4s_ease-in-out]')
-      expect(chosen.className).toContain('#C93B28')
-
-      // **Gleichzeitig** die richtige: grün. Das ist die Auflösung, für die der
-      // Nutzer den Namen erfährt — ohne sie wäre die Runde nur ein Abbruch.
-      expect(option('Antwort A: Name1').className).toContain('#3E9C63')
-
-      // Die beiden unbeteiligten treten zurück und tragen keine Markierung.
-      for (const name of ['Antwort C: FalschC1', 'Antwort D: FalschD1']) {
-        expect(option(name).className).toContain('#8A91A3')
-        expect(option(name).className).not.toContain('animate-[')
-      }
-
-      // Nach der Auflösung ist keine Option mehr wählbar.
-      for (const name of [
-        'Antwort A: Name1',
-        'Antwort B: FalschB1',
-        'Antwort C: FalschC1',
-        'Antwort D: FalschD1',
-      ]) {
-        expect(option(name)).toBeDisabled()
-      }
-    } finally {
-      vi.useRealTimers()
-    }
+    await waitFor(() =>
+      expect(screen.getByText('Neue persönliche Bestleistung')).toBeInTheDocument()
+    )
   })
 
-  it('hält die Uhr an und lässt die Auflösung stehen, bis der Nutzer weiterklickt', async () => {
-    vi.useFakeTimers({ toFake: [...CLOCK_TIMERS] })
-    try {
-      await openFirstQuestion()
+  it('startet mit „Nochmal spielen" unmittelbar eine neue Runde (AC-9)', async () => {
+    actions.answerAction.mockResolvedValue(wrongVerdict)
 
-      // Drei Sekunden spielen, damit ein Stillstand überhaupt von „lief nie"
-      // unterscheidbar ist.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000)
-      })
-      expect(clock()).toBe('0:03')
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
+    await waitFor(() => expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Weiter zum Ergebnis' }))
+    await waitFor(() => expect(screen.getByText('Runde beendet')).toBeInTheDocument())
 
-      fireEvent.click(option('Antwort B: FalschB1'))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
+    fireEvent.click(screen.getByRole('button', { name: 'Nochmal spielen' }))
 
-      // AC-6: „die Uhr stoppt". Fünf weitere Sekunden dürfen nichts bewegen.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-      expect(clock()).toBe('0:03')
+    await waitFor(() => expect(screen.getByText('Glurak')).toBeInTheDocument())
+    expect(actions.startRoundAction).toHaveBeenCalledTimes(2)
+  })
 
-      // AC-6: „die Auflösung bleibt stehen, bis der Nutzer selbst weiterklickt".
-      // Der richtige Pfad zieht nach 350 ms von selbst weiter — hier darf genau
-      // das nicht passieren, auch nach Sekunden nicht.
-      expect(screen.getByText(/Richtig wäre/)).toBeInTheDocument()
-      expect(option('Antwort A: Name1')).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Antwort A: Name2' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Nochmal spielen' })).not.toBeInTheDocument()
+  it('leitet auf die Anmeldung, wenn die Sitzung mitten in der Runde endet (EC-7)', async () => {
+    actions.answerAction.mockResolvedValue({ status: 'unauthenticated' })
 
-      // Erst der Klick des Nutzers führt zum Ergebnis — mit Serie 0, weil die
-      // erste Antwort schon falsch war.
-      fireEvent.click(screen.getByRole('button', { name: 'Weiter zum Ergebnis' }))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
+    await openRound()
+    fireEvent.click(screen.getByRole('button', { name: 'Antwort B: Relaxo' }))
 
-      expect(screen.getByRole('button', { name: 'Nochmal spielen' })).toBeInTheDocument()
-      expect(saveRun).toHaveBeenCalledTimes(1)
-      expect(saveRun.mock.calls[0][0]).toMatchObject({ streak: 0 })
-    } finally {
-      vi.useRealTimers()
-    }
+    await waitFor(() => expect(actions.push).toHaveBeenCalledWith('/login'))
   })
 })

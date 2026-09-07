@@ -3,24 +3,22 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createClient }))
 
-import { saveRun, getPersonalBest } from './run-actions'
+const state = vi.hoisted(() => ({ submitAnswer: vi.fn(), finishRound: vi.fn() }))
+vi.mock('./round-state', () => state)
 
-const ROUND_ID = '3f8b2c1e-9a4d-4f6b-8e2a-1c5d7e9f0a3b'
+import { answerAction, endRoundAction, getPersonalBest } from './run-actions'
+
+const TOKEN = '3f8b2c1e-9a4d-4f6b-8e2a-1c5d7e9f0a3b'
+const ROUND = '9c1f7a2b-3e4d-4a5b-8c6d-2e1f0a9b8c7d'
 
 type BestRow = { streak: number; duration_ms: number } | null
 
-/**
- * Minimal stand-in for the Supabase query builder: records what was inserted
- * and which filters the personal-best query applied.
- */
-function makeClient({
+/** Sehr kleiner Ersatz für den Abfrage-Baukasten; merkt sich die Filter. */
+function session({
   user = { id: 'user-1' } as { id: string } | null,
   best = null as BestRow,
-  insertError = null as { code: string } | null,
 } = {}) {
-  const inserted: Record<string, unknown>[] = []
   const filters: Record<string, unknown> = {}
-
   const builder: Record<string, unknown> = {}
   const chain = () => builder
   Object.assign(builder, {
@@ -36,173 +34,183 @@ function makeClient({
     order: chain,
     limit: chain,
     maybeSingle: async () => ({ data: best }),
-    insert: async (row: Record<string, unknown>) => {
-      inserted.push(row)
-      return { error: insertError }
-    },
   })
 
-  return {
-    client: {
-      auth: { getUser: async () => ({ data: { user } }) },
-      from: () => builder,
-    },
-    inserted,
-    filters,
-  }
+  createClient.mockResolvedValue({
+    auth: { getUser: async () => ({ data: { user } }) },
+    from: () => builder,
+  })
+  return filters
 }
 
-describe('saveRun', () => {
-  beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  session()
+})
 
-  it('EC-7: weist einen Aufruf ohne Sitzung ab und schreibt nichts', async () => {
-    const { client, inserted } = makeClient({ user: null })
-    createClient.mockResolvedValue(client)
-
-    expect(await saveRun({ streak: 5, durationMs: 10_000, clientRoundId: ROUND_ID })).toEqual({
-      status: 'unauthenticated',
+describe('answerAction', () => {
+  it('reicht nur Token und Position an die Datenbank weiter (AC-33)', async () => {
+    state.submitAnswer.mockResolvedValue({
+      matched: true,
+      correct: true,
+      correctIndex: 2,
+      streak: 5,
+      finished: false,
+      durationMs: null,
+      roundId: ROUND,
+      nextToken: 't-2',
     })
-    expect(inserted).toHaveLength(0)
-  })
 
-  it('AC-12: lehnt ein rechnerisch unmögliches Ergebnis ab, bevor es die Datenbank sieht', async () => {
-    const { client, inserted } = makeClient()
-    createClient.mockResolvedValue(client)
+    const result = await answerAction({ token: TOKEN, choice: 2 })
 
-    expect(await saveRun({ streak: 50, durationMs: 100, clientRoundId: ROUND_ID })).toEqual({
-      status: 'rejected',
-    })
-    expect(inserted).toHaveLength(0)
-  })
-
-  it('AC-12: lehnt eine Serie über dem Pool ab', async () => {
-    const { client } = makeClient()
-    createClient.mockResolvedValue(client)
-    const result = await saveRun({ streak: 999, durationMs: 9_999_999, clientRoundId: ROUND_ID })
-    expect(result.status).toBe('rejected')
-  })
-
-  it('AC-14: schreibt immer für das Profil aus der Sitzung, nie für ein übergebenes', async () => {
-    const { client, inserted } = makeClient({ user: { id: 'user-1' } })
-    createClient.mockResolvedValue(client)
-
-    await saveRun({
-      streak: 3,
-      durationMs: 9_000,
-      clientRoundId: ROUND_ID,
-      // Ein Angreifer würde genau das mitschicken:
-      profile_id: 'fremdes-profil',
-    } as unknown)
-
-    expect(inserted).toHaveLength(1)
-    expect(inserted[0].profile_id).toBe('user-1')
-  })
-
-  it('AC-11: speichert auch eine Runde mit Serie 0', async () => {
-    const { client, inserted } = makeClient()
-    createClient.mockResolvedValue(client)
-
-    const result = await saveRun({ streak: 0, durationMs: 4_000, clientRoundId: ROUND_ID })
-    expect(result.status).toBe('saved')
-    expect(inserted[0].streak).toBe(0)
-  })
-
-  it('EC-4: eine zweite Einreichung derselben Runde meldet Erfolg statt eines Fehlers', async () => {
-    const { client } = makeClient({ insertError: { code: '23505' } })
-    createClient.mockResolvedValue(client)
-
-    const result = await saveRun({ streak: 3, durationMs: 9_000, clientRoundId: ROUND_ID })
-    expect(result.status).toBe('saved')
-  })
-
-  it('EC-3: meldet einen echten Speicherfehler als fehlgeschlagen', async () => {
-    const { client } = makeClient({ insertError: { code: '08006' } })
-    createClient.mockResolvedValue(client)
-
-    expect(await saveRun({ streak: 3, durationMs: 9_000, clientRoundId: ROUND_ID })).toEqual({
-      status: 'failed',
+    expect(state.submitAnswer).toHaveBeenCalledWith('user-1', TOKEN, 2)
+    expect(result).toEqual({
+      status: 'answered',
+      correct: true,
+      correctIndex: 2,
+      streak: 5,
+      result: null,
     })
   })
 
-  it('AC-8: erste Runde überhaupt ist eine persönliche Bestleistung', async () => {
-    const { client } = makeClient({ best: null })
-    createClient.mockResolvedValue(client)
+  it('ignoriert eine mitgeschickte Serie und Dauer (AC-12)', async () => {
+    state.submitAnswer.mockResolvedValue({
+      matched: true,
+      correct: true,
+      correctIndex: 0,
+      streak: 1,
+      finished: false,
+      durationMs: null,
+      roundId: ROUND,
+      nextToken: 't-2',
+    })
 
-    const result = await saveRun({ streak: 3, durationMs: 9_000, clientRoundId: ROUND_ID })
-    expect(result).toEqual({ status: 'saved', isPersonalBest: true })
+    const result = await answerAction({ token: TOKEN, choice: 0, streak: 386, durationMs: 1 })
+
+    // Nicht abgelehnt, aber auch nicht übernommen: Die Serie kommt aus der
+    // Datenbank, nicht aus der Anfrage.
+    expect(result).toMatchObject({ status: 'answered', streak: 1 })
+    expect(state.submitAnswer).toHaveBeenCalledWith('user-1', TOKEN, 0)
   })
 
-  it('AC-8: höhere Serie schlägt den bisherigen Rekord', async () => {
-    const { client } = makeClient({ best: { streak: 5, duration_ms: 10_000 } })
-    createClient.mockResolvedValue(client)
-
-    const result = await saveRun({ streak: 6, durationMs: 60_000, clientRoundId: ROUND_ID })
-    expect(result).toEqual({ status: 'saved', isPersonalBest: true })
+  it('lehnt eine Position außerhalb der vier Optionen ab', async () => {
+    expect(await answerAction({ token: TOKEN, choice: 7 })).toEqual({ status: 'rejected' })
+    expect(state.submitAnswer).not.toHaveBeenCalled()
   })
 
-  it('AC-8: gleiche Serie, kürzere Zeit schlägt den Rekord', async () => {
-    const { client } = makeClient({ best: { streak: 5, duration_ms: 10_000 } })
-    createClient.mockResolvedValue(client)
-
-    const result = await saveRun({ streak: 5, durationMs: 9_999, clientRoundId: ROUND_ID })
-    expect(result).toEqual({ status: 'saved', isPersonalBest: true })
+  it('lehnt eine Antwort ohne gültiges Token ab', async () => {
+    expect(await answerAction({ token: 'nope', choice: 1 })).toEqual({ status: 'rejected' })
+    expect(state.submitAnswer).not.toHaveBeenCalled()
   })
 
-  it('AC-8: gleiche Serie, längere Zeit ist kein Rekord', async () => {
-    const { client } = makeClient({ best: { streak: 5, duration_ms: 10_000 } })
-    createClient.mockResolvedValue(client)
+  it('meldet ein nicht mehr passendes Token als abgelaufen (EC-1, EC-15)', async () => {
+    state.submitAnswer.mockResolvedValue({
+      matched: false,
+      correct: false,
+      correctIndex: null,
+      streak: null,
+      finished: false,
+      durationMs: null,
+      roundId: null,
+      nextToken: null,
+    })
 
-    const result = await saveRun({ streak: 5, durationMs: 10_001, clientRoundId: ROUND_ID })
-    expect(result).toEqual({ status: 'saved', isPersonalBest: false })
+    expect(await answerAction({ token: TOKEN, choice: 1 })).toEqual({ status: 'stale' })
   })
 
-  it('EC-4: die Rekordfrage schließt die laufende Runde aus dem Vergleich aus', async () => {
-    const { client, filters } = makeClient({ best: null })
-    createClient.mockResolvedValue(client)
+  it('liefert bei Rundenende die servergemessene Zeit und den Rekord-Vergleich (AC-8, AC-34)', async () => {
+    session({ best: { streak: 3, duration_ms: 9000 } })
+    state.submitAnswer.mockResolvedValue({
+      matched: true,
+      correct: false,
+      correctIndex: 1,
+      streak: 7,
+      finished: true,
+      durationMs: 12345,
+      roundId: ROUND,
+      nextToken: null,
+    })
 
-    await saveRun({ streak: 3, durationMs: 9_000, clientRoundId: ROUND_ID })
-    expect(filters['neq:client_round_id']).toBe(ROUND_ID)
+    const result = await answerAction({ token: TOKEN, choice: 3 })
+
+    expect(result).toEqual({
+      status: 'answered',
+      correct: false,
+      correctIndex: 1,
+      streak: 7,
+      result: { streak: 7, durationMs: 12345, isPersonalBest: true },
+    })
+  })
+
+  it('erkennt eine schlechtere Runde nicht als Bestleistung (AC-8)', async () => {
+    session({ best: { streak: 20, duration_ms: 5000 } })
+    state.submitAnswer.mockResolvedValue({
+      matched: true,
+      correct: false,
+      correctIndex: 1,
+      streak: 7,
+      finished: true,
+      durationMs: 12345,
+      roundId: ROUND,
+      nextToken: null,
+    })
+
+    const result = await answerAction({ token: TOKEN, choice: 3 })
+    expect(result).toMatchObject({ result: { isPersonalBest: false } })
+  })
+
+  it('weist einen Aufruf ohne Sitzung ab (EC-7)', async () => {
+    session({ user: null })
+    expect(await answerAction({ token: TOKEN, choice: 1 })).toEqual({ status: 'unauthenticated' })
+    expect(state.submitAnswer).not.toHaveBeenCalled()
   })
 })
 
-describe('getPersonalBest (AC-8)', () => {
-  beforeEach(() => vi.clearAllMocks())
+describe('endRoundAction', () => {
+  it('wertet die bis dahin erreichte Serie normal (AC-18)', async () => {
+    state.finishRound.mockResolvedValue({
+      roundId: ROUND,
+      streak: 4,
+      durationMs: 8000,
+      written: true,
+    })
 
-  it('liest nur die Runden des angemeldeten Profils', async () => {
-    const { client, filters } = makeClient({ best: { streak: 7, duration_ms: 20_000 } })
-    createClient.mockResolvedValue(client)
+    expect(await endRoundAction()).toEqual({
+      status: 'ended',
+      result: { streak: 4, durationMs: 8000, isPersonalBest: true },
+    })
+  })
 
-    expect(await getPersonalBest()).toEqual({ streak: 7, durationMs: 20_000 })
+  it('meldet einen zweiten Aufruf als gegenstandslos, statt eine zweite Zeile anzulegen (EC-4)', async () => {
+    state.finishRound.mockResolvedValue({
+      roundId: null,
+      streak: null,
+      durationMs: null,
+      written: false,
+    })
+
+    expect(await endRoundAction()).toEqual({ status: 'gone' })
+  })
+})
+
+describe('getPersonalBest', () => {
+  it('liest ausschließlich eigene Runden (AC-8, AC-14)', async () => {
+    const filters = session({ best: { streak: 12, duration_ms: 30000 } })
+
+    expect(await getPersonalBest()).toEqual({ streak: 12, durationMs: 30000 })
     expect(filters['eq:profile_id']).toBe('user-1')
   })
 
-  it('liefert null ohne Sitzung', async () => {
-    const { client } = makeClient({ user: null })
-    createClient.mockResolvedValue(client)
-    expect(await getPersonalBest()).toBeNull()
+  it('schließt die gerade geschriebene Runde über round_id aus (EC-4)', async () => {
+    const filters = session({ best: { streak: 12, duration_ms: 30000 } })
+
+    await getPersonalBest(ROUND)
+    expect(filters['neq:round_id']).toBe(ROUND)
   })
 
-  it('liefert null, wenn es noch keine Runde gibt', async () => {
-    const { client } = makeClient({ best: null })
-    createClient.mockResolvedValue(client)
-    expect(await getPersonalBest()).toBeNull()
-  })
-
-  // BUG-12: Diese Funktion ist aus einer `'use server'`-Datei exportiert und
-  // damit ein vollwertiger Endpunkt — unabhängig davon, dass der Entwurf sie nur
-  // aus der Server-Komponente aufrufen wollte. Ihr Argument ging ungeprüft in den
-  // Query-Builder.
-  it('BUG-12: weist ein unbrauchbares Argument ab, statt es weiterzureichen', async () => {
-    const { client, filters } = makeClient({ best: { streak: 7, duration_ms: 20_000 } })
-    createClient.mockResolvedValue(client)
-
-    for (const bad of ['*', 'x&select=*', 'nicht-uuid', 42, {}, []]) {
-      expect(await getPersonalBest(bad)).toBeNull()
-    }
-    expect(filters['neq:client_round_id']).toBeUndefined()
-
-    // `null` ist kein Angriff, sondern schlicht „kein Ausschluss" — es verhält
-    // sich wie ein weggelassenes Argument und liefert die Bestleistung.
-    expect(await getPersonalBest(null)).toEqual({ streak: 7, durationMs: 20_000 })
+  it('lehnt eine unbrauchbare Runden-Kennung ab, statt sie in die Abfrage zu geben', async () => {
+    const filters = session({ best: { streak: 1, duration_ms: 1 } })
+    expect(await getPersonalBest('nicht-uuid')).toBeNull()
+    expect(filters['neq:round_id']).toBeUndefined()
   })
 })
