@@ -218,13 +218,20 @@ export function QuizScreen({ initialPersonalBest }: { initialPersonalBest: Perso
       preparingRef.current = true
       try {
         const action = replace ? replacePreparedQuestionAction : prepareNextQuestionAction
-        const result = await runClientAction(() => action(), { status: 'unavailable' as const })
+        const result = await runClientAction(() => action(roundIdRef.current), {
+          status: 'unavailable' as const,
+        })
 
         if (result.status === 'unauthenticated') return bailToLogin()
         if (result.status === 'ok') {
           setProbingQuestion(result.prepared)
           return
         }
+        // Die eigene Runde läuft nicht mehr — sie wurde in einem anderen Tab oder
+        // auf einem anderen Gerät verdrängt (AC-36, EC-15). Vorher hat dieser
+        // Aufruf die *fremde* laufende Runde verändert, statt hier zu enden
+        // (BUG-130).
+        if (result.status === 'stale') return goToError(STALE_MESSAGE)
         // **Kein Vorrat mehr.** Der Server hat die Runde dann bereits gewertet und
         // geschrieben (AC-35) — hier wird das Ergebnis nur noch angezeigt.
         //

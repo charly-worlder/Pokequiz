@@ -100,6 +100,12 @@ export async function startRound(
  */
 export async function setPreparedQuestion(
   profileId: string,
+  /**
+   * Die Runde, die der Aufrufer meint. Passt sie nicht zur laufenden, geschieht
+   * nichts und es kommt `null` zurück — ein veralteter Tab kann die vorbereitete
+   * Frage einer fremden Runde nicht mehr austauschen (BUG-130).
+   */
+  roundId: string,
   question: { answerId: number; correctIndex: number },
   alsoSeen: number[] = []
 ): Promise<string | null> {
@@ -107,6 +113,7 @@ export async function setPreparedQuestion(
   return unwrap(
     await admin.rpc('set_prepared_question', {
       p_profile: profileId,
+      p_round_id: roundId,
       p_answer_id: question.answerId,
       p_correct_index: question.correctIndex,
       p_also_seen: alsoSeen,
@@ -127,10 +134,16 @@ export async function promotePreparedQuestion(profileId: string, token: string):
   )
 }
 
-/** Verwirft nur die vorbereitete Frage; die aktuelle bleibt unangetastet (EC-12). */
-export async function discardPreparedQuestion(profileId: string): Promise<void> {
+/**
+ * Verwirft nur die vorbereitete Frage; die aktuelle bleibt unangetastet (EC-12).
+ * Wie beim Vorbereiten muss die Runde die genannte sein (BUG-130).
+ */
+export async function discardPreparedQuestion(profileId: string, roundId: string): Promise<void> {
   const admin = createAdminClient()
-  unwrap(await admin.rpc('discard_prepared_question', { p_profile: profileId }), 'Frage verwerfen')
+  unwrap(
+    await admin.rpc('discard_prepared_question', { p_profile: profileId, p_round_id: roundId }),
+    'Frage verwerfen'
+  )
 }
 
 export async function submitAnswer(

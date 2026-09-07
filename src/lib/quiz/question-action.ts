@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { drawQuestion } from './draw-question'
 import { questionTokenSchema } from '@/lib/validation/quiz'
+import { z } from 'zod'
 import {
   discardPreparedQuestion,
   finishRound,
@@ -49,6 +50,18 @@ export type PrepareResult =
    * erst, und der Fall trifft danach zu.
    */
   | { status: 'pool-empty'; result: RoundResult | null }
+  /**
+   * spec.md AC-36, EC-15 — der Aufrufer meint eine Runde, die nicht mehr läuft:
+   * ein veralteter Tab, dessen Runde anderswo verdrängt wurde.
+   *
+   * **Warum das eine eigene Antwort braucht (BUG-130).** Bis zum 2026-09-07
+   * nannte der Aufrufer seine Runde gar nicht; der Server arbeitete auf „was
+   * gerade läuft". Ein veralteter Tab tauschte damit die vorbereitete Frage der
+   * **laufenden** Runde aus und verkürzte deren Ziehungsvorrat — und im Fall
+   * eines erschöpften Vorrats beendete er sie sogar. Dieselbe Lücke, die `0012`
+   * beim Rundenende geschlossen hat.
+   */
+  | { status: 'stale' }
   | { status: 'unavailable' }
   | { status: 'unauthenticated' }
 
@@ -96,15 +109,25 @@ export async function startRoundAction(): Promise<StartRoundResult> {
  * hängt: Könnte der Browser die angezeigte Frage verwerfen lassen, wäre „Bild
  * kaputt" ein Überspringen-Knopf für jedes Pokémon, das der Spieler nicht kennt.
  */
-export async function replacePreparedQuestionAction(): Promise<PrepareResult> {
+export async function replacePreparedQuestionAction(roundId: unknown): Promise<PrepareResult> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { status: 'unauthenticated' }
 
-  await discardPreparedQuestion(user.id)
-  return prepareNext(user.id)
+  const parsed = z.uuid().safeParse(roundId)
+  if (!parsed.success) return { status: 'stale' }
+
+  // Erst prüfen, wessen Runde gemeint ist, dann verwerfen — sonst hätte der
+  // veraltete Tab die vorbereitete Frage der laufenden Runde schon gelöscht,
+  // bevor `prepareNext` ihn abweist (BUG-130).
+  const snapshot = await getRoundSnapshot(user.id)
+  if (!snapshot) return { status: 'unavailable' }
+  if (snapshot.roundId !== parsed.data) return { status: 'stale' }
+
+  await discardPreparedQuestion(user.id, parsed.data)
+  return prepareNext(user.id, parsed.data)
 }
 
 /**
@@ -112,9 +135,16 @@ export async function replacePreparedQuestionAction(): Promise<PrepareResult> {
  * `'use server'` verlangt, dass jeder Export eine Action ist, deshalb ist diese
  * Hilfe hier nicht exportiert.
  */
-async function prepareNext(profileId: string): Promise<PrepareResult> {
+async function prepareNext(profileId: string, roundId: string): Promise<PrepareResult> {
   const snapshot = await getRoundSnapshot(profileId)
   if (!snapshot) return { status: 'unavailable' }
+
+  // **Der Riegel aus BUG-130.** Alles darunter verändert die laufende Runde —
+  // es zieht Nummern aus ihrem Vorrat, tauscht ihre vorbereitete Frage aus und
+  // kann sie im `pool-empty`-Zweig sogar beenden. Wer das auslöst, muss dieselbe
+  // Runde meinen, die läuft; ein veralteter Tab wird hier abgewiesen, so wie
+  // seine Antworten es seit jeher werden (AC-36, EC-15).
+  if (snapshot.roundId !== roundId) return { status: 'stale' }
 
   const drawn = await drawQuestion(new Set(snapshot.seenIds))
   if (drawn === 'pool-empty') {
@@ -127,7 +157,12 @@ async function prepareNext(profileId: string): Promise<PrepareResult> {
     // laufende erst, und der Fall trifft danach zu.
     if (snapshot.hasCurrent) return { status: 'pool-empty', result: null }
 
-    const finished = await finishRound(profileId, snapshot.roundId)
+    // `roundId` statt `snapshot.roundId`: Beide sind hier nachweislich gleich —
+    // der Riegel oben hat es geprüft —, aber die Kennung des **Aufrufers** zu
+    // übergeben ist das, was den Schutz aus `0012` trägt. Würde hier die
+    // serverseitig abgeleitete stehen, käme sie zwangsläufig immer durch, und
+    // `finish_round` hätte an dieser Stelle nichts mehr zu prüfen (BUG-130).
+    const finished = await finishRound(profileId, roundId)
     if (!finished.written || finished.streak === null || finished.durationMs === null) {
       return { status: 'pool-empty', result: null }
     }
@@ -146,10 +181,14 @@ async function prepareNext(profileId: string): Promise<PrepareResult> {
 
   const token = await setPreparedQuestion(
     profileId,
+    roundId,
     { answerId: drawn.answerId, correctIndex: drawn.correctIndex },
     drawn.alsoSeen
   )
-  if (!token) return { status: 'unavailable' }
+  // Kein Token heißt: Die Runde ist zwischen dem Riegel oben und hier verdrängt
+  // worden. Selten, aber möglich — und dann ist der Aufrufer veraltet, nicht die
+  // Quelle kaputt.
+  if (!token) return { status: 'stale' }
 
   return { status: 'ok', prepared: { token, options: drawn.options } }
 }
@@ -159,14 +198,17 @@ async function prepareNext(profileId: string): Promise<PrepareResult> {
  * Getrennt von `answerAction`, damit das Urteil den Spieler sofort erreicht und
  * das Ziehen der nächsten Frage nicht darauf wartet.
  */
-export async function prepareNextQuestionAction(): Promise<PrepareResult> {
+export async function prepareNextQuestionAction(roundId: unknown): Promise<PrepareResult> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { status: 'unauthenticated' }
 
-  return prepareNext(user.id)
+  const parsed = z.uuid().safeParse(roundId)
+  if (!parsed.success) return { status: 'stale' }
+
+  return prepareNext(user.id, parsed.data)
 }
 
 /**

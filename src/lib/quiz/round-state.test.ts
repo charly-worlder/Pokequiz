@@ -80,13 +80,40 @@ describe('setPreparedQuestion', () => {
   it('gibt die verworfenen Nummern mit, damit sie nicht erneut gezogen werden (EC-5)', async () => {
     const calls = makeAdmin('t-3')
 
-    expect(await setPreparedQuestion('p-1', { answerId: 150, correctIndex: 1 }, [7, 8])).toBe('t-3')
+    expect(await setPreparedQuestion('p-1', 'r-1', { answerId: 150, correctIndex: 1 }, [7, 8])).toBe(
+      't-3'
+    )
     expect(calls[0].args).toEqual({
       p_profile: 'p-1',
+      p_round_id: 'r-1',
       p_answer_id: 150,
       p_correct_index: 1,
       p_also_seen: [7, 8],
     })
+  })
+
+  /**
+   * BUG-130 — ohne die Runden-Kennung im Aufruf könnte die Datenbank gar nicht
+   * prüfen, wessen Runde gemeint ist. Der Test pinnt, dass sie mitgeht.
+   */
+  it('reicht die Runden-Kennung an die Datenbank durch (BUG-130)', async () => {
+    const calls = makeAdmin('t-4')
+
+    await setPreparedQuestion('p-1', 'r-42', { answerId: 9, correctIndex: 0 })
+
+    expect(calls[0].fn).toBe('set_prepared_question')
+    expect(calls[0].args).toMatchObject({ p_profile: 'p-1', p_round_id: 'r-42' })
+  })
+})
+
+describe('discardPreparedQuestion', () => {
+  it('reicht die Runden-Kennung an die Datenbank durch (BUG-130)', async () => {
+    const calls = makeAdmin(null)
+
+    await discardPreparedQuestion('p-1', 'r-42')
+
+    expect(calls[0].fn).toBe('discard_prepared_question')
+    expect(calls[0].args).toEqual({ p_profile: 'p-1', p_round_id: 'r-42' })
   })
 })
 
@@ -206,6 +233,6 @@ describe('Fehler der Datenbank', () => {
 
   it('gilt auch für das Verwerfen der vorbereiteten Frage', async () => {
     makeAdmin(null, { message: 'deadlock detected' })
-    await expect(discardPreparedQuestion('p-1')).rejects.toThrow('deadlock detected')
+    await expect(discardPreparedQuestion('p-1', 'r-1')).rejects.toThrow('deadlock detected')
   })
 })

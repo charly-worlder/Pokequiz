@@ -322,6 +322,40 @@ Die naheliegende Alternative — die Serveruhr beim Bildfehler anhalten — wurd
 - Rot-Gegenprobe je Fix: `finish_round` ohne Kennung → E2E rot · Server wertet nicht mehr → E2E rot · Karte behauptet wieder immer die stehende Uhr → Unit-Test rot; nach Rücknahme jeweils grün
 - Die beiden neuen E2E-Tests stellen ihren Zustand **direkt** her, nicht über die Oberfläche — der erschöpfte Vorrat wäre sonst erst nach rund 380 Fragen erreichbar
 
+
+## Notizen aus dem dritten Fix-Lauf (2026-09-07)
+
+Vier Befunde, drei davon Nachzügler bereits gezogener Lehren. Deshalb liegen sie in **einer** Migration (`0013`): Es ist dieselbe Frage, dreimal nicht zu Ende beantwortet.
+
+**BUG-122 — eine Berechtigung, die man beim Aufräumen übersieht.** `0011` hat den Einreichweg für Rundenergebnisse geschlossen und dabei `insert, update, delete` entzogen — aber nicht `truncate`. Und TRUNCATE unterliegt **keiner** Row Level Security: Wäre es erreichbar, löschte ein Aufruf die Runden aller Spieler. Erreichbar war es nicht, PostgREST kennt kein solches Verb. Trotzdem ist es dieselbe Klasse wie BUG-110 und BUG-22 davor: **Wer einen Schreibweg entfernt, muss die Rechte mitentfernen — alle, nicht die drei, an die man beim Schreiben gerade denkt.** `revoke all` und dann gezielt `grant select` zurück ist die Form, die das erzwingt; `0007` machte es bei `active_runs` von Anfang an so.
+
+**BUG-123 — zwei Anweisungen, die eine hätten sein müssen.** `start_round` löschte und fügte getrennt ein. Zwei gleichzeitige Starts sehen die Löschung der jeweils anderen nicht; der unterlegene lief in `duplicate key … active_runs_pkey`. Für den Spieler war das keine Fehlermeldung, sondern eine Sackgasse: Der Client macht daraus `unavailable`, landet in der Fehlerkarte **ohne** Runden-Kennung, „Erneut versuchen" führt zurück in dieselbe Karte, „Runde beenden" in die Fremdrunden-Meldung. Nur Neuladen half. Aus einem Tab verhinderte ein Riegel im Client das — aus zwei Tabs nicht, und genau die nennt EC-9.
+
+`on conflict (profile_id) do update` macht daraus einen Schritt. Der Aktualisierungszweig setzt durchgehend `excluded.*`, **einschließlich der Spalten, die in der Einfügeliste gar nicht auftauchen** (`round_id`, `streak`, `accumulated_ms`, `touched_at` — sie kämen aus ihren Spaltenvorgaben). Damit ist der Zweig per Konstruktion identisch mit einem frischen Einfügen, statt von Hand nachgebaut: Eine stehengebliebene `streak` wäre der Fehler, den man hier macht, und er wäre in der Rangliste gelandet.
+
+**BUG-130 — der Fix von `0012`, zu Ende geführt.** BUG-120 hatte gezeigt, dass das Rundenende nicht wusste, welche Runde gemeint ist. `0012` hat das für `finish_round` behoben — und nur dafür. `set_prepared_question` und `discard_prepared_question` banden sich weiterhin allein an das Profil, und die Server Actions darüber nahmen **überhaupt kein Argument**: Ein veralteter Tab konnte seine Runde gar nicht nennen, also war er von einem aktuellen nicht unterscheidbar.
+
+Gemessen: Runde A durch Runde B verdrängt, dann der Aufruf aus Tab A → die vorbereitete Frage der **laufenden** Runde B ausgetauscht (151 → 300), ihr Token gewechselt, ihr Ziehungsvorrat um drei Nummern kürzer. Der spielende Tab hatte das Bild des alten Tokens vorgeladen; das war wertlos, die nächste Frage kam mit sichtbarem Ladezustand statt vorgeladen (AC-10). Und im Randfall „Vorrat erschöpft, keine Frage offen" beendete Tab A die laufende Runde B samt Wertung — weil `finishRound` dort die serverseitig abgeleitete `snapshot.roundId` bekam, die zwangsläufig immer passte.
+
+Der Riegel sitzt jetzt an drei Stellen, und das ist kein Übermaß, sondern die Aufgabenteilung: die **Datenbank** prüft `and a.round_id = p_round_id` (die Autorität), `prepareNext` prüft vor allem, was den Zustand verändert (damit nichts halb geschieht), und `replacePreparedQuestionAction` prüft **vor** dem Verwerfen — sonst hätte der veraltete Tab die vorbereitete Frage der laufenden Runde bereits gelöscht, bevor `prepareNext` ihn abweist. Im `pool-empty`-Zweig geht bewusst die Kennung des **Aufrufers** an `finish_round`, nicht die aus dem Schnappschuss: Die serverseitig abgeleitete käme immer durch, und die Prüfung in `0012` hätte an dieser Stelle nichts mehr zu tun.
+
+Neu im Vertrag der Action ist der Status `stale` — dieselbe Antwort, die eine Antwort aus einem verwaisten Tab seit jeher bekommt. Der Client zeigt darauf die EC-15-Meldung.
+
+**BUG-124 — die einzige Migration, die rückwirkend geändert wurde.** `0010` hatte ein blankes `create extension if not exists pg_cron`. Verweigert das gehostete Projekt die Erweiterung, bricht damit die **ganze** Migration ab und `supabase db push` scheitert hart. Ein Nachtrag in einer späteren Migration hilft nicht: `0010` läuft zuerst.
+
+Die Änderung an einer bereits gelaufenen Datei ist hier zulässig und nur hier — **kein Feature steht auf `Deployed`**, die Datei hat die Maschine nie verlassen. Sie ist jetzt in einen `do`-Block gefasst, der den Fehlschlag zu einer Warnung macht und den Aufräum-Lauf überspringt, statt alles abzubrechen. Die Absicherung bleiben **T36** und **T37**; ohne sie ist AC-41 eine Zusage ohne Mechanismus — aber als sichtbare Deploy-Aufgabe, nicht als stiller Ausfall.
+
+Bemerkenswert bleibt die Spannung zum eigenen Bauplan: `0005` hat den Weg über `pg_cron` fünf Migrationen früher ausdrücklich vermieden, mit derselben Begründung, an der er hier fast gescheitert wäre.
+
+### Verifikation
+
+- `npm test` **260/260** (23 Dateien), `npm run lint` **Exit 0**, `npm run build` **Exit 0** (6 Routen), `npx playwright test` **72/72** in drei Engines
+- `supabase db reset` über **0001–0013** zweimal vollständig durchgelaufen — das ist zugleich der Nachweis für den `0010`-Fix
+- Wirkung gemessen: `runs` trägt für `authenticated` nur noch `r` (SELECT), `anon` gar nichts · fünf gleichzeitige Rundenstarts → **alle fünf erfolgreich**, genau eine Zeile, `streak` und `accumulated_ms` auf 0 (vorher 2 von 3 mit HTTP 500) · Aufruf mit fremder Runden-Kennung → `discard` wirkungslos, `set` gibt `null`, Runde B **Feld für Feld unverändert**
+- **Kontrollmessungen**, damit das Abweisen kein kaputter Aufruf ist: dieselben Aufrufe mit der **eigenen** Kennung wirken unverändert (neues Token, `seen_ids` wächst)
+- **Rot-Gegenprobe je Fix**, einzeln eingebaut und zurückgenommen: Riegel in `prepareNext` entfernt → **2 Unit-Tests rot** · Riegel in `replacePreparedQuestionAction` entfernt → **1 Unit-Test rot** · `start_round` zurück auf Löschen-dann-Einfügen → **E2E rot** in Zeile 330 · `set_prepared_question` ohne Runden-Prüfung → **E2E rot** in Zeile 276. Nach Rücknahme jeweils wieder grün
+- **Was kein Test pinnt:** die Tabellenrechte aus BUG-122 selbst. Über PostgREST ist der Rechtestand nicht abfragbar, und die Suite hat keinen SQL-Zugang außerhalb der Runden-Funktionen. Gepinnt ist nur die *erreichbare* Hälfte — der Einreichversuch über `POST /rest/v1/runs`, den `PROJ-2-round-authority.spec.ts:110` mit 403 festnagelt. Ein künftiges `grant` könnte die Rechte still wieder öffnen, ohne dass etwas rot wird. Dieselbe Klasse wie BUG-101/BUG-118; bewusst offen gelassen und hier benannt statt verschwiegen
+
 ## Historie — der abgelöste Entwurf (2026-09-01 bis 2026-09-05)
 
 > Alles ab hier beschreibt den **clientseitig geführten** Entwurf, den `/refine PROJ-2` am 2026-09-06 abgelöst hat. Er bleibt vollständig stehen, weil `qa-report.md` und `features/INDEX.md` auf seine Befunde und Bug-Nummern verweisen — und weil die Begründungen zeigen, welche Überlegung damals wozu geführt hat.

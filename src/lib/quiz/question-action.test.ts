@@ -29,6 +29,8 @@ function session(user: { id: string } | null = { id: 'user-1' }) {
   createClient.mockResolvedValue({ auth: { getUser: async () => ({ data: { user } }) } })
 }
 
+const ROUND = '11111111-1111-4111-8111-111111111111'
+
 const drawn = (answerId: number, correctIndex: number, alsoSeen: number[] = []) => ({
   answerId,
   correctIndex,
@@ -45,7 +47,7 @@ describe('startRoundAction', () => {
   it('gibt weder die Pokémon-Nummer noch die richtige Option an den Browser (AC-32)', async () => {
     drawQuestion.mockResolvedValueOnce(drawn(25, 2)).mockResolvedValueOnce(drawn(6, 0))
     state.startRound.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       currentToken: 't-1',
       preparedToken: 't-2',
     })
@@ -54,7 +56,7 @@ describe('startRoundAction', () => {
 
     expect(result).toEqual({
       status: 'ok',
-      roundId: 'r-1',
+      roundId: ROUND,
       current: { token: 't-1', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
       prepared: { token: 't-2', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
     })
@@ -103,7 +105,7 @@ describe('startRoundAction', () => {
 describe('replacePreparedQuestionAction', () => {
   it('verwirft die vorbereitete Frage und zieht eine neue (EC-6)', async () => {
     state.getRoundSnapshot.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       seenIds: [25, 6],
       streak: 1,
       hasCurrent: true,
@@ -112,9 +114,9 @@ describe('replacePreparedQuestionAction', () => {
     drawQuestion.mockResolvedValue(drawn(150, 1))
     state.setPreparedQuestion.mockResolvedValue('t-neu')
 
-    const result = await replacePreparedQuestionAction()
+    const result = await replacePreparedQuestionAction(ROUND)
 
-    expect(state.discardPreparedQuestion).toHaveBeenCalledWith('user-1')
+    expect(state.discardPreparedQuestion).toHaveBeenCalledWith('user-1', ROUND)
     expect(result).toEqual({
       status: 'ok',
       prepared: { token: 't-neu', options: ['Glurak', 'Relaxo', 'Pikachu', 'Enton'] },
@@ -123,7 +125,7 @@ describe('replacePreparedQuestionAction', () => {
 
   it('zieht ausschließlich aus den noch nicht verbrauchten Nummern (AC-5)', async () => {
     state.getRoundSnapshot.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       seenIds: [25, 6, 113],
       streak: 1,
       hasCurrent: true,
@@ -132,14 +134,14 @@ describe('replacePreparedQuestionAction', () => {
     drawQuestion.mockResolvedValue(drawn(150, 1))
     state.setPreparedQuestion.mockResolvedValue('t-neu')
 
-    await replacePreparedQuestionAction()
+    await replacePreparedQuestionAction(ROUND)
 
     expect([...(drawQuestion.mock.calls[0][0] as Set<number>)]).toEqual([25, 6, 113])
   })
 
   it('weist einen Aufruf ohne Sitzung ab (EC-7)', async () => {
     session(null)
-    expect(await replacePreparedQuestionAction()).toEqual({ status: 'unauthenticated' })
+    expect(await replacePreparedQuestionAction(ROUND)).toEqual({ status: 'unauthenticated' })
     expect(state.discardPreparedQuestion).not.toHaveBeenCalled()
   })
 })
@@ -147,7 +149,7 @@ describe('replacePreparedQuestionAction', () => {
 describe('prepareNextQuestionAction', () => {
   it('beendet die Runde selbst, wenn der Vorrat erschöpft ist und keine Frage offensteht (AC-35, EC-2)', async () => {
     state.getRoundSnapshot.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       seenIds: [],
       streak: 386,
       hasCurrent: false,
@@ -155,18 +157,18 @@ describe('prepareNextQuestionAction', () => {
     })
     drawQuestion.mockResolvedValue('pool-empty')
     state.finishRound.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       streak: 386,
       durationMs: 12_000,
       written: true,
     })
     getPersonalBest.mockResolvedValue(null)
 
-    const result = await prepareNextQuestionAction()
+    const result = await prepareNextQuestionAction(ROUND)
 
     // Der Server wertet, nicht der Browser: Bleibt dessen Aufruf aus, wäre das
     // Ergebnis sonst verloren (BUG-119).
-    expect(state.finishRound).toHaveBeenCalledWith('user-1', 'r-1')
+    expect(state.finishRound).toHaveBeenCalledWith('user-1', ROUND)
     expect(result).toEqual({
       status: 'pool-empty',
       result: { streak: 386, durationMs: 12_000, isPersonalBest: true },
@@ -175,7 +177,7 @@ describe('prepareNextQuestionAction', () => {
 
   it('beendet die Runde NICHT, solange noch eine Frage offensteht (AC-35)', async () => {
     state.getRoundSnapshot.mockResolvedValue({
-      roundId: 'r-1',
+      roundId: ROUND,
       seenIds: [],
       streak: 5,
       hasCurrent: true,
@@ -183,12 +185,95 @@ describe('prepareNextQuestionAction', () => {
     })
     drawQuestion.mockResolvedValue('pool-empty')
 
-    expect(await prepareNextQuestionAction()).toEqual({ status: 'pool-empty', result: null })
+    expect(await prepareNextQuestionAction(ROUND)).toEqual({ status: 'pool-empty', result: null })
     expect(state.finishRound).not.toHaveBeenCalled()
   })
 
   it('meldet „nicht ladbar", wenn es gar keine laufende Runde gibt', async () => {
     state.getRoundSnapshot.mockResolvedValue(null)
-    expect(await prepareNextQuestionAction()).toEqual({ status: 'unavailable' })
+    expect(await prepareNextQuestionAction(ROUND)).toEqual({ status: 'unavailable' })
+  })
+})
+
+/**
+ * BUG-130 — dieselbe Klasse wie BUG-120, die dessen Fix in `0012` überlebt hat.
+ *
+ * Ein veralteter Tab (seine Runde wurde nach AC-36 anderswo verdrängt) rief
+ * diese beiden Actions **ohne jedes Argument** auf. Der Server arbeitete
+ * daraufhin auf „was gerade läuft" — und veränderte damit die Runde des anderen
+ * Tabs: Ihre vorbereitete Frage wurde ausgetauscht, ihr Ziehungsvorrat verkürzt,
+ * und im Fall eines erschöpften Vorrats wurde sie sogar beendet und gewertet.
+ *
+ * Die Tests hier prüfen deshalb nicht nur den Rückgabewert, sondern vor allem,
+ * dass die verändernden Aufrufe **gar nicht erst stattfinden**.
+ */
+const FREMDE_RUNDE = '22222222-2222-4222-8222-222222222222'
+
+describe('Ein veralteter Tab verändert die laufende Runde nicht (BUG-130, AC-36, EC-15)', () => {
+  const laufendeRunde = {
+    roundId: ROUND,
+    seenIds: [25, 6],
+    streak: 1,
+    hasCurrent: true,
+    hasPrepared: true,
+  }
+
+  it('replacePreparedQuestionAction weist eine fremde Kennung ab, OHNE zu verwerfen', async () => {
+    state.getRoundSnapshot.mockResolvedValue(laufendeRunde)
+
+    expect(await replacePreparedQuestionAction(FREMDE_RUNDE)).toEqual({ status: 'stale' })
+
+    // Der Kern des Befunds: Vorher wurde hier die vorbereitete Frage der
+    // *laufenden* Runde gelöscht, bevor überhaupt jemand nach der Kennung fragte.
+    expect(state.discardPreparedQuestion).not.toHaveBeenCalled()
+    expect(state.setPreparedQuestion).not.toHaveBeenCalled()
+    expect(drawQuestion).not.toHaveBeenCalled()
+  })
+
+  it('prepareNextQuestionAction weist eine fremde Kennung ab, OHNE eine Frage zu ziehen', async () => {
+    state.getRoundSnapshot.mockResolvedValue(laufendeRunde)
+
+    expect(await prepareNextQuestionAction(FREMDE_RUNDE)).toEqual({ status: 'stale' })
+
+    // Kein Zug aus dem Vorrat der fremden Runde: `seen_ids` bleibt unberührt.
+    expect(drawQuestion).not.toHaveBeenCalled()
+    expect(state.setPreparedQuestion).not.toHaveBeenCalled()
+  })
+
+  it('beendet die laufende Runde NICHT, wenn ein veralteter Tab auf erschöpften Vorrat läuft', async () => {
+    // Der schärfste Fall: Vorher bekam `finishRound` die serverseitig
+    // abgeleitete `snapshot.roundId` — die passte zwangsläufig immer, und der
+    // veraltete Tab beendete die fremde Runde samt Wertung.
+    state.getRoundSnapshot.mockResolvedValue({
+      roundId: ROUND,
+      seenIds: [],
+      streak: 9,
+      hasCurrent: false,
+      hasPrepared: false,
+    })
+    drawQuestion.mockResolvedValue('pool-empty')
+
+    expect(await prepareNextQuestionAction(FREMDE_RUNDE)).toEqual({ status: 'stale' })
+    expect(state.finishRound).not.toHaveBeenCalled()
+  })
+
+  it('weist eine Kennung ab, die gar keine ist, bevor irgendetwas geschieht', async () => {
+    state.getRoundSnapshot.mockResolvedValue(laufendeRunde)
+
+    expect(await prepareNextQuestionAction('nicht-mal-eine-uuid')).toEqual({ status: 'stale' })
+    expect(await replacePreparedQuestionAction(null)).toEqual({ status: 'stale' })
+
+    expect(state.getRoundSnapshot).not.toHaveBeenCalled()
+    expect(state.discardPreparedQuestion).not.toHaveBeenCalled()
+  })
+
+  it('meldet „stale", wenn die Runde zwischen Prüfung und Schreiben verdrängt wird', async () => {
+    state.getRoundSnapshot.mockResolvedValue(laufendeRunde)
+    drawQuestion.mockResolvedValue(drawn(150, 1))
+    // Die Datenbank findet die Runde nicht mehr — ihr `where a.round_id = …`
+    // trifft nichts, also kommt kein Token zurück.
+    state.setPreparedQuestion.mockResolvedValue(null)
+
+    expect(await prepareNextQuestionAction(ROUND)).toEqual({ status: 'stale' })
   })
 })

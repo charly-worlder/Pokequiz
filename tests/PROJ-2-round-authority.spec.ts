@@ -221,6 +221,130 @@ test('Ein veralteter Tab beendet nicht die laufende Runde des anderen (AC-36, BU
 })
 
 /**
+ * spec.md AC-36, EC-15, AC-10 — **dieselbe Frage eine Tür weiter (BUG-130).**
+ *
+ * Der Fix für BUG-120 hat die Runden-Kennung nur beim Rundenende nachgezogen.
+ * Vorbereiten und Verwerfen banden sich weiterhin allein an das Profil, und die
+ * zugehörigen Server Actions nahmen überhaupt kein Argument — ein veralteter Tab
+ * konnte seine Runde also gar nicht nennen und veränderte damit die laufende
+ * Runde des anderen: Ihre vorbereitete Frage wurde ausgetauscht, ihr Token
+ * gewechselt und ihr Ziehungsvorrat verkürzt. Der spielende Tab hatte das Bild
+ * des alten Tokens vorgeladen — das war damit wertlos (AC-10).
+ *
+ * Geprüft wird auf der Ebene, auf der die Autorität sitzt: den Datenbank-
+ * Funktionen. Die Server Action darüber reicht die Kennung nur durch.
+ */
+test('Ein veralteter Tab verändert die vorbereitete Frage der laufenden Runde nicht (AC-36, BUG-130)', async ({
+  page,
+  context,
+}) => {
+  const { trainer } = await register(page, 'e2eStalePrep')
+  const profileId = await profileIdFor(trainer)
+
+  await page.getByRole('button', { name: 'Runde starten' }).click()
+  await waitForQuestion(page)
+  const roundA = await activeRoundId(profileId)
+
+  const second = await context.newPage()
+  await second.goto('/')
+  await second.getByRole('button', { name: 'Runde starten' }).click()
+  await waitForQuestion(second)
+  const roundB = await activeRoundId(profileId)
+  expect(roundB, 'Die zweite Runde muss eine andere sein').not.toBe(roundA)
+
+  const before = await admin
+    .from('active_runs')
+    .select('prepared_answer_id, prepared_token, seen_ids')
+    .eq('profile_id', profileId)
+    .single()
+
+  // Der veraltete Tab will „seine" vorbereitete Frage ersetzen.
+  const discarded = await admin.rpc('discard_prepared_question', {
+    p_profile: profileId,
+    p_round_id: roundA,
+  })
+  expect(discarded.error).toBeNull()
+
+  const replaced = await admin.rpc('set_prepared_question', {
+    p_profile: profileId,
+    p_round_id: roundA,
+    p_answer_id: 300,
+    p_correct_index: 1,
+    p_also_seen: [301, 302],
+  })
+  expect(replaced.error).toBeNull()
+  expect(replaced.data, 'Eine fremde Runde gibt kein Token zurück').toBeNull()
+
+  // Runde B ist Feld für Feld unverändert — das ist der eigentliche Nachweis.
+  const after = await admin
+    .from('active_runs')
+    .select('prepared_answer_id, prepared_token, seen_ids')
+    .eq('profile_id', profileId)
+    .single()
+  expect(after.data, 'Die laufende Runde bleibt unberührt').toEqual(before.data)
+
+  // Gegenprobe: Mit der eigenen Kennung wirkt derselbe Aufruf sehr wohl —
+  // sonst wäre das Abweisen oben kein Beleg, sondern eine kaputte Funktion.
+  const proper = await admin.rpc('set_prepared_question', {
+    p_profile: profileId,
+    p_round_id: roundB,
+    p_answer_id: 300,
+    p_correct_index: 1,
+    p_also_seen: [301, 302],
+  })
+  expect(proper.data, 'Die eigene Runde lässt sich weiterhin vorbereiten').not.toBeNull()
+
+  await second.close()
+})
+
+/**
+ * spec.md EC-9, AC-36 — **gleichzeitige Rundenstarts (BUG-123).**
+ *
+ * `start_round` löschte und fügte in getrennten Anweisungen ein. Zwei
+ * gleichzeitige Starts sahen die Löschung der jeweils anderen nicht, beide
+ * fügten ein, und der zweite lief in `duplicate key value violates unique
+ * constraint "active_runs_pkey"` — für den Spieler eine Sackgasse, aus der nur
+ * Neuladen half. Aus einem Tab verhinderte ein Riegel im Client das; aus zwei
+ * Tabs oder zwei Geräten nicht, und genau die nennt EC-9.
+ */
+test('Fünf gleichzeitige Rundenstarts ergeben eine Runde und keinen Fehler (EC-9, BUG-123)', async ({
+  page,
+}) => {
+  const { trainer } = await register(page, 'e2eRace')
+  const profileId = await profileIdFor(trainer)
+
+  const starts = await Promise.all(
+    [10, 20, 30, 40, 50].map((id) =>
+      admin.rpc('start_round', {
+        p_profile: profileId,
+        p_answer_id: id,
+        p_correct_index: 0,
+        p_prepared_answer_id: id + 1,
+        p_prepared_correct_index: 1,
+        p_also_seen: [],
+      })
+    )
+  )
+
+  for (const [i, start] of starts.entries()) {
+    expect(start.error, `Aufruf ${i + 1} darf nicht scheitern`).toBeNull()
+  }
+
+  const { data: rows } = await admin
+    .from('active_runs')
+    .select('round_id, streak, accumulated_ms')
+    .eq('profile_id', profileId)
+  expect(rows, 'Genau eine laufende Runde (AC-36)').toHaveLength(1)
+  // Der Aktualisierungszweig muss eine frische Runde ergeben, keine halb
+  // übernommene: Eine stehengebliebene Serie wäre der Fehler, den man hier macht.
+  expect(rows?.[0]?.streak, 'Serie beginnt bei 0').toBe(0)
+  expect(rows?.[0]?.accumulated_ms, 'Zeit beginnt bei 0').toBe(0)
+
+  const { data: written } = await admin.from('runs').select('round_id').eq('profile_id', profileId)
+  expect(written, 'Eine verdrängte Runde wird nicht gespeichert').toHaveLength(0)
+})
+
+/**
  * spec.md AC-35, EC-2 — **der erschöpfte Ziehungsvorrat, direkt hergestellt.**
  *
  * Durch die Oberfläche wäre dieser Zustand erst nach rund 380 Fragen erreichbar.

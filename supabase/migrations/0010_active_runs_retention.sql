@@ -19,13 +19,49 @@
 -- Die Kosten sind belanglos: ein Löschbefehl auf eine Tabelle mit höchstens so
 -- vielen Zeilen, wie gerade Spieler spielen.
 
-create extension if not exists pg_cron;
+-- **Warum das hier eingepackt ist (BUG-124, QA-Lauf vom 2026-09-07).**
+-- Vorher stand hier ein blankes `create extension if not exists pg_cron;`.
+-- Verweigert das gehostete Projekt die Erweiterung — das Free Tier tut das, bis
+-- sie im Dashboard eingeschaltet ist —, bricht damit die **ganze** Migration ab
+-- und `supabase db push` scheitert hart. Nicht nur der Aufräum-Lauf fehlte dann,
+-- sondern auch alles, was danach in dieser Datei steht, und die Migration gilt
+-- als nicht gelaufen.
+--
+-- Bemerkenswert ist die Spannung zum eigenen Bauplan: `0005` hat den Weg über
+-- `pg_cron` fünf Migrationen früher ausdrücklich vermieden, mit der Begründung,
+-- er verlange „eine Erweiterung, die im gehosteten Projekt eigens eingeschaltet
+-- werden muss — also eine weitere Aufgabe, die jemand von Hand erledigt und
+-- vergessen kann. Genau daran ist BUG-36 gescheitert." Hier war sie unvermeidbar,
+-- weil AC-41 eine Frist ohne Auslöser durch Verkehr verlangt — dann muss der
+-- Fehlschlag aber wenigstens sichtbar und folgenlos für den Rest sein.
+--
+-- Das Ergebnis: Fehlt die Erweiterung, läuft die Migration durch und meldet eine
+-- **Warnung**, die im Push-Protokoll steht. Die Absicherung bleiben T36 und T37
+-- in `tasks.md` — die Erweiterung im Dashboard einschalten und prüfen, dass das
+-- Projekt nicht wegen Inaktivität pausiert ist. Ohne sie ist AC-41 eine Zusage
+-- ohne Mechanismus; das ist eine Deploy-Aufgabe, kein stiller Ausfall mehr.
+do $$
+begin
+  begin
+    execute 'create extension if not exists pg_cron';
+  exception
+    when others then
+      raise warning 'pg_cron liess sich nicht anlegen (%): der Aufraeum-Lauf aus AC-41 wird uebersprungen. Erweiterung im Dashboard einschalten (T36), dann diese Migration erneut anwenden.', sqlerrm;
+  end;
 
-select cron.schedule(
-  'active-runs-retention',
-  '*/5 * * * *',
-  $$ delete from public.active_runs where touched_at < now() - interval '110 minutes' $$
-);
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    -- `cron.schedule` legt bei gleichem Namen nicht doppelt an, sondern
+    -- aktualisiert — ein erneuter Lauf dieser Migration ist damit gefahrlos.
+    perform cron.schedule(
+      'active-runs-retention',
+      '*/5 * * * *',
+      $q$ delete from public.active_runs where touched_at < now() - interval '110 minutes' $q$
+    );
+  else
+    raise warning 'Aufraeum-Lauf active-runs-retention NICHT eingerichtet: pg_cron fehlt. AC-41 ist bis dahin nicht durchgesetzt.';
+  end if;
+end
+$$;
 
 comment on table public.active_runs is
   'Zustand der laufenden Quiz-Runde. Kurzlebig: gelöscht am Rundenende (AC-39), spätestens ~115 Minuten nach der letzten Berührung durch den Lauf active-runs-retention (AC-41) und mit dem Profil (AC-40). Ausschließlich über die Funktionen aus 0009 erreichbar.';
