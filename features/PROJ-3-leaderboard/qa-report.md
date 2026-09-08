@@ -171,3 +171,99 @@ Vor dem Schnitt geprüft, wer `profiles` über eine **Nutzersitzung** liest: gen
 **N3, N6 und der `robots.txt`-Hinweis bleiben offen** — alle Low und alle beim Deploy zu entscheiden: `Cache-Control` ohne `private` (vor einem CDN mitzusetzen), keine Drosselung auf `/leaderboard`, und dass ein Crawler auf `/robots.txt` eine Umleitung statt einer Robots-Datei bekommt.
 
 **Prüfungen nach den Fixes:** `npm test` **284/284** (drei neue) · `npm run lint` Exit 0 · `npm run build` Exit 0 · Playwright **150/150** über drei Engines (einer neu) · Datenbank aus allen 16 Migrationen neu aufgebaut.
+
+---
+
+## QA-Lauf 2 — 2026-09-08, Branch `feat/PROJ-3-leaderboard`
+
+**Prüfstand:** nach dem Fix-Lauf zu QA-Lauf 1. Wieder drei `qa-engineer`-Bahnen parallel, disjunkte Umfänge, **keine kannte den Bau oder die Fixes**. Die Aufträge waren gegenüber Lauf 1 geschärft: Bahn 1 ausdrücklich auf AC-24 in **jedem** Zustand, AC-16 als **strukturellen** Vergleich, AC-4 mit aktiver Suche nach einer zweiten Rangberechnung und den **Wortlaut** von EC-2; Bahn 2 auf die Frage, ob eine gewöhnliche Sitzung über die Datenschnittstelle an Zeilen **oder Spalten** kommt, die sie nicht braucht; Bahn 3 darauf, ob eine Rechteverengung zu weit geht.
+
+---
+
+## Urteil
+
+**PRODUKTIONSREIF — kein Critical, kein High, kein Medium.** Ein Low bleibt offen und ist bewusst getragen. Status: **Approved**.
+
+**Und das ist eine Aussage über gefundene Fehler, nicht über Abdeckung.** AC-18 und EC-9 — Responsive-Verhalten unter 640 px und die Kürzung eines 20-Zeichen-Namens — sind **nicht geprüft**, weil `/qa` keinen Browser hat. `tests/PROJ-3-leaderboard-narrow.spec.ts` misst die Geometrie in drei Engines, aber ob die Seite auf einem echten Gerät gut aussieht, hat niemand gesehen. Das schließt `/e2e-tests`, nicht dieser Lauf.
+
+---
+
+## Alle fünf Befunde aus Lauf 1 sind unabhängig als behoben bestätigt
+
+| # | Kriterium | Bestätigt durch | Beleg |
+|---|---|---|---|
+| BUG-A | AC-24 | Bahn 1 | Satz belegt in **vier** Zuständen: mit Zeilen, im Leerzustand (0 gewertete Läufe), im Fehlerzustand (Funktionsrecht entzogen) und im Ladezustand |
+| N1 | — | Bahn 1 + 2 + 3 | `select * from profiles` als `authenticated` → `42501`; fremde Zeile gezielt abgefragt → `[]` |
+| BUG-B | AC-16 | Bahn 1 | Struktur Knoten für Knoten verglichen: gleicher Container, gleicher Seitenkopf, gleiche Karte, gleiche Spaltenkopfzeile, identisches Raster |
+| BUG-C | EC-2 | Bahn 1 | „Platz 6 — noch 1 bis Top 5" — zeichengenau der zitierte Text |
+| BUG-D | — | Owner | `admin.ts` nennt alle vier Aufrufer |
+
+**Die Verengung aus `0016` geht nicht zu weit** — von Bahn 3 an der laufenden App durchgespielt: Registrierung, Anmeldung mit falschem und richtigem Passwort, Abmeldung, belegter Trainername, Kopfzeile mit Trainernamen, vollständige Quiz-Runde bis zur gespeicherten Zeile (`runs id=176, streak=2`). Bahn 3 hat unabhängig nachgezählt, dass es genau **eine** Lesestelle über eine Nutzersitzung gibt.
+
+---
+
+## Der eine neue Befund — und er stammt aus dem Fix von BUG-B
+
+**Der Datenschutz-Satz stand kurzzeitig doppelt im DOM. Behoben im selben Lauf.**
+
+Der BUG-B-Fix ließ `loading.tsx` und `page.tsx` **dieselbe Komponente** rendern. Im Streaming-Fenster zwischen fertigem HTML und Hydration stehen Fallback und Inhalt aber gleichzeitig im DOM. Bahn 3 hat das nicht vermutet, sondern gemessen: **3 von 10 Aufrufen** mit zwei Knoten direkt nach `load`, aufgelöst nach `networkidle`. Der Test für AC-24 wurde dadurch rot — in **allen drei** Läufen, also kein Maschinenlast-Flake.
+
+**Die Ursache war ein Denkfehler beim Fix von BUG-B:** „braucht keine Daten" wurde mit „soll doppelt im DOM stehen" gleichgesetzt. Richtig ist: Ein Ladezustand hält **Höhen**, er wiederholt keinen fertigen Text. `loading.tsx` zeigt jetzt höhengleiche Platzhalter für Untertitel, Datenschutz-Satz und Knopf; echter Text bleibt nur die Überschrift, die zum Seitenrahmen gehört und dort schon immer stand.
+
+*Nachgemessen nach dem Fix:* **10 von 10** Aufrufen zeigen genau einen Knoten.
+*Test verschärft:* Die alte Zusage deckte den Fehler nur in etwa 3 von 10 Aufrufen auf — ein Gate, das je nach Zeitpunkt rot wird, ist kein Gate. Der Test zählt jetzt über **fünf** Aufrufe hintereinander.
+*Rot geprüft:* Text im Ladezustand wiederhergestellt → „Aufruf 5: Der Datenschutz-Satz steht 2× im DOM", zurückgedreht → grün.
+
+---
+
+## Offen, bewusst getragen
+
+**AC-16 — ein Skelett kann nicht alle vier Ausgänge gleichzeitig treffen. Low.**
+Bahn 1 hat zwei verbliebene Strukturunterschiede benannt: Der Absatz „Platz N — noch X bis Top 5" hat keinen Platzhalter, und der Ladezustand zeigt **immer** die abgesetzte sechste Zeile — steht der Betrachter in der Top-5 oder ist niemand gewertet, fällt der Block beim Eintreffen der Daten weg. Das ist keine Nachlässigkeit, sondern die Grenze der Konstruktion: Der Ladezustand kennt das Ergebnis nicht und kann sich nicht auf vier verschiedene Ausgänge gleichzeitig einstellen. Die substanzielle Forderung von AC-16 ist erfüllt (Skelettzeilen in Zeilenhöhe, kein alleinstehender Spinner, identisches Raster); der Pixel-Versatz ist ohne Browser nicht gemessen.
+
+**Ein Prüf-Rückstand in der lokalen Datenbank, inzwischen entfernt.** Bahn 2 fand die Tabelle `qa3_runs_backup` — RLS aus, volle Rechte für `anon`, vollständige Rundenhistorie samt Konto-Kennung. Sie steht in **keiner** Migration und war das Sicherungs-Artefakt der parallel laufenden Bahn 1, die den Bestand für die Leerzustands-Prüfung räumen musste; Bahn 1 hat sie am Ende ihres Laufs selbst gelöscht (nachgeprüft: die Datenbank enthält wieder genau die vier Migrations-Tabellen). **Kein Produktfehler** — ein `supabase db push` überträgt nichts davon.
+
+**Der systemische Punkt dahinter bleibt und ist notiert:** Jede Tabelle, die im Schema `public` ohne ausdrückliches `revoke` entsteht, ist über die Datenschnittstelle für jeden les- und schreibbar (Postgres-Standardrecht). Dieselbe Klasse wie BUG-131 und BUG-132. Die Projektkonvention „jede neue Tabelle bekommt RLS, Policy und expliziten Rechteentzug" ist damit tragend, nicht kosmetisch.
+
+---
+
+## Ergebnis nach Kriterien
+
+**Bestanden mit Laufzeit-Beleg: AC-1 bis AC-17 und AC-19 bis AC-24, sowie EC-1 bis EC-8.**
+
+Hervorzuheben, weil die Aufbauten unterscheidungskräftig waren statt bloß bestätigend:
+- **EC-1:** Drei Spieler mit Serie 26, Dauer 40000 **und identischem `created_at` auf die Mikrosekunde** — acht Aufrufe, jedes Mal dieselbe Reihenfolge. Ohne die vierte Sortierstufe wäre der Fall unentschieden.
+- **EC-5:** Zwei exakt gleiche Läufe eines Spielers, dazwischen ein gleichwertiger eines anderen. Ergebnis: eine Zeile, und sie steht **über** dem anderen — hätte die Funktion den späteren Lauf genommen, stünde er unten. Der Aufbau kann zwischen richtig und falsch unterscheiden.
+- **AC-4:** Aktiv nach einer zweiten Rangberechnung gesucht (`row_number|rank()|.sort(` über `src/` und `supabase/migrations/`) → **genau eine** Fundstelle.
+- **AC-22:** Konto von Platz 2 gelöscht → alle rücken auf, inklusive korrigiertem „noch 1" in der eigenen Zeile.
+- **EC-6:** Fehler durch Rechteentzug erzwungen → HTTP 200, Hinweis **innerhalb** der Karte, Rahmen steht.
+- **AC-20:** HTML **und** RSC-Payload (27.740 B) durchsucht — 0 UUIDs, 0 E-Mail-Muster, 0 `profile_id`.
+- **EC-7:** 601 Läufe eines Spielers → eine Zeile, Seitenzeit 0,22–0,54 s.
+
+**`[!] NICHT GEPRÜFT:** AC-18, EC-9 (kein Browser — gehört zu `/e2e-tests`) · der Beobachtungsteil von AC-12 (dass sich die Liste im offenen Browser nicht umsortiert; Quelltext und HTML belegen die Abwesenheit jedes Mechanismus) · der Pixel-Versatz zu AC-16 · Verhalten des Produktions-Builds bei den Laufzeitmessungen · Security-Header gegen eine Live-URL (`deploy: null`).
+
+---
+
+## Security (Bahn 2)
+
+**Kein Bruch am Produkt.** Zugangsschutz mit Pfad-Tricks, Müll-Cookie und fremd platziertem JWT geprüft — durchgehend `307 → /login`, weil die Sitzung beim Auth-Server geprüft wird. Autorisierung: fremde Profilzeile `[]`, fremde Runden `[]`, `leaderboard_page` für `authenticated` 403 und für `anon` 401. Injektion: `p_profile` ist `uuid`-typisiert (`22P02`), der Trainername durch Check-Constraint auf `^[A-Za-z0-9_]{3,20}$` begrenzt — Stored-XSS an der Quelle ausgeschlossen. Keine Geheimnisse in den ausgelieferten Chunks.
+
+**Bestätigt und bereits in `INDEX.md` geführt:** BUG-12 (Security-Header fehlen), BUG-103 (`X-Powered-By`), BUG-132. **Nicht anwendbar auf PROJ-3:** BUG-18 — das Feature hat keine Server Action und keinen Schreibpfad.
+
+**`[!] NICHT GEPRÜFT (Security):** Drosselung auf `/leaderboard` (nicht implementiert; gewöhnlicher auth-gesperrter GET, laut Skill kein Bug, aber kein Pass) · Live-URL-Header.
+
+---
+
+## Regression (Bahn 3)
+
+`npm test` **284/284** · `npm run lint` Exit 0 · Playwright **150/150** über drei Engines, in **zwei** aufeinanderfolgenden Vollläufen nach dem Fix · `npm run build` Exit 0.
+
+Kein Regress an PROJ-1 oder PROJ-2. Genau eine Kopfzeile und eine Fußzeile auf `/leaderboard`, keine zweite Navigation. Migrationsstand `0016`, lokale Datenbank deckungsgleich mit dem Repo.
+
+## E2E-Tests
+
+Vorhandene Suite als Regression gelaufen (150/150). Neue End-to-End-Tests schreibt `/e2e-tests` — und dort gehören AC-18 und EC-9 hin.
+
+## Unit-Tests dieses Laufs
+
+Keine neuen geschrieben; die Logik liegt in der Datenbankfunktion (gegen gesäte Daten geprüft) und in `format.ts` (Grenzwerte bereits gepinnt, von Bahn 1 unabhängig nachgerechnet). Der verschärfte AC-24-Test ist ein E2E-Test und ersetzt keine Unit-Prüfung.

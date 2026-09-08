@@ -96,6 +96,31 @@ test.describe('PROJ-3 — was den Browser erreicht', () => {
 
     const note = page.getByText(/Andere angemeldete Spieler sehen hier/)
     await expect(note).toBeVisible()
+
+    /**
+     * **Genau einmal, und zwar verlässlich geprüft.**
+     *
+     * Am 2026-09-08 stand der Satz kurzzeitig **doppelt** im DOM: `loading.tsx`
+     * zeigte denselben Text wie die fertige Seite, und im Streaming-Fenster
+     * stehen Fallback und Inhalt gleichzeitig da. Die `toBeVisible`-Zusage oben
+     * hat das zwar aufgedeckt (strict mode, „resolved to 2 elements"), aber nur
+     * in etwa 3 von 10 Aufrufen — ein Gate, das je nach Zeitpunkt rot wird, ist
+     * kein Gate.
+     *
+     * Deshalb mehrere Aufrufe hintereinander, jeder direkt nach `goto` gezählt:
+     * Das Fenster ist kurz, aber es tritt bei genügend Versuchen zuverlässig auf.
+     */
+    for (let versuch = 0; versuch < 5; versuch += 1) {
+      await page.goto('/leaderboard')
+      const anzahl = await page
+        .locator('p')
+        .filter({ hasText: 'Andere angemeldete Spieler sehen hier' })
+        .count()
+      expect(
+        anzahl,
+        `Aufruf ${versuch + 1}: Der Datenschutz-Satz steht ${anzahl}× im DOM — er gehört genau einmal dorthin (AC-24). Zwei Knoten heißen: der Ladezustand wiederholt den fertigen Text.`
+      ).toBe(1)
+    }
     // Beide Aussagen, die AC-24 verlangt: welche Daten, und dass nur der beste
     // Lauf erscheint.
     await expect(note).toContainText('Trainernamen')
