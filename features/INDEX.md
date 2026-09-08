@@ -137,11 +137,13 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 ## Offen aus dem QA-Lauf 6 zu PROJ-2 (2026-09-08)
 
-**Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
+**Erledigt am 2026-09-08.** Nach dem Merge von `main` in `feat/PROJ-3-leaderboard` liegen Schalter und Fix erstmals gleichzeitig vor; die Messung und die Rot-Gegenprobe stehen in der Tabelle unten bei REG-1. AC-24, AC-43 und EC-16 sind damit am echten dreielementigen Zustand belegt. Der ursprüngliche Text:
+
+> **Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
 
 | # | Punkt | Schwere |
 |---|---|---|
-| REG-1 | Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne: 6 von 7 Tests prüfen eine Kopfzeile mit einem bzw. zwei Bedienelementen. Zeitlich begrenzt, kein Funktionsfehler | Medium |
+| ~~REG-1~~ | ~~Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne~~ — **geschlossen am 2026-09-08** auf `feat/PROJ-3-leaderboard`, nachdem `main` dort hineingemergt wurde. Erstmals liegen Schalter **und** Fix gleichzeitig vor: Die Kopfzeile trägt bei 320 px **drei** Bedienelemente (Wortmarke bis 38, „Bestenliste" bis 183, „Abmelden" bis 310 — alle im Bild), kein waagerechtes Scrollen. **Und der Test kann jetzt scheitern:** Wortmarken-Reduktion entfernt → 2 rot („die Seite ist 334 px breit bei 320 px sichtbar"), zurückgedreht → 7/7 grün | ✅ |
 | BUG-141 | Die Kopfzeilen-Knöpfe sind 36 px hoch; `docs/design-system.md` verlangt 40–46 px (`outline`) bzw. 40 px (`ghost`). Vorbestehend, aber `design.md` und der neue Test schreiben die 36 px jetzt als Untergrenze fest | Low |
 | BUG-142 | Kommentar in `site-header.tsx` behauptet, 13 px sei die kleinste zulässige Textgröße — das gilt nur für Button-Text, nicht allgemein | Low |
 
