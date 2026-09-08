@@ -33,10 +33,15 @@ export function OwnRankRow({ entry }: { entry: LeaderboardEntry }) {
       </ul>
 
       <p className="px-3 pt-2 text-[13px] text-muted-foreground sm:px-4">
-        {/* EC-2 nennt den Wortlaut für Platz 6: „Platz 6 — noch 1 bis Top 5." */}
+        {/*
+          EC-2 nennt den Wortlaut für Platz 6 wörtlich: „Platz 6 — noch 1 bis Top 5."
+          Hier stand bis zum 2026-09-08 „noch 1 **Platz** bis Top 5" — sprachlich
+          runder, aber nicht der Text, den der Vertrag zitiert. Der QA-Lauf hat es
+          gefunden; die billigere der beiden Auflösungen ist, dem Vertrag zu folgen
+          statt ihn für ein Füllwort zu ändern.
+        */}
         Platz <span className="tabular font-semibold text-foreground">{entry.rank}</span> — noch{' '}
-        <span className="tabular font-semibold text-foreground">{missing}</span>{' '}
-        {missing === 1 ? 'Platz' : 'Plätze'} bis Top 5
+        <span className="tabular font-semibold text-foreground">{missing}</span> bis Top 5
       </p>
     </div>
   )

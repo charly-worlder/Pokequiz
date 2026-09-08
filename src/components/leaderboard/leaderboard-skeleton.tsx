@@ -1,4 +1,5 @@
 import { Skeleton } from '@/components/ui/skeleton'
+import { LeaderboardHeaderRow } from './leaderboard-row'
 
 /**
  * spec.md AC-16 — Skelettzeilen in der Höhe der erwarteten Zeilen, **nie ein
@@ -31,6 +32,13 @@ export function LeaderboardSkeleton() {
     // sagen ihm nichts.
     <div aria-busy="true" aria-label="Weltrangliste wird geladen">
       <ul>
+        {/*
+          Die Spaltenüberschriften stehen auch hier — sie sind statischer Text und
+          brauchen keine Daten. Ohne sie war der Ladezustand eine Zeilenhöhe
+          kürzer als die fertige Liste, und genau das verletzt AC-16 Satz 2
+          (gefunden im QA-Lauf vom 2026-09-08).
+        */}
+        <LeaderboardHeaderRow />
         {[0, 1, 2, 3, 4].map((i) => (
           <SkeletonRow key={i} />
         ))}

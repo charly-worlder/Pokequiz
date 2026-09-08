@@ -9,6 +9,10 @@ import type { LeaderboardResult } from '@/lib/leaderboard/queries'
  * Die eine Karte der Weltrangliste (spec.md AC-6, AC-8, AC-9, AC-12, AC-24;
  * EC-3, EC-6).
  *
+ * **Der Datenschutz-Satz aus AC-24 steht bewusst NICHT hier**, sondern auf Seitenebene
+ * (`privacy-note.tsx`): In dieser Komponente lag er hinter zwei vorzeitigen
+ * Rückgaben und fehlte damit im Leer- und im Fehlerzustand — siehe dort.
+ *
  * **Sie wählt genau einen Zustand.** Welchen, entscheidet allein das
  * Abfrageergebnis — es gibt hier keinen Fall, in dem zwei Meldungen
  * übereinanderstehen:
@@ -70,17 +74,6 @@ function Body({ result }: { result: LeaderboardResult }) {
 
       {ownBelow && <OwnRankRow entry={ownBelow} />}
       {!own && <NoRankedRunHint />}
-
-      {/*
-        AC-24 — in einem Satz, ohne Klick und ohne Aufklappen: welche Daten hier
-        für andere sichtbar sind, und dass es ausschließlich der beste Lauf ist.
-        PROJ-3 ist das erste Feature, das personenbezogene Daten anderen Nutzern
-        offenlegt; bis hierher sah jeder nur sich selbst.
-      */}
-      <p className="px-3 pt-5 text-[13px] text-muted-foreground text-pretty sm:px-4">
-        Andere angemeldete Spieler sehen hier deinen Trainernamen, deine beste Serie und die
-        dazugehörige Zeit — immer nur deinen besten Lauf, nie deine übrigen Runden.
-      </p>
     </>
   )
 }

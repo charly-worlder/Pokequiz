@@ -131,6 +131,49 @@ test.describe('PROJ-3 — Zugriff auf die Ranglisten-Daten', () => {
     // wäre die vollständige Historie eines fremden Spielers.
     expect(data ?? []).toHaveLength(0)
   })
+
+  test('eine Sitzung liest nur die EIGENE Profilzeile, nicht die Kontenliste (N1)', async () => {
+    const mine = await makePlayer('prof')
+    const other = await makePlayer('prof2')
+
+    const asUser = createClient(SUPABASE_URL, ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+    await asUser.auth.signInWithPassword({ email: mine.email, password: PASSWORD })
+
+    // Vor Migration 0016 gab die Policy `using (true)` jeder Sitzung **alle
+    // Spalten aller Zeilen** — im QA-Lauf vom 2026-09-08 gemessen: 1024 Konten
+    // samt Auth-Kennung und Anlegedatum, während nur 234 in der Wertung standen.
+    const { data } = await asUser.from('profiles').select('id, trainer_name')
+    const zeilen = data ?? []
+
+    expect(
+      zeilen.length,
+      `Die Sitzung bekam ${zeilen.length} Profilzeilen — es darf ausschließlich die eigene sein`
+    ).toBe(1)
+    expect(zeilen[0].id).toBe(mine.id)
+
+    // Auch gezielt nach einer fremden Zeile gefragt kommt nichts zurück.
+    const { data: fremd } = await asUser
+      .from('profiles')
+      .select('id, trainer_name')
+      .eq('id', other.id)
+    expect(fremd ?? []).toHaveLength(0)
+
+    // Die Spalte, die kein Anwendungscode liest, ist gar nicht erst freigegeben.
+    const { error: spalte } = await asUser.from('profiles').select('created_at').eq('id', mine.id)
+    expect(spalte, 'created_at darf für eine Nutzersitzung nicht lesbar sein').not.toBeNull()
+
+    // **Gegenprobe, damit die Verengung nicht zu weit geht:** Die Kopfzeile liest
+    // genau so — eigene Zeile, Spalte `trainer_name`. Das muss weiter gehen.
+    const { data: kopfzeile, error: kopfFehler } = await asUser
+      .from('profiles')
+      .select('trainer_name')
+      .eq('id', mine.id)
+      .maybeSingle()
+    expect(kopfFehler, 'Die Abfrage der Kopfzeile darf nicht scheitern').toBeNull()
+    expect(kopfzeile?.trainer_name).toBe(mine.trainer)
+  })
 })
 
 test.describe('PROJ-3 — Invarianten jeder Ausgabe', () => {

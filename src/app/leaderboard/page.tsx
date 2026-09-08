@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 
 import { Button } from '@/components/ui/button'
 import { LeaderboardCard } from '@/components/leaderboard/leaderboard-card'
+import { LeaderboardPrivacyNote } from '@/components/leaderboard/privacy-note'
 import { getLeaderboard } from '@/lib/leaderboard/queries'
 
 /**
@@ -67,6 +68,14 @@ export default async function LeaderboardPage() {
       </header>
 
       <LeaderboardCard result={result} />
+
+      {/*
+        AC-24 — auf Seitenebene und damit an **keine** Bedingung geknüpft.
+        In der Karte lag der Satz hinter zwei vorzeitigen Rückgaben und fehlte im
+        Leer- und im Fehlerzustand; `loading.tsx` rendert dieselbe Komponente, es
+        springt beim Eintreffen der Daten hier also nichts (AC-16).
+      */}
+      <LeaderboardPrivacyNote />
 
       {/*
         AC-14 — „Runde starten" ist die Primär-Aktion der Seite, unabhängig davon,

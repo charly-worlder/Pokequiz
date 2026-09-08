@@ -55,3 +55,42 @@ describe('LeaderboardPage', () => {
     expect(redirect).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * AC-24 — der Datenschutz-Satz hängt an keiner Bedingung.
+ *
+ * **Warum das hier geprüft wird und nicht im Browser:** Der Fehler bestand darin,
+ * dass der Satz in *einem von vier* Zuständen der Karte gerendert wurde. Ein
+ * Browser-Test müsste jeden dieser Zustände herstellen — den leeren Zustand
+ * insbesondere, und der hängt am globalen Datenbestand, den parallele Tests
+ * mitbenutzen. Auf dieser Ebene ist jeder Zustand ein Funktionsaufruf.
+ */
+function enthaeltKomponente(knoten: unknown, name: string): boolean {
+  if (!knoten || typeof knoten !== 'object') return false
+  if (Array.isArray(knoten)) return knoten.some((k) => enthaeltKomponente(k, name))
+  const el = knoten as { type?: unknown; props?: { children?: unknown } }
+  const typ = el.type as { name?: string } | string | undefined
+  if (typeof typ === 'function' && typ.name === name) return true
+  return enthaeltKomponente(el.props?.children, name)
+}
+
+describe('LeaderboardPage — der Datenschutz-Satz (AC-24)', () => {
+  const zustaende = [
+    ['mit Ranglisten-Zeilen', { status: 'ok', entries: [{ rank: 1, trainerName: 'A', streak: 5, durationMs: 1000, isSelf: true }] }],
+    ['im Leerzustand', { status: 'ok', entries: [] }],
+    ['im Fehlerzustand', { status: 'error' }],
+  ] as const
+
+  for (const [was, ergebnis] of zustaende) {
+    it(`steht ${was} auf der Seite`, async () => {
+      getLeaderboard.mockResolvedValue(ergebnis)
+
+      const baum = await LeaderboardPage()
+
+      expect(
+        enthaeltKomponente(baum, 'LeaderboardPrivacyNote'),
+        `${was} fehlt der Datenschutz-Satz — AC-24 gilt in JEDEM Zustand, gerade im leeren (Art. 13 DSGVO)`
+      ).toBe(true)
+    })
+  }
+})

@@ -132,3 +132,42 @@ Keine geschrieben. Die Logik des Features liegt in der Datenbankfunktion (gegen 
 **Dann eine Entscheidung zu N1.** Die Policy gehört PROJ-1. Zwei Wege: die Spaltenauswahl einschränken (eine Sicht oder eine engere Policy, die nur `trainer_name` herausgibt) oder den Befund als Restrisiko in den Vertrag aufnehmen. Das ist eine Produktentscheidung, keine Bauaufgabe.
 
 **BUG-B, BUG-C und BUG-D** sind klein und können mitlaufen. BUG-C ist eine Vertragsfrage: entweder der Text folgt dem Wortlaut, oder der Wortlaut folgt dem Text.
+
+---
+
+## Fix-Lauf zum QA-Lauf 1 — 2026-09-08
+
+Alle fünf Befunde behoben. Jeder Fix ist gegen den wiederhergestellten Fehler **rot geprüft**.
+
+| # | Kriterium | Status | Nachweis |
+|---|---|---|---|
+| BUG-A | AC-24 | ✅ behoben | Satz auf Seitenebene, an keine Bedingung geknüpft |
+| N1 | — | ✅ behoben | Migration `0016`: eigene Zeile, zwei Spalten |
+| BUG-B | AC-16 | ✅ behoben | Ladezustand strukturgleich zur fertigen Seite |
+| BUG-C | EC-2 | ✅ behoben | Wortlaut folgt jetzt dem Vertrag |
+| BUG-D | — | ✅ behoben | `admin.ts` nennt alle vier Aufrufer |
+
+**BUG-A.** Der Datenschutz-Satz ist eine eigene Komponente (`privacy-note.tsx`) und steht in `page.tsx` **auf Seitenebene** — genau dort, wo `design.md` ihn von Anfang an vorsah. Damit hängt er an keiner Bedingung mehr; der Fehler kann an dieser Stelle nicht wiederkehren. `loading.tsx` rendert dieselbe Komponente (statischer Text, braucht keine Daten), was zugleich BUG-B mitbedient.
+*Gepinnt* in `src/app/leaderboard/page.test.tsx` für **alle drei** Zustände (mit Zeilen, leer, Fehler) — die Ebene ist bewusst gewählt: Ein Browser-Test müsste den Leerzustand herstellen, und der hängt am globalen Datenbestand, den parallele Tests mitbenutzen.
+*Rot geprüft:* Komponente aus `page.tsx` entfernt → **3 von 3** Zuständen rot, zurückgedreht → grün.
+
+**N1.** Migration `0016_profiles_own_row_only.sql`, zwei unabhängige Schichten:
+- **Zeilen:** `profiles_select_own ... using ((select auth.uid()) = id)` statt `using (true)`.
+- **Spalten:** `grant select (id, trainer_name)` statt `grant select` auf die ganze Tabelle. `created_at` wird von keinem Anwendungscode gelesen (geprüft) und ist damit nicht mehr freigegeben; `id` bleibt lesbar, weil es in der `where`-Bedingung der Kopfzeile steht und ein Spaltenrecht in Postgres für **jede** Erwähnung gilt, nicht nur für die Ausgabeliste.
+
+Vor dem Schnitt geprüft, wer `profiles` über eine **Nutzersitzung** liest: genau eine Stelle — `site-header.tsx:29`, eigene Zeile, Spalte `trainer_name`. Alles andere (`leaderboard_page`, `is_trainer_name_taken`, `handle_new_user`) ist `security definer` und hängt nicht an diesen Rechten.
+*Gepinnt* in `tests/PROJ-3-leaderboard-db-guard.spec.ts` — inklusive **Gegenprobe, dass die Verengung nicht zu weit geht**: Die Abfrage der Kopfzeile muss weiterhin gelingen.
+*Rot geprüft:* alte Policy zur Laufzeit wiederhergestellt → „Die Sitzung bekam **13** Profilzeilen — es darf ausschließlich die eigene sein", zurückgedreht → 9/9 grün.
+
+**BUG-B.** Die drei Unterschiede zwischen Ladezustand und fertiger Seite waren **sämtlich statischer Text** und hatten nie einen Grund zu fehlen: Untertitel, Spaltenüberschriften-Zeile, Datenschutz-Satz. Alle drei stehen jetzt in `loading.tsx` bzw. im Skelett, und zwar als **dieselben Komponenten** wie in `page.tsx` — eine Kopie wäre die nächste Stelle, an der die beiden auseinanderlaufen. Skelettflächen bleiben nur dort, wo tatsächlich Daten erwartet werden. Der „Runde starten"-Knopf hält seine Höhe als stummer Platzhalter (`aria-hidden`), statt beim Eintreffen der Daten aufzutauchen.
+*Nicht gepinnt:* Die tatsächliche Sprunghöhe in Pixeln braucht einen Browser und gehört zu `/e2e-tests`.
+
+**BUG-C.** „noch 1 **Platz** bis Top 5" → „noch 1 bis Top 5". Von den beiden Auflösungen die billigere: dem Vertrag folgen, statt ihn für ein Füllwort zu ändern.
+
+**BUG-D.** `admin.ts` zählt jetzt alle vier Aufrufer mit ihrem jeweiligen Grund auf und nennt den Anlass der Korrektur.
+
+### Was der Fix-Lauf nicht behandelt hat
+
+**N3, N6 und der `robots.txt`-Hinweis bleiben offen** — alle Low und alle beim Deploy zu entscheiden: `Cache-Control` ohne `private` (vor einem CDN mitzusetzen), keine Drosselung auf `/leaderboard`, und dass ein Crawler auf `/robots.txt` eine Umleitung statt einer Robots-Datei bekommt.
+
+**Prüfungen nach den Fixes:** `npm test` **284/284** (drei neue) · `npm run lint` Exit 0 · `npm run build` Exit 0 · Playwright **150/150** über drei Engines (einer neu) · Datenbank aus allen 16 Migrationen neu aufgebaut.
