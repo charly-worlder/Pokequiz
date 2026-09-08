@@ -91,6 +91,16 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 **Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
 
 
+## PROJ-2 steht seit dem 2026-09-08 wieder auf `Planned` — warum
+
+**Der Vertrag ist gewachsen, nicht die Qualität gesunken.** `/refine PROJ-2` hat am 2026-09-08 **AC-24 neu gefasst** und **AC-43** sowie **EC-16** ergänzt: Die App muss ab **320 px** Breite ohne waagerechten Überlauf funktionieren. Für dieses neue Kriterium gibt es weder Design noch Bau, deshalb ist `Approved` nicht mehr zutreffend.
+
+**Nichts am bisherigen Abnahmestand ist dadurch entwertet.** Die fünf QA-Durchgänge und alle darin belegten AC gelten unverändert; die Liste der akzeptierten Restrisiken weiter unten bleibt gültig. Hinzugekommen ist genau eine Zusage, die vorher niemand gegeben hatte.
+
+**Der Anlass kam von außen:** Beim Bau von PROJ-3 schaltet `LEADERBOARD_PAGE_EXISTS` den Bestenlisten-Zugang frei. Damit trägt die Kopfzeile **drei** Elemente statt zwei — und `docs/app-shell.md` hielt bis dahin ausdrücklich fest, „bei zwei Bereichen passt beides in die Kopfzeile". Gemessen am 2026-09-08: Die Kopfzeile braucht ab da konstant 375 px; bei 320 px war „Abmelden" zu 39 % sichtbar und die Seite ließ sich **nicht** waagerecht scrollen. Vollständige Messreihe in `PROJ-2/design.md` → Technical Decisions.
+
+**Wichtig für die Reihenfolge:** Auf `main` existiert der Überlauf **noch nicht** — dort steht der Schalter auf `false`. Er entsteht mit dem Merge von PROJ-3. Der Fix muss deshalb vor oder mit diesem Merge landen.
+
 ## Bekannte Restrisiken — PROJ-2 (Stand 2026-09-07)
 
 > **PROJ-2 steht auf `Approved` mit offenen Punkten.** Entscheidung des Nutzers vom 2026-09-07 nach dem fünften QA-Durchgang: Findet der Abschlusslauf nur noch Low, wird der Rest **dokumentiert akzeptiert statt weiter gebaut**. Er fand nur Low. Diese Liste ist der Preis dieser Entscheidung — sie steht hier, damit niemand `Approved` für „nichts mehr offen" hält.
@@ -124,3 +134,17 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 **Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
 ## Next Available ID: PROJ-5
+
+## Offen aus dem QA-Lauf 6 zu PROJ-2 (2026-09-08)
+
+**Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
+
+| # | Punkt | Schwere |
+|---|---|---|
+| REG-1 | Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne: 6 von 7 Tests prüfen eine Kopfzeile mit einem bzw. zwei Bedienelementen. Zeitlich begrenzt, kein Funktionsfehler | Medium |
+| BUG-141 | Die Kopfzeilen-Knöpfe sind 36 px hoch; `docs/design-system.md` verlangt 40–46 px (`outline`) bzw. 40 px (`ghost`). Vorbestehend, aber `design.md` und der neue Test schreiben die 36 px jetzt als Untergrenze fest | Low |
+| BUG-142 | Kommentar in `site-header.tsx` behauptet, 13 px sei die kleinste zulässige Textgröße — das gilt nur für Button-Text, nicht allgemein | Low |
+
+**Nicht neu, im Lauf bestätigt:** BUG-112, BUG-125, BUG-136, BUG-137 (alle Low, stehen bereits oben) sowie die Deploy-Blocker BUG-12/116, BUG-18 und BUG-126.
+
+**Im Lauf widerlegt:** Die Acceptance-Bahn meldete AC-31/AC-37 (PokeAPI-Zwischenspeicher) als gebrochen. Das Fetch-Protokoll des laufenden Servers zeigt **2317 von 2317 PokeAPI-Anfragen als Cache-Treffer, null Übersprünge**. Kein Befund.

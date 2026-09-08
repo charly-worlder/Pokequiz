@@ -70,6 +70,25 @@
 - [x] T56  **BUG-113 (Medium): die Fehlerkarte sagt jetzt, was gilt.** Sie behauptete in beiden Fällen „die Uhr steht so lange still". Wahr ist das nur, wenn serverseitig keine Frage offensteht; beim Bildausfall der **angezeigten** Frage läuft die gewertete Zeit weiter. Die Karte unterscheidet die beiden Fälle  · files: src/components/quiz/load-error-card.tsx, src/components/quiz/quiz-screen.tsx  · → AC-16, AC-34
 - [x] T57  Abnahmetests zu T54–T56, jeder einzeln rot geprüft. **Die beiden E2E-Tests stellen ihren Zustand direkt her** statt ihn zu erspielen: zwei Runden nacheinander für den veralteten Tab, und eine Ausschlussliste mit allen 386 Nummern für den erschöpften Vorrat — über die Oberfläche wäre Letzteres erst nach rund 380 Fragen erreichbar  · files: tests/PROJ-2-round-authority.spec.ts, src/components/quiz/quiz-screen.error-states.test.tsx, src/lib/quiz/question-action.test.ts, src/lib/quiz/run-actions.test.ts, src/lib/quiz/round-state.test.ts  · → AC-16, AC-18, AC-34, AC-35, AC-36, EC-2, EC-15
 
+## Level 9 — Die Kopfzeile bis 320 px (aus `/refine` + `/architecture` vom 2026-09-08)
+
+<!-- Zwei Aufgaben, keine davon [P]: T59 prüft, was T58 baut. Anlass sind AC-43/EC-16
+     und das neu gefasste AC-24 — die Kopfzeile trägt mit dem Bestenlisten-Zugang aus
+     PROJ-3 drei Bedienelemente statt zwei und passte damit unter 375 px nicht mehr. -->
+
+- [x] T58  **Die Kopfzeile trägt drei Bedienelemente bis hinunter zu 320 px.** Zwei Reduktionsstufen: unter 640 px zeigt der Nutzer-Chip nur die Initiale (**besteht bereits**), unter 400 px schrumpft die **Wortmarke** auf das reine Ball-Motiv — der Schriftzug „Pokémon QUIZ" entfällt dort. Dazu die engeren Maße unter 400 px als Puffer: Seitenpolsterung der Kopfzeile 18 → 10 px (**nur die Kopfzeile**, der Inhaltsbereich behält sein `clamp(18px,4vw,44px)`), Abstand Wortmarke ↔ Bedienleiste 12 → 8 px, Abstände in der Bedienleiste 8 → 6 px, waagerechte Polsterung beider Knöpfe 12 → 8 px. **Zwei Untergrenzen, die nicht unterschritten werden:** Knopfhöhe ≥ 36 px (gespart wird ausschließlich waagerecht) und Schriftgröße ≥ 13 px. Das Ball-Motiv bleibt der Link auf die Startseite und behält seine unsichtbare Beschriftung für Screenreader. **Die Reduktionsstufen dürfen nicht an die Länge des Trainernamens hängen** — unter 640 px zeigt der Chip ohnehin nur die Initiale, und genau das macht AC-43 prüfbar; ein Aufbau, der den Namen dort wieder einblendet, hält die Zusage für „Ash" und bricht sie für 20 Zeichen  · files: src/components/shell/site-header.tsx, src/components/shell/wordmark.tsx  · → AC-21, AC-24, AC-43, EC-16
+- [x] T59  **E2E-Nachweis bei 320 / 360 / 375 px**, angemeldet **und** ausgeloggt, auf `/` und `/login`: keine Seite scrollt waagerecht · **jedes** Bedienelement der Kopfzeile liegt vollständig im sichtbaren Bereich · unter 400 px steht kein Schriftzug in der Kopfzeile, ab 400 px wieder. Jede Zusage gegen den wiederhergestellten Fehler rot geprüft  · files: tests/PROJ-2-header-narrow.spec.ts  · → AC-24, AC-43, EC-16
+
+### Prüfhinweise zu Level 9 — ohne die ist der Fix nur geschrieben, nicht belegt
+
+**Auf `main` ist die Bedingung für diesen Fix gar nicht hergestellt.** Dort steht `LEADERBOARD_PAGE_EXISTS` auf `false` (`src/lib/site-pages.ts`), die Kopfzeile trägt also nur **zwei** Bedienelemente, passt bei 320 px und macht jeden Test trivial grün. Daraus folgen drei Dinge:
+
+1. **T58 gilt erst als belegt, wenn mit lokal umgelegtem Schalter gemessen wurde** — auf `true` setzen, bei 320 px messen, zurücksetzen, **nicht committen**. Genau der Aufbau, mit dem der Befund am 2026-09-08 entstanden ist. Ohne diese Messung ist die Aufgabe geschrieben und nicht geprüft.
+2. **T59 ist elementzahl-unabhängig formuliert** („jedes Bedienelement der Kopfzeile"), damit der Test heute wahr ist und beim Merge von PROJ-3 **von selbst** Zähne bekommt, statt nachträglich angepasst werden zu müssen.
+3. **Der abschließende Beweis steht erst nach dem Merge von PROJ-3 an:** drei Elemente bei 320 px im echten Zusammenspiel. Bis dahin ist er nicht führbar — das ist keine Nachlässigkeit, sondern eine Folge davon, dass Ursache und Fix auf verschiedenen Branches liegen. Gehört in den QA-Lauf nach dem Merge.
+
+**Die Ausgangsmessung, gegen die zu vergleichen ist** (2026-09-08, Chromium-Mobilemulation, angemeldet, mit umgelegtem Schalter): Die Kopfzeile braucht konstant **375 px**; „Abmelden" ist bei 320 px zu 39 % sichtbar, bei 344 px um 31 px abgeschnitten, bei 360 px um 15 px, ab 375 px unauffällig. `scrollLeft` blieb dabei 0 — der abgeschnittene Teil war durch Scrollen **nicht** erreichbar.
+
 ## Parallelization
 
 - **Ebenen sind Schranken.** Eine Ebene beginnt erst, wenn die vorige vollständig integriert und gegen ihre AC-IDs geprüft ist. Das hält den Datenvertrag vor der Oberfläche: Schema (L1) → Datenbankregeln (L2) → Server-Bausteine (L3) → Schnittstellen (L4) → Oberfläche (L5) → Absicherung (L6).
@@ -102,7 +121,7 @@ Jede AC und jede gültige EC ist zugeordnet. „Unverändert" heißt: bereits ge
 | AC-18 | T34, T41, T44 |
 | AC-19 | T44 |
 | AC-20 | T42, T43, T46, T49 |
-| AC-21 – AC-25 | unverändert (App-Shell), T49 |
+| AC-21 – AC-25 | unverändert (App-Shell), T49 · **AC-21 und AC-24 zusätzlich T58, T59** (Reduktionsstufen der Kopfzeile, 2026-09-08) |
 | AC-26, AC-27 | unverändert (`runs` aus Migration `0002`); T33 nur für die Umbenennung |
 | AC-28 | T32, T42 |
 | AC-29, AC-30 | unverändert, T49 |
@@ -117,6 +136,8 @@ Jede AC und jede gültige EC ist zugeordnet. „Unverändert" heißt: bereits ge
 | AC-39 | T34 |
 | AC-40 | T32 |
 | AC-41 | T35, T36, T37 |
+| AC-42 | T32 (Aufzählung in AC-38 ergänzt, keine eigene Aufgabe) |
+| AC-43 | T58, T59 |
 | EC-1 | T34, T44, T48 |
 | EC-2 | T34, T41 |
 | EC-3 | T41, T47 |
@@ -131,6 +152,7 @@ Jede AC und jede gültige EC ist zugeordnet. „Unverändert" heißt: bereits ge
 | EC-12 | T34, T44 |
 | EC-13, EC-14 | **keine Bauaufgabe** — bewusst akzeptierte Restrisiken, im Vertrag benannt und in `design.md` begründet |
 | EC-15 | T34, T44, T48 |
+| EC-16 | T58, T59 |
 
 ---
 

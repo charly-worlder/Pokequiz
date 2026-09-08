@@ -31,7 +31,15 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 - **Kopfzeile:** durchgehend über allen Screens, leicht transparent mit Blur und dünner Trennlinie nach unten. Links das in CSS gezeichnete Ball-Motiv plus Wortmarke „Pokémon QUIZ". Rechts auth-abhängiger Inhalt (siehe Auth-Zustände).
 - **Inhalt:** füllt die restliche Höhe. Die innere Aufteilung gehört dem jeweiligen Screen.
 - **Fußzeile:** schlank, nur Links zu Datenschutz und Impressum. Auf jeder Seite, auch ausgeloggt. Sie führt eine Liste der tatsächlich vorhandenen Rechts-Seiten und zeigt einen Link erst, wenn seine Zielseite existiert — bis PROJ-4 sie baut, bleibt die Leiste ohne Link statt mit einem toten.
-- **Mobil (unter `md`, 768px):** kein Burger-Menü. Bei zwei Bereichen passt beides in die Kopfzeile — der Nutzer-Chip reduziert sich unter `sm` auf die Initiale. Die Inhalte stapeln sich von selbst, weil das Design durchgehend `auto-fit / minmax` verwendet.
+- **Mobil (unter `md`, 768px):** kein Burger-Menü — die Kopfzeile trägt **drei** Bedienelemente (Bestenlisten-Zugang, Nutzer-Chip, „Abmelden") und behält sie alle. Sie passen, weil sich in **zwei Stufen** reduziert wird, nicht weil Platz da wäre:
+  1. unter `sm` (640 px) schrumpft der **Nutzer-Chip** auf die Initiale,
+  2. unter **400 px** schrumpft die **Wortmarke** auf das reine Ball-Motiv; der Schriftzug „Pokémon QUIZ" entfällt dort.
+
+  **Untergrenze ist 320 px** (PROJ-2, AC-43): Bis dahin scrollt keine Seite waagerecht. Die beiden Handlungen behalten in jeder Stufe ihre Beschriftung — reduziert wird die Marke, nie ein Knopf.
+
+  **Diese Zeile stand bis zum 2026-09-08 anders da** („Bei zwei Bereichen passt beides in die Kopfzeile") und war damit die Ursache eines Befundes: Als PROJ-3 den Bestenlisten-Zugang freischaltete, brauchte die Kopfzeile 375 px und schnitt „Abmelden" auf 320-px-Geräten zu 61 % ab. Die Annahme „zwei Bereiche" war im Dokument festgehalten, aber nirgends geprüft — deshalb steht die Untergrenze jetzt als AC im Vertrag und nicht nur hier.
+
+  Die Inhalte stapeln sich von selbst, weil das Design durchgehend `auto-fit / minmax` verwendet.
 
 ## Seiten-Muster
 
