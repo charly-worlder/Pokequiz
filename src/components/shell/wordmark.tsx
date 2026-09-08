@@ -21,11 +21,34 @@ export function BallMark({ className }: { className?: string }) {
   )
 }
 
+/**
+ * Wortmarke: Ball-Motiv plus Schriftzug (spec.md AC-21).
+ *
+ * **Unter 400 px bleibt nur das Ball-Motiv** (spec.md AC-24, AC-43;
+ * `docs/app-shell.md` → Layout-Regionen). Der Grund ist Platz, und er ist
+ * nachgerechnet: Sobald die Kopfzeile den Bestenlisten-Zugang trägt, braucht sie
+ * 375 px. Bei 320 px fehlen also 55, und reines Enger-Setzen von Polstern,
+ * Abständen und Knöpfen bringt nur 52 — ohne jede Reserve. Der Schriftzug allein
+ * bringt 75.
+ *
+ * **Warum die Marke weicht und kein Knopf.** Ein Schriftzug trägt keine Handlung.
+ * „Bestenliste" und „Abmelden" behalten deshalb in jeder Stufe ihre Beschriftung;
+ * ein unbeschrifteter Symbol-Knopf träfe ausgerechnet die Zielgruppe, die laut
+ * `docs/PRD.md` auch Kinder einschließt. Es ist zudem dieselbe Reduktionslogik,
+ * die die Kopfzeile schon für den Nutzer-Chip benutzt (unter 640 px nur die
+ * Initiale), also kein neues Muster.
+ *
+ * Das Ball-Motiv bleibt dabei der Link auf die Startseite; die unsichtbare
+ * Beschriftung dafür hängt am Link in `site-header.tsx`, nicht hier. Für einen
+ * Nutzer mit Screenreader ändert sich durch die Reduktion nichts.
+ */
 export function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn('flex items-center gap-2.5', className)}>
       <BallMark />
-      <span className="text-[17px] font-extrabold tracking-[-0.02em] text-foreground">
+      {/* `hidden` entfernt das Element aus dem Layout — der Flex-Abstand zum
+          Ball entfällt damit von selbst, es bleibt kein Loch stehen. */}
+      <span className="text-[17px] font-extrabold tracking-[-0.02em] text-foreground max-[400px]:hidden">
         Pokémon{' '}
         <span className="font-extrabold tracking-[0.14em] text-[13px] text-muted-foreground">
           QUIZ
