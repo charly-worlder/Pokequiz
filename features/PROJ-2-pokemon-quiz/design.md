@@ -250,6 +250,37 @@ Persoenliche Bestleistung lesen (Server-Komponente)
 | **`runs.client_round_id` wird zu `runs.round_id`, und `runs_duration_plausible` faellt** | Der alte Name behauptet eine Herkunft, die nicht mehr stimmt (der Server vergibt das Kennzeichen). Der Constraint setzt die 0,5-Sekunden-Regel durch, die AC-12 abgeschafft hat — er wuerde jetzt nur noch echte schnelle Runden abweisen | Namen lassen, Constraint lassen | Eine Migration, die eine Spalte umbenennt und einen Constraint entfernt. Da noch nichts in Produktion laeuft, ist das folgenlos | 2026-09-06 |
 | **Der Browser bekommt die richtige Position erst mit dem Urteil** | AC-4 und AC-6 verlangen die farbliche Rueckmeldung am Ort der Handlung; sie kommt jetzt einen Roundtrip spaeter. Kein PokeAPI-Aufruf noetig, die Loesung liegt im Zustand — der Weg ist so kurz, wie er sein kann | Loesung vorab mitschicken wie bisher | Die Faerbung folgt der Netzlatenz statt sofort zu erscheinen. Der geklickte Zustand wird deshalb sofort dargestellt, damit der Klick nicht ins Leere zu gehen scheint | 2026-09-06 |
 | **Die Kopfzeile muss ab 320 px ohne Überlauf tragen — der Entwurf hat das nie zugesichert und tut es nicht** (AC-24 neu gefasst, AC-43, EC-16) | Der Entwurf ging von **zwei** Elementen rechts aus (Nutzer-Chip, „Abmelden") und hielt in `docs/app-shell.md` fest: „Bei zwei Bereichen passt beides in die Kopfzeile." Mit dem Bestenlisten-Zugang aus AC-21 sind es **drei**, und dann trägt die Zeile nicht mehr. **Am 2026-09-08 beim Bau von PROJ-3 gemessen** (Chromium-Mobilemulation, angemeldet): Die Kopfzeile braucht ab da konstant **375 px**. Bei 320 px war „Abmelden" zu 39 % sichtbar (35 von 90 px), bei 344 px zu 31 px abgeschnitten, bei 360 px zu 15 px; ab 375 px unauffällig. **Erschwerend:** Die Seite ließ sich nicht waagerecht scrollen — `scrollLeft` blieb 0, per Skript wie per Wischgeste. Der abgeschnittene Teil war also nicht erreichbar, nur der sichtbare Streifen war antippbar (nachgeprüft: Tipp auf x=310 meldete ab). Nicht betroffen: die Kernschleife (vier Antwortoptionen bei 320 px auf x 18…302) und die Ranglisten-Karte | Die Untergrenze auf 360 px oder 375 px legen und den Anschnitt tragen — verworfen, Begründung im Decision Log von `spec.md` | Der Fix gehört in die Kopfzeile und damit in dieses Feature, obwohl der Befund beim Bau von PROJ-3 entstand. **Auf `main` existiert der Überlauf noch nicht** — dort steht `LEADERBOARD_PAGE_EXISTS` auf `false`; er entsteht mit dem Merge von PROJ-3. Der Fix muss deshalb vor oder mit diesem Merge landen, sonst geht ein bekannter Mangel live | 2026-09-08 |
+| **Die Wortmarke reduziert sich unter 400 px auf das Ball-Motiv; die beiden Knöpfe behalten ihre Beschriftung** (AC-21, AC-24) | **Das Budget lässt nichts anderes zu, nachgerechnet statt geschätzt.** Bei 320 px braucht die Kopfzeile 375 px, es fehlen also 55 px. Reines Enger-Setzen bringt sie nicht auf: Seitenpolsterung 18 → 10 px (−16), Abstände 12/8/8 → 8/6/6 (−8), beide Knöpfe `px-3` → `px-2` (−16), Beschriftungen 14 → 13 px (−12) — zusammen **52 px**, drei zu wenig und ohne jede Reserve für ein längeres Wort oder ein viertes Element. Die Wortmarke auf den Ball zu reduzieren bringt allein **75 px**. Sie ist außerdem das richtige Opfer: Ein Markenschriftzug trägt keine Handlung, und die Zielgruppe schließt laut `docs/PRD.md` Kinder ein, für die ein unbeschrifteter Knopf teurer wäre als eine fehlende Wortmarke. Es ist zudem **dieselbe Reduktionslogik, die die Shell schon benutzt** (Chip → Initiale unter 640 px), also kein neues Muster. Das Ball-Motiv steht ohnehin allein in den Leerzuständen | „Bestenliste" unter 400 px als reiner Symbol-Knopf (Pokal; `lucide-react` liegt im Projekt): spart 56 px, passt exakt ohne Reserve und käme ohne Vertragsänderung aus — verworfen, weil ein unbeschrifteter Knopf ausgerechnet die Zielgruppe trifft, die am wenigsten rät. Zweizeilige Kopfzeile unter 400 px: reduziert nichts, lässt die klebende Leiste aber von 64 auf ~104 px wachsen und frisst senkrechten Platz genau dort, wo Bild und vier Optionen ohnehin am knappsten sind | Der Markenschriftzug fehlt auf den schmalsten Geräten. **Nebenbei behoben:** Er bricht dort heute auf zwei Zeilen um (gemessen 110×51 px in einer 64 px hohen Leiste) — das sah niemand als Fehler, war aber einer | 2026-09-08 |
+
+## Der Umbau der Kopfzeile — was genau zu bauen ist
+
+_Nur dieser eine Bereich ist neu; der Rest des Entwurfs oben gilt unverändert._
+
+**Die Zielgröße.** Bei 320 px Fensterbreite muss der Inhalt der Kopfzeile in 320 px passen, ohne dass die Seite waagerecht scrollt (AC-43). Heute braucht er 375 px.
+
+**Drei Stufen, von breit nach schmal** — jede Stufe gilt zusätzlich zu den vorherigen:
+
+| ab | was gilt |
+|---|---|
+| 640 px und breiter | unverändert wie heute: volle Wortmarke, Chip mit Initiale **und** Trainername, beide Knöpfe voll beschriftet |
+| unter 640 px | der Nutzer-Chip zeigt nur noch die Initiale (**besteht bereits**) |
+| unter 400 px | die Wortmarke zeigt nur noch das Ball-Motiv; der Schriftzug „Pokémon QUIZ" entfällt. Zusätzlich greifen die engeren Maße unten |
+
+**Die engeren Maße unter 400 px** — sie sind der Puffer, nicht die Hauptmaßnahme:
+
+- Seitenpolsterung der Kopfzeile: von 18 px auf 10 px je Seite. **Nur die Kopfzeile**, nicht der Inhaltsbereich — dessen `clamp(18px, 4vw, 44px)` bleibt, sonst kleben Ranglisten-Karte und Quizbild am Rand.
+- Abstand Wortmarke ↔ Bedienleiste: 12 px auf 8 px.
+- Abstände innerhalb der Bedienleiste: 8 px auf 6 px.
+- Waagerechte Polsterung beider Knöpfe: 12 px auf 8 px je Seite.
+
+**Zwei Grenzen, die dabei nicht unterschritten werden:**
+
+- **Höhe der Knöpfe mindestens 36 px** (der heutige Wert). Die Sparmaßnahmen wirken ausschließlich waagerecht — eine flachere Trefferfläche wäre auf einem Touchgerät die falsche Ersparnis.
+- **Schriftgröße der Beschriftungen mindestens 13 px.** Darunter beginnt das Lesbarkeitsproblem, das `docs/design-system.md` bei Sekundärtext ausdrücklich benennt.
+
+**Was das Ball-Motiv leisten muss, wenn es allein steht:** Es bleibt der Link auf die Startseite und behält seine unsichtbare Beschriftung für Screenreader („Pokémon Quiz — Startseite"), die heute schon am Link hängt. Für einen Nutzer mit Screenreader ändert sich also nichts.
+
+**Der Fehlerfall, der dabei nicht entstehen darf:** Die Reduktionsstufen dürfen nicht an die Länge des Trainernamens gekoppelt werden. Unter 640 px zeigt der Chip ohnehin nur die Initiale, die Breite der Kopfzeile ist damit **unabhängig vom Namen** — und genau das macht die Zusage aus AC-43 überhaupt prüfbar. Ein Aufbau, der den Namen unter 640 px wieder einblendet, bricht sie für lange Namen und hält sie für kurze; ein solcher Fehler fällt im Test mit „Ash" nie auf.
 
 ## Open Questions
 
