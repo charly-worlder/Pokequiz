@@ -35,7 +35,17 @@ export async function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-[clamp(18px,4vw,44px)]">
+      {/*
+        spec.md AC-43 — ab 320 px scrollt keine Seite waagerecht.
+        Unter 400 px greifen engere Maße. Sie sind der **Puffer**, nicht die
+        Hauptmaßnahme: Sie bringen zusammen 52 px, gebraucht werden 55 — die
+        eigentliche Ersparnis kommt aus der Wortmarke (`wordmark.tsx`).
+
+        Bewusst nur die Kopfzeile: Der Inhaltsbereich der Seiten behält sein
+        `clamp(18px,4vw,44px)`, sonst klebten Quizbild und Ranglisten-Karte auf
+        schmalen Geräten am Rand.
+      */}
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-[clamp(18px,4vw,44px)] max-[400px]:gap-2 max-[400px]:px-[10px]">
         <Link
           href="/"
           className="rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -45,9 +55,13 @@ export async function SiteHeader() {
         </Link>
 
         {user ? (
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 max-[400px]:gap-1.5">
             {LEADERBOARD_PAGE_EXISTS && (
-              <Button asChild variant="ghost" size="sm">
+              // `px-2` und 13px unter 400 px: die beiden Untergrenzen aus
+              // design.md werden dabei eingehalten — gespart wird ausschließlich
+              // waagerecht, die Höhe (36 px) bleibt unangetastet, und 13 px ist
+              // die kleinste Größe, die docs/design-system.md für Text zulässt.
+              <Button asChild variant="ghost" size="sm" className="max-[400px]:px-2 max-[400px]:text-[13px]">
                 <Link href="/leaderboard">Bestenliste</Link>
               </Button>
             )}
@@ -67,7 +81,12 @@ export async function SiteHeader() {
             </span>
 
             <form action={logoutAction}>
-              <Button type="submit" variant="outline" size="sm">
+              <Button
+                type="submit"
+                variant="outline"
+                size="sm"
+                className="max-[400px]:px-2 max-[400px]:text-[13px]"
+              >
                 Abmelden
               </Button>
             </form>

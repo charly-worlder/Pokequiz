@@ -748,3 +748,32 @@ Mit BUG-9 ist die Sitzungsprüfung von der Schranke *davor* (Proxy) zur Schranke
 **Für den Review heißt das konkret:** Bei jeder neuen oder geänderten Server Action nicht prüfen, *ob* `getUser` vorkommt — das tut der Wächter —, sondern **ob sein Ergebnis den Ablauf beendet**, also ob auf einen fehlenden Nutzer wirklich ein früher Rücksprung folgt.
 
 **Und deshalb steht in `src/proxy.ts` kein Satz mehr, der sich auf den Wächter verlässt.** Der Kommentar dort behauptete, der Wächter halte die Sitzungsprüfung davon ab, „still zu verfallen". Das tut er nur für den Fall der vergessenen Action, nicht für den der unwirksamen Prüfung.
+
+## Notizen aus dem Bau von Level 9 (2026-09-08)
+
+**Der Fix wirkt, gemessen mit lokal umgelegtem Schalter** (nicht committet, danach zurückgedreht), angemeldet, Trainername mit vollen 20 Zeichen:
+
+| Breite | vorher (Befund) | nachher |
+| --- | --- | --- |
+| 320 px | Kopfzeile braucht 375, „Abmelden" endet bei 375 → 55 px außerhalb | Kopfzeile 320/320, „Abmelden" endet bei **310**, Seite scrollt nicht |
+| 360 px | 15 px außerhalb | endet bei 350, kein Überlauf |
+| 375 px | gerade eben | endet bei 365, kein Überlauf |
+
+Knopfhöhe bleibt in allen Stufen **36 px**, die Schrift unter 400 px **13 px** — beide Untergrenzen aus dem Entwurf gehalten.
+
+**Zwei Dinge, die der Bau zutage gefördert hat:**
+
+1. **Ein Off-by-one im Haltepunkt.** `max-[399px]:` erzeugt in Tailwind v4 `width < 399px` — bei genau 399 px stand der Schriftzug also noch da, obwohl der Vertrag „unter 400 px" sagt. Aufgefallen ist es nur, weil die Messreihe 399 **und** 400 enthielt; mit den runden Werten 320/360/375/440 wäre es durchgerutscht. Korrigiert auf `max-[400px]:`, danach nachgemessen: 399 aus, 400 an.
+2. **Der Schriftzug bricht zwischen 400 und unter 440 px weiterhin auf zwei Zeilen um** (Wortmarke 51 statt 28 px hoch, gemessen bei 400/401/420; bei 440 wieder 28). Das ist **kein** Überlauf und verletzt kein Kriterium — AC-43 gilt ab 320 px und ist erfüllt. Es ist auch nicht neu: Vor dem Fix begann dasselbe Umbrechen schon bei 320 px. Der Fix hat das Band also verkleinert, nicht erzeugt. Bewusst nicht mitbehoben, weil dafür der Haltepunkt auf ~440 px steigen müsste — das wäre eine Vertragsänderung, keine Umsetzung.
+
+**Zum Test (T59).** Er prüft **jedes** Bedienelement der Kopfzeile statt namentlich „Abmelden", damit er auf diesem Branch wahr ist und beim Merge von PROJ-3 von selbst greift. Die Höhen-Untergrenze gilt dabei ausdrücklich nicht für den Wortmarken-Link: Der ist mit dem Ball-Motiv 28 px hoch, war das vorher schon, und ihn hier einzubeziehen hieße den Umfang des Fixes still zu erweitern.
+
+**Rot-Gegenprobe, mit eingeschaltetem Schalter geführt** — anders wäre sie wertlos gewesen, weil die Kopfzeile ohne den dritten Eintrag ohnehin passt:
+
+- Schalter an, Fix drin → **7/7 grün**
+- Schalter an, Wortmarken-Reduktion entfernt → **2 rot**, mit der richtigen Diagnose: „die Seite ist 334 px breit bei 320 px sichtbar — sie scrollt waagerecht (AC-43)" und „bei 399 px darf kein Schriftzug stehen"
+- zurückgedreht → wieder **7/7 grün**
+
+Dass dabei nur der 320-px-Fall fällt und 360/375 halten, ist der Beleg dafür, dass die engeren Maße ihren Teil des Budgets tatsächlich tragen.
+
+**Eine Stolperfalle im Testaufbau, für die nächste Person:** `uniqueTrainer` hängt Zeitstempel und Zufallsanteil an das Präfix und kürzt auf 20 Zeichen. Ein zu langes Präfix schneidet damit den eindeutigen Teil weg — beim ersten Anlauf wollten alle drei parallelen Tests denselben Namen registrieren, und der Fehlschlag sah aus wie ein Zeitproblem („waitForURL timeout"), nicht wie ein vergebener Name.
