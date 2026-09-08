@@ -86,6 +86,27 @@ export function LeaderboardRow({
  * Die Spaltenüberschriften. Eigene Komponente, damit sie dasselbe Raster
  * benutzen wie die Zeilen — eine zweite Rasterbeschreibung wäre die nächste
  * Stelle, an der die Spalten auseinanderlaufen.
+ *
+ * **Warum die Namensspalte unter 400 px „Name" heißt** (gefunden am 2026-09-08
+ * bei 320 px): Dort ist die Spalte nur rund 45 px breit, „TRAINER" braucht mit
+ * der Laufweite des Design-Systems aber etwa 57. Die Überschrift lief in den
+ * Spaltenabstand hinein und berührte „SERIE" — auf dem Bildschirm stand
+ * „TRAINERSERIE".
+ *
+ * **Erwogen und verworfen:** die Zeitspalte schmaler zu machen, um Platz
+ * abzugeben. Sie ist nicht großzügig — die breiteste darstellbare Zeit
+ * („100:00,0") füllt ihre 88 px exakt aus, gemessen; sie zu kürzen hieße, Daten
+ * abzuschneiden statt einer Beschriftung. Ebenfalls verworfen: die Laufweite zu
+ * verringern — das brachte 8 px und ließ die Überschrift immer noch abgeschnitten
+ * dastehen.
+ *
+ * „Name" ist kürzer, sagt dasselbe und passt ohne Kürzung. `truncate` bleibt
+ * zusätzlich stehen: Es behebt nicht diesen Fall, sondern die Fehlerklasse — eine
+ * andere Schrift oder ein Zoomfaktor verschiebt die Rechnung, und dann soll die
+ * Überschrift abgeschnitten werden statt in die Nachbarspalte zu laufen.
+ *
+ * Die Datenzeilen waren nie betroffen — dort kürzt der Name ohnehin (EC-9).
+ * Die Zeile ist `aria-hidden`, für einen Screenreader ändert sich also nichts.
  */
 export function LeaderboardHeaderRow() {
   return (
@@ -96,8 +117,9 @@ export function LeaderboardHeaderRow() {
       <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         #
       </span>
-      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-        Trainer
+      <span className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        <span className="max-[400px]:hidden">Trainer</span>
+        <span className="hidden max-[400px]:inline">Name</span>
       </span>
       <span className="text-right text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
         Serie

@@ -285,3 +285,22 @@ jede Route der App und ist per `/refine PROJ-2` zu entscheiden.
 selbst einen „Runde starten"-Button; der zusätzliche Seiten-Button aus AC-14
 hätte daneben zwei identische Primär-Aktionen ergeben. Er entfällt deshalb genau
 in diesem einen Zustand.
+
+## Nachtrag: der Spaltenüberschrift-Fix (2026-09-08)
+
+**Der Befund.** Bei 320 px lief die Spaltenüberschrift „TRAINER" aus ihrer nur rund 45 px breiten Spalte in den Spaltenabstand hinein und berührte „SERIE" — auf dem Bildschirm stand **„TRAINERSERIE"**. Gefunden wurde das auf einem Bildschirmfoto, nicht von einem Test: Beide Suiten waren zu diesem Zeitpunkt grün.
+
+**Der Fix.** Unter 400 px heißt die Spalte **„Name"** statt „Trainer". Zusätzlich steht `truncate` an der Zelle — nicht für diesen Fall, sondern für die Fehlerklasse: Eine andere Schrift oder ein Zoomfaktor verschiebt die Rechnung, und dann soll die Überschrift abgeschnitten werden statt in die Nachbarspalte zu laufen. Gemessen bei 320 px: Text 45 px in 45 px Spalte, Lücke zur Serie-Spalte unverändert 12 px, kein Überlauf.
+
+**Erwogen und verworfen:**
+- *Die Zeitspalte verschmälern,* um der Namensspalte Platz zu geben. Sie ist nicht großzügig — die breiteste darstellbare Zeit („100:00,0") füllt ihre 88 px **exakt** aus, gemessen. Sie zu kürzen hieße Daten abzuschneiden statt einer Beschriftung.
+- *Die Laufweite verringern.* Brachte 8 px; die Überschrift wäre trotzdem abgeschnitten dastehen geblieben (49 px Text in 45 px Spalte).
+- *Die Kopfzeile der Liste unter 400 px ganz ausblenden.* Wäre konsistent mit der Wortmarke, kostet aber die Spaltenbedeutung — und „Serie" und „Zeit" sind beide Zahlen.
+
+### Zwei Lehren aus dem Test dazu
+
+**1. Element-Rechtecke messen den Fehler nicht.** Die erste Fassung des Tests verglich die Rechtecke der Rasterzellen — und blieb grün, als der Fehler zur Gegenprobe wieder eingebaut wurde. Der überlaufende Text wird **außerhalb** seiner Zelle gemalt; die Zelle behält ihre Breite. Erst ein `Range` über den Textinhalt liefert das Rechteck der Glyphen und ragt mit ihnen heraus. Damit meldet die Gegenprobe jetzt: „der Text ‚Trainer' (endet 144) an ‚Serie' (beginnt 144) — die Überschriften berühren sich".
+
+**2. Auf die Überschrift „Weltrangliste" zu warten ist kein Signal, dass die Liste steht.** `loading.tsx` rendert dieselbe Überschrift wie die fertige Seite — bewusst, damit beim Eintreffen der Daten nichts springt (AC-16). Die erste Testfassung hat deshalb die **Skelettzeilen** vermessen und leere Texte der Breite 0 gefunden. Der Test wartet jetzt darauf, dass die Kopfzeile der Liste Text enthält.
+
+**Nebenbefund, nicht behoben:** In der abgesetzten eigenen Zeile konkurriert der „Du"-Marker mit dem Trainernamen um dieselbe Spalte; bei 320 px bleibt vom Namen wenig übrig (beobachtet: „H…"). Kein Kriterienbruch — AC-18 und EC-9 verlangen, dass der Name kürzt und die Zahlen sichtbar bleiben, und das tut er. In der **eigenen** Zeile ist der Name zudem die Information, die der Leser am wenigsten braucht. Als Beobachtung festgehalten, nicht als Mangel.
