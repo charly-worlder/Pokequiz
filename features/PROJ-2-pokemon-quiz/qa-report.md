@@ -2932,3 +2932,114 @@ Entscheidung des Nutzers vom 2026-09-07. Keiner dieser Punkte trägt ein Sicherh
 **Vor dem Start weiterhin zwingend** — das steht in der Deploy-Blocker-Tabelle in `features/INDEX.md` und nicht hier: BUG-12/BUG-116 (Security-Header), BUG-18 (`X-Forwarded-Host`), BUG-61 (`x-forwarded-for`, PROJ-1), T18 (Reset-Mail-Vorlage), T36/T37 (`pg_cron` im gehosteten Projekt), Site-URL und eigener SMTP-Dienst.
 
 > **Rückblick auf fünf Durchgänge, in einem Satz:** Gefunden und geschlossen wurden ein Critical (Ergebnisse ließen sich an der Runde vorbei einreichen), ein gebrochenes EC-2 (der Sieger sah sein Ergebnis nie) und eine Reihe von Autoritätslücken, die alle dieselbe Wurzel hatten — eine Zuständigkeit, die beim Falschen lag. Was übrig bleibt, ist Text, Kosmetik und eine zweite Verteidigungsschicht an einer Tabelle, die niemand erreicht.
+
+---
+
+# QA-Lauf 6 — 2026-09-08, Branch `feat/PROJ-2-header-320px`
+
+**Anlass:** `/refine PROJ-2` hat am 2026-09-08 **AC-24 neu gefasst** und **AC-43** sowie **EC-16** ergänzt (die App muss ab 320 px Breite ohne waagerechten Überlauf funktionieren). `/build` hat den Fix als Level 9 (T58, T59) umgesetzt. Dieser Lauf prüft den gesamten Vertrag, nicht nur die Änderung.
+
+**Aufbau.** Drei `qa-engineer`-Bahnen parallel, disjunkte Umfänge, keine kannte den Bau: Bahn 1 = Schritt 2 (Acceptance, AC-1…43 / EC-1…16), Bahn 2 = Schritt 3 (Security Red Team), Bahn 3 = Schritt 4+5 (Regression und Suiten). Jede bekam nur die Feature-Mappe, die ID-Liste, ihren Schritt aus `SKILL.md`, `.ai-eng-kit` und die Adresse der laufenden App. Zusammenführung, Bewertung und dieser Bericht: der Owner.
+
+---
+
+## Das Wichtigste zuerst: die Lücke, die dieser Lauf nicht schließen konnte
+
+**AC-24, AC-43 und EC-16 — also genau die drei Kriterien, für die dieser Branch existiert — sind `[!] NICHT GEPRÜFT.** Zwei Gründe, die zusammenkommen:
+
+1. **`/qa` hat keinen Browser.** Waagerechter Überlauf bei 320 px braucht eine Layout-Engine.
+2. **Der Fall ist auf diesem Branch gar nicht herstellbar.** `LEADERBOARD_PAGE_EXISTS` steht hier auf `false` (`src/lib/site-pages.ts:24`). Die Kopfzeile trägt damit ausgeloggt **ein** und angemeldet **zwei** Bedienelemente — der dreielementige Zustand, für den AC-24 neu gefasst wurde, entsteht erst mit dem Merge von PROJ-3.
+
+Bahn 1 und Bahn 3 haben das **unabhängig voneinander** festgestellt. Bahn 3 hat daraus einen eigenen Befund gemacht (REG-1, unten).
+
+**Der einzige Beleg, dass der Fix wirkt, stammt bisher aus dem Bau selbst** — einer Messung mit lokal umgelegtem, nicht committetem Schalter (`design.md` → „Notizen aus dem Bau von Level 9"). Das ist kein unabhängiger Nachweis. **Er ist nach dem Merge von PROJ-3 nachzuholen**, und `tests/PROJ-2-header-narrow.spec.ts` greift dann von selbst, weil er elementzahl-unabhängig formuliert ist.
+
+---
+
+## Ein Befund der Acceptance-Bahn, der sich beim Zusammenführen als falsch erwiesen hat
+
+Bahn 1 meldete **AC-31 und AC-37 als gebrochen (Medium)**: Der PokeAPI-Zwischenspeicher greife zur Laufzeit nicht. Ihre Belege waren nachvollziehbar — `.next/cache/fetch-cache` existiert nicht, und wiederholte Abrufe derselben Sprite-Nummer kosteten unverändert ~150 ms.
+
+**Der Befund ist widerlegt.** Bahn 1 hat ihre eigene Grenze dabei korrekt benannt: *„die definitive Gegenprobe wäre das Fetch-Protokoll des Servers, dessen Ausgabe ich nicht lesen kann, weil der Server nicht von mir gestartet wurde."* Genau die hat der Owner nachgeholt. Aus dem Protokoll des Servers, gegen den alle drei Bahnen geprüft haben:
+
+| Ressource | `cache hit` | `cache skip` |
+|---|---|---|
+| `pokeapi.co` (deutsche Namen) | **2004** | 0 |
+| `raw.githubusercontent.com` (Sprites) | **313** | 0 |
+| **PokeAPI gesamt** | **2317** | **0** |
+
+Beispielzeilen: `…official-artwork/253.png 200 in 0ms (cache hit)`. Die 30.281 `(cache skip)`-Einträge im selben Protokoll betreffen ausschließlich `127.0.0.1:54321` (Supabase) und `localhost:3000` (eigene Routen) — beide zu Recht ungecacht.
+
+**Warum die Messung der Bahn in die Irre führte:** Sie hat die Ende-zu-Ende-Zeit der eigenen Routen gemessen (die Datenbank-Roundtrips und Next-Arbeit enthält, nicht nur den PokeAPI-Abruf) und in einem Verzeichnis gesucht, das der Turbopack-Dev-Server nicht als Ablage benutzt. **AC-31 und AC-37: BESTANDEN.**
+
+---
+
+## Ergebnis nach Kriterien
+
+**Bestanden mit Laufzeit-Beleg (Bahn 1):** AC-1, AC-2 (Zeitzusage), AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-19, AC-20, AC-21, AC-22, AC-23, AC-26, AC-27, AC-28, AC-29, AC-30, AC-31, AC-32, AC-33, AC-34 (Messung), AC-35, AC-36, AC-37, AC-38, AC-39, AC-40, AC-41 (lokal) — sowie EC-1, EC-2, EC-4, EC-5, EC-6, EC-7, EC-8, EC-9, EC-12, EC-13, EC-15.
+
+**AC-42 existiert nicht** — im Decision Log ausdrücklich verworfen, die ID ist nur reserviert. **EC-11 ebenso entfallen.** Nichts zu prüfen.
+
+**`[!] NICHT GEPRÜFT:** AC-24, AC-43, EC-16 (siehe oben) · Optik allgemein (Färbung, `pop`, `nudge`, Puls, Uhrstart im sichtbaren Moment, Browser-Dialog aus AC-19) — kein Browser · EC-8 mit echtem PokeAPI-Fehler (nicht provozierbar) · EC-5 zur Laufzeit (kein Pool-Eintrag ohne deutschen Namen) · AC-41 im gehosteten Projekt (T36/T37 offen) · AC-31/AC-37 im Produktions-Build (nur gegen `next dev` gemessen — der Treffernachweis oben gilt für den Entwicklungs-Build).
+
+---
+
+## Befunde
+
+| # | Kriterium | Schwere | Status |
+|---|---|---|---|
+| REG-1 | — | Medium | **neu** — das Regressionsnetz hat auf diesem Branch fast keine Zähne |
+| BUG-112 | AC-25 | Low | bestätigt, unverändert |
+| BUG-125 | AC-34 Satz 2 | Low | bestätigt, unverändert |
+| BUG-136 | EC-3 | Low | bestätigt, unverändert |
+| BUG-137 | EC-10 | Low | bestätigt, unverändert |
+| BUG-141 | — | Low | **neu** — die 36-px-Knopfhöhe wird als Untergrenze festgeschrieben, obwohl das Design-System 40–46 px verlangt |
+| BUG-142 | — | Low | **neu** — Kommentar in `site-header.tsx` behauptet Falsches über die zulässige Mindestschriftgröße |
+
+**REG-1 (Medium, neu).** Von sieben Tests in `tests/PROJ-2-header-narrow.spec.ts` prüfen sechs eine Kopfzeile, die den Fehler nicht auslösen kann: ausgeloggt **ein** Bedienelement (gemessen: `a`-Tags 1, `button`-Tags 0), angemeldet **zwei**. Zähne hat heute nur der siebte Test (Schriftzug bei 399 aus / 400 an). **Zeitlich begrenzt:** Der Test ist elementzahl-unabhängig formuliert (`:33`, `hdr.querySelectorAll('a, button')`) und greift beim Merge von PROJ-3 von selbst. Dieselbe Klasse wie BUG-101/102 — eine Entscheidung ohne Test, der sie pinnt, kein Funktionsfehler.
+
+**BUG-141 (Low, neu).** Die Kopfzeilen-Knöpfe sind `size="sm"` = 36 px hoch. `docs/design-system.md:126-127` nennt als Touch-Mindesthöhe 40–46 px für `outline` und 40 px für `ghost`. **Vorbestehend** — `size="sm"` stand schon auf `main` —, aber `design.md` und der neue Test (`tests/PROJ-2-header-narrow.spec.ts:79`) schreiben die 36 px jetzt als Untergrenze fest und zementieren damit eine Abweichung, statt sie zu benennen.
+
+**BUG-142 (Low, neu).** `src/components/shell/site-header.tsx` kommentiert: „13 px ist die kleinste Größe, die docs/design-system.md für Text zulässt." Für Button-Text stimmt das (13–17 px), für Text allgemein nicht — Overline/Label liegt bei 11–12 px, und die ausgeloggte Kopfzeile benutzt selbst `text-[11px]`.
+
+---
+
+## Security (Bahn 2)
+
+**Geprüft: 9 Angriffsklassen. Kein neuer Critical oder High.** Die Bahn hat die Oberfläche umgangen, die Server-Action-IDs aus dem ausgelieferten Client-Bundle gezogen und direkt per `curl` angegriffen.
+
+**Gehalten, zur Laufzeit gemessen:** Zugangsschutz (alle sieben Quiz-Endpunkte ohne Sitzung → `unauthenticated`, Bildroute → 307) · Autorisierung (B mit A's Token/Runde/Bild → `stale`/`gone`/404) · Datenschicht über PostgREST mit echter Nutzersitzung: Wiedereinreichung eines Ergebnisses → **403 `42501`** (BUG-110 bleibt geschlossen), `active_runs` lesen → **403** (die Lösung ist unerreichbar, AC-32 auf Datenebene), fremde `runs` → `[]`, alle RPCs → **403** · Eingabeprüfung (Zod weist `choice=99/-1/1.5`, SQLi-Token, Pfadinjektion ab; mitgeschickte Extra-Felder werden ignoriert) · keine Geheimnisse im Client-Bundle (5,2 MB durchsucht: keine JWTs, kein Service-Role-Schlüssel, keine CDN-Hosts) · keine sensiblen Felder in Antworten · alle vier Auth-Formulare `method="post"`.
+
+**Unverändert offen, alle bereits in `INDEX.md` geführt:** BUG-18 (`X-Forwarded-Host` hebelt die Origin-Prüfung aus — reproduziert: mit dem Header lief `startRoundAction` durch) · BUG-12/116 (sämtliche Security-Header fehlen, gegen die laufende App gemessen) · BUG-126 (keine Drosselung auf Quiz-Endpunkten: 30/30 Rundenstarts, 40/40 Ersetzungen durchgelassen) · BUG-132 · BUG-103 (`X-Powered-By`).
+
+**`[!] NICHT GEPRÜFT (Security):** Brute Force auf Zugangsdaten (PROJ-1-Pfad, nicht PROJ-2; BUG-61 bleibt als High-Deploy-Blocker offen) · Security-Header gegen die Live-URL (hier nur localhost).
+
+**Offene `[user]`-Aufgaben:** T36 und T37 (`pg_cron`, Projekt-Pausierung). **Kein Zugangsdaten-Pfad** — sie betreffen die Aufbewahrungsfrist aus AC-41 — daher kein High nach der Skill-Regel. Stehen als Deploy-Blocker in `INDEX.md`.
+
+---
+
+## Regression (Bahn 3)
+
+**Keine Regression.** `npm test` **263/263** · Playwright **96/96** über Chromium, Firefox und Mobile Safari · `npm run lint` Exit 0 · `npx tsc --noEmit` Exit 0.
+
+Branch-Umfang gegen `main`: 6 Dateien, davon 2 Quelldateien. PROJ-1 (Approved, teilt sich die Shell) läuft unverändert — 9 Tests × 3 Engines grün, Zugangsschranke und Login-POST intakt. Die Wortmarken-Reduktion streut nicht: `Wordmark` wird ausschließlich von `site-header.tsx` importiert, `BallMark` ist unverändert. Die Polsterung des Inhaltsbereichs ist nicht angefasst. Die sechs neuen Arbitrary-Variants stehen im ausgelieferten CSS unter `@media not (min-width: 400px)` — also `width < 400px`, wie der Vertrag „unter 400 px" verlangt.
+
+**`[!] NICHT GEPRÜFT (Regression):** `npm run build` — bewusst nicht ausgeführt, weil `next build` nach `.next` schreibt, dem Verzeichnis des Dev-Servers, gegen den die beiden anderen Bahnen gleichzeitig prüften. *(Owner-Nachtrag: Der Produktions-Build lief im Bau-Durchgang mit Exit 0.)* · Visuelle Regression an der Kopfzeile — kein Browser · Band 400–439 px, wo der Schriftzug laut `design.md` weiterhin umbricht — von keinem Test abgedeckt.
+
+---
+
+## E2E-Tests
+
+Vorhandene Suite als Regression gelaufen (96/96). Neue End-to-End-Tests schreibt `/e2e-tests`, nicht dieser Lauf.
+
+## Unit-Tests dieses Laufs
+
+Keine geschrieben. Die Änderung besteht aus CSS-Klassen an zwei Komponenten — es gibt keine isolierte Logik, die eine Unit-Prüfung tragen würde; die Zusage ist geometrisch und gehört in den Browser-Test, der mit T59 bereits existiert.
+
+---
+
+## Produktionsreife
+
+**READY — kein Critical, kein High.**
+
+**Und das ist ausdrücklich eine Aussage über gefundene Fehler, nicht über Abdeckung.** Die drei Kriterien, für die dieser Branch existiert (AC-24, AC-43, EC-16), sind in diesem Lauf **nicht** verifiziert worden und auf diesem Branch auch nicht verifizierbar. Wer diesen Bericht als Freigabe liest, liest ihn falsch, wenn er daraus schließt, der 320-px-Fix sei unabhängig bestätigt. Er ist es nicht — er ist gebaut, im Bau gemessen, und wartet auf den Nachweis nach dem Merge.

@@ -23,7 +23,7 @@
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
-| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | In Progress | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
+| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Tasked | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
@@ -134,3 +134,17 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 **Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
 ## Next Available ID: PROJ-5
+
+## Offen aus dem QA-Lauf 6 zu PROJ-2 (2026-09-08)
+
+**Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
+
+| # | Punkt | Schwere |
+|---|---|---|
+| REG-1 | Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne: 6 von 7 Tests prüfen eine Kopfzeile mit einem bzw. zwei Bedienelementen. Zeitlich begrenzt, kein Funktionsfehler | Medium |
+| BUG-141 | Die Kopfzeilen-Knöpfe sind 36 px hoch; `docs/design-system.md` verlangt 40–46 px (`outline`) bzw. 40 px (`ghost`). Vorbestehend, aber `design.md` und der neue Test schreiben die 36 px jetzt als Untergrenze fest | Low |
+| BUG-142 | Kommentar in `site-header.tsx` behauptet, 13 px sei die kleinste zulässige Textgröße — das gilt nur für Button-Text, nicht allgemein | Low |
+
+**Nicht neu, im Lauf bestätigt:** BUG-112, BUG-125, BUG-136, BUG-137 (alle Low, stehen bereits oben) sowie die Deploy-Blocker BUG-12/116, BUG-18 und BUG-126.
+
+**Im Lauf widerlegt:** Die Acceptance-Bahn meldete AC-31/AC-37 (PokeAPI-Zwischenspeicher) als gebrochen. Das Fetch-Protokoll des laufenden Servers zeigt **2317 von 2317 PokeAPI-Anfragen als Cache-Treffer, null Übersprünge**. Kein Befund.
