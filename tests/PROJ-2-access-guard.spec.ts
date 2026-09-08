@@ -37,15 +37,18 @@ test('Ohne Anmeldung führt jede geschützte Route nach /login (AC-13, AC-22, AC
 test('Angemeldet ins Spiel, nach dem Abmelden wieder gesperrt (AC-13, AC-21)', async ({ page }) => {
   const { trainer } = await register(page, 'e2eGate')
 
-  // AC-21 — die Kopfzeile führt den Trainernamen; der Zugang zur Bestenliste
-  // erscheint erst, wenn PROJ-3 die Seite gebaut hat. Vorher war er da und
-  // führte jeden angemeldeten Nutzer auf eine 404 (BUG-23) — dieselbe Regel,
-  // die AC-23 eine Zeile weiter unten für die Fußzeile durchsetzt.
+  // AC-21 — die Kopfzeile führt den Trainernamen und den Zugang zur Bestenliste.
   //
-  // Dieser Test dreht sich um, sobald PROJ-3 liefert: dann muss der Link da
-  // sein. Genau deshalb steht er hier und nicht nur als Kommentar im Code.
+  // **Umgedreht am 2026-09-08, als PROJ-3 die Seite gebaut hat.** Bis dahin stand
+  // hier `toHaveCount(0)`: Der Zugang durfte nicht da sein, weil er auf eine 404
+  // geführt hätte (BUG-23). AC-21 ist bedingt formuliert — „genau dann, wenn die
+  // Ranglisten-Seite existiert" —, es ist also dasselbe Kriterium, nur der andere
+  // Zweig. Der Test war ausdrücklich als Stolperdraht für diesen Moment gebaut
+  // und hat ausgelöst: Er wurde rot, sobald `LEADERBOARD_PAGE_EXISTS` umsprang.
   const header = page.getByRole('banner')
-  await expect(header.getByRole('link', { name: 'Bestenliste' })).toHaveCount(0)
+  const access = header.getByRole('link', { name: 'Bestenliste' })
+  await expect(access).toBeVisible()
+  await expect(access).toHaveAttribute('href', '/leaderboard')
   await expect(header).toContainText(trainer)
 
   // Eine gültige Sitzung wird von /login weggeschickt, statt das Formular zu zeigen.
