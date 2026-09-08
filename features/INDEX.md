@@ -23,7 +23,7 @@
 | ID | Feature | Description | Status | Spec | Created |
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
-| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
+| PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Planned | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Tasked | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
@@ -90,6 +90,16 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
 
+
+## PROJ-2 steht seit dem 2026-09-08 wieder auf `Planned` — warum
+
+**Der Vertrag ist gewachsen, nicht die Qualität gesunken.** `/refine PROJ-2` hat am 2026-09-08 **AC-24 neu gefasst** und **AC-43** sowie **EC-16** ergänzt: Die App muss ab **320 px** Breite ohne waagerechten Überlauf funktionieren. Für dieses neue Kriterium gibt es weder Design noch Bau, deshalb ist `Approved` nicht mehr zutreffend.
+
+**Nichts am bisherigen Abnahmestand ist dadurch entwertet.** Die fünf QA-Durchgänge und alle darin belegten AC gelten unverändert; die Liste der akzeptierten Restrisiken weiter unten bleibt gültig. Hinzugekommen ist genau eine Zusage, die vorher niemand gegeben hatte.
+
+**Der Anlass kam von außen:** Beim Bau von PROJ-3 schaltet `LEADERBOARD_PAGE_EXISTS` den Bestenlisten-Zugang frei. Damit trägt die Kopfzeile **drei** Elemente statt zwei — und `docs/app-shell.md` hielt bis dahin ausdrücklich fest, „bei zwei Bereichen passt beides in die Kopfzeile". Gemessen am 2026-09-08: Die Kopfzeile braucht ab da konstant 375 px; bei 320 px war „Abmelden" zu 39 % sichtbar und die Seite ließ sich **nicht** waagerecht scrollen. Vollständige Messreihe in `PROJ-2/design.md` → Technical Decisions.
+
+**Wichtig für die Reihenfolge:** Auf `main` existiert der Überlauf **noch nicht** — dort steht der Schalter auf `false`. Er entsteht mit dem Merge von PROJ-3. Der Fix muss deshalb vor oder mit diesem Merge landen.
 
 ## Bekannte Restrisiken — PROJ-2 (Stand 2026-09-07)
 
