@@ -301,3 +301,25 @@ Sechs Abweichungen vom Entwurf. Keine berührt `spec.md` — der Vertrag steht u
 | 6 | **Der Drosselungs-Browsertest läuft nicht in WebKit** | Dort löst der sechste Klick kein Absenden aus (Anzeige bleibt bei Versuch 5, auch nach 20 s und mit nachweislich gefülltem Feld). Die Sperre selbst ist in Chromium und Firefox belegt, und sie sitzt vollständig im Server. **Offen bleibt**, ob ein Mensch auf einem echten iPhone die Sperrmeldung zu sehen bekommt — als Restrisiko zu führen, nicht als erledigt |
 
 **Zwei Fehler steckten im eigenen Entwurf und wurden beim Bau gefunden** (Nummern 1 und 3). Beide hätten ein grünes `npm test` überlebt: Der erste zeigte sich erst im Browser, der zweite nur, weil der Grenzwert **buchstäblich** geprüft wird statt mit „nach vielen Versuchen".
+
+## Nachtrag: BUG-4-1 behoben (2026-09-09)
+
+**Der Befund.** Der QA-Lauf fand die E-Mail-Adresse nach der Löschung in `auth.audit_log_entries` — darunter in einer Zeile, die der Löschvorgang selbst schreibt. Bricht AC-17 und AC-22 im Wortlaut. **Dieselbe Fehlerklasse wie die, die Migration `0017` behoben hat, eine Ebene höher:** Der Entwurf hatte für AC-17 eine Aufzählung von **Orten** benutzt (`public.auth_throttle`) und das `auth`-Schema nie angesehen.
+
+**Die Behebung** ist Migration `0019` — ein zweiter `after delete`-Trigger auf `auth.users`, bewusst neben dem aus `0005` statt in ihn hinein: Der eine räumt eine eigene Tabelle auf, der andere greift in ein fremdes Schema; getrennt ist im Fehlerfall sofort sichtbar, welcher es war.
+
+**Drei Dinge wurden vor dem Bau gemessen, nicht angenommen:**
+
+| Frage | Messung |
+|---|---|
+| Sieht ein `after delete`-Trigger die `user_deleted`-Zeile überhaupt? | **Ja** — eine Sonde zählte zur Triggerzeit bereits alle drei Zeilen. GoTrue schreibt den Eintrag **vor** dem DELETE, in derselben Transaktion |
+| Darf `postgres` in dieser Tabelle löschen? | **Ja** — `DELETE` in `information_schema.role_table_grants`, direkt gegengeprüft. Eigentümer ist `supabase_auth_admin`, deshalb `security definer` |
+| Bricht das Löschen etwas? | **Nein** — kein Fremdschlüssel zeigt auf die Tabelle |
+
+**Eine Begründung im ersten Anlauf war falsch, und die Rot-Gegenprobe hat sie widerlegt.** Der erste Entwurf behauptete, ein Prädikat nur über die Konto-Kennung lasse 64 Zeilen stehen, wenn sich jemand mit derselben Adresse neu registriert. Der Test dazu blieb auch ohne den Adressvergleich grün: Mit dem Trigger räumt **jede** Löschung ihre eigenen Zeilen ab, ein früheres Konto derselben Adresse hinterlässt gar nichts. Die 64 Zeilen waren **Altbestand** aus der Zeit vor der Migration.
+
+Die Adressvergleiche sind trotzdem geblieben — mit der engeren, zutreffenden Begründung: Sie räumen genau diesen Altbestand ab, und sie suchen nach dem, wovon **AC-22 spricht** (der Adresse), nicht nach der Kennung. Der Test wurde ersetzt: Er sät jetzt eine Zeile mit **fremder** Kennung und der Adresse des Kontos, wie sie vor `0019` entstanden ist — ohne die Adressvergleiche wird er rot.
+
+**Der Preis, ausgeschrieben:** Die Protokollhistorie des Kontos ist nach der Löschung weg, auch die Zeile „dieses Konto wurde gelöscht". Wer beides will — Nachweis der Löschung *und* AC-22 im Wortlaut — braucht eine anonymisierte Fassung des Eintrags; das wäre eine Vertragsänderung, kein Bugfix. Und: **kein Ausnahmeblock**. Scheitert das Aufräumen, scheitert die ganze Löschung und der Nutzer sieht die EC-3-Meldung. Vor dem Deploy ist zu prüfen, dass `postgres` auch im gehosteten Projekt `DELETE` auf dieser Tabelle hat.
+
+**Nicht behoben, weil eigener Gegenstand:** `auth.audit_log_entries` wächst unbegrenzt und hat keinen Aufräum-Lauf. Das gehört zu `pg_cron`, in dieselbe Liste wie T36/T37 — nicht in einen Bugfix zur Kontolöschung.

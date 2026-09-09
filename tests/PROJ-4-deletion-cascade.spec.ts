@@ -139,6 +139,42 @@ async function authUserExists(userId: string) {
   return Boolean(data?.user)
 }
 
+/**
+ * Wie viele Protokollzeilen tragen diese Adresse noch? (BUG-4-1, AC-17, AC-22)
+ *
+ * **Bewusst eine Eigenschaftsprüfung, kein Spiegel des Prädikats.** Gefragt wird
+ * „steht die Adresse noch irgendwo im Rumpf", nicht „greift der Vergleich aus
+ * Migration `0019`". Genau darin liegt der Wert: Führt eine künftige
+ * GoTrue-Fassung ein **weiteres** Feld mit der Adresse ein, wird dieser Test rot
+ * — ein Test, der das Prädikat nachbaut, bliebe grün und die Zusage wäre still
+ * gebrochen. Dieselbe Lehre wie aus BUG-4-1 selbst, wo eine Aufzählung von Orten
+ * unvollständig war.
+ *
+ * Die Testadressen tragen einen Zeitstempel und Zufall, ein Substring-Treffer
+ * eines fremden Kontos ist damit praktisch ausgeschlossen.
+ */
+async function countAuditRowsFor(email: string) {
+  const out = execFileSync(
+    'docker',
+    [
+      'exec',
+      '-i',
+      dbContainer(),
+      'psql',
+      '-U',
+      'postgres',
+      '-d',
+      'postgres',
+      '-t',
+      '-A',
+      '-c',
+      `select count(*) from auth.audit_log_entries where payload::text like '%${email}%'`,
+    ],
+    { encoding: 'utf8' }
+  )
+  return Number(out.trim())
+}
+
 test.describe('PROJ-4 — Löschkette', () => {
   test('gelingt sie, ist jede der fünf Spuren weg (AC-10, AC-17, AC-22)', async () => {
     const player = await seedPlayer()
@@ -174,6 +210,57 @@ test.describe('PROJ-4 — Löschkette', () => {
     // Und was **nicht** mitgehen darf (BUG-39, und der `_`-Fallstrick aus `0017`).
     expect(await countThrottleKeys([ipKey]), 'IP-Zeile bleibt').toBe(1)
     expect(await countThrottleKeys([foreignKey]), 'fremdes Konto bleibt').toBe(1)
+
+    // BUG-4-1: auch das Protokoll des Auth-Dienstes — einschließlich der Zeile,
+    // die der Löschvorgang selbst schreibt (`user_deleted` mit der Adresse in
+    // `traits`).
+    expect(await countAuditRowsFor(player.email), 'Protokollzeilen mit der Adresse').toBe(0)
+  })
+
+  test('nimmt Altbestand ohne passende Kennung mit (BUG-4-1)', async () => {
+    /*
+      **Dieser Test pinnt die beiden Adressvergleiche aus Migration `0019` —
+      und er ist erst im zweiten Anlauf entstanden.**
+
+      Der erste Anlauf spielte „löschen, mit derselben Adresse neu registrieren,
+      wieder löschen" durch und blieb auch dann grün, als der Adressvergleich
+      entfernt wurde. Der Grund: Mit dem Trigger räumt **jede** Löschung ihre
+      eigenen Zeilen ab, ein früheres Konto derselben Adresse hinterlässt also
+      gar nichts mehr. Der Test hat nichts bewiesen.
+
+      Was die Adressvergleiche wirklich abdecken, ist **Altbestand**: Zeilen aus
+      der Zeit vor dieser Migration, deren Konto längst weg ist und deren
+      Kennung deshalb auf niemanden mehr zeigt. Genau so eine Zeile wird hier
+      gesät — mit einer fremden, zufälligen Kennung, damit kein
+      Kennungsvergleich sie je greifen kann.
+    */
+    const player = await seedPlayer()
+
+    const fremdeKennung = crypto.randomUUID()
+    runSql(`
+      insert into auth.audit_log_entries (instance_id, id, payload, created_at, ip_address)
+      values (
+        '00000000-0000-0000-0000-000000000000',
+        gen_random_uuid(),
+        json_build_object(
+          'action', 'login',
+          'actor_id', '${fremdeKennung}',
+          'actor_username', '${player.email}',
+          'log_type', 'account'
+        ),
+        now(),
+        ''
+      );
+    `)
+
+    expect(await countAuditRowsFor(player.email), 'Altbestand ist gesät').toBeGreaterThan(0)
+
+    await admin.auth.admin.deleteUser(player.userId)
+
+    expect(
+      await countAuditRowsFor(player.email),
+      'auch der Altbestand ohne passende Kennung ist weg'
+    ).toBe(0)
   })
 
   test('scheitert sie, bleibt jede der fünf Spuren stehen (EC-3)', async () => {
