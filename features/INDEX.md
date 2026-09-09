@@ -25,7 +25,7 @@
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Approved | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
-| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | In Progress | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
+| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | In Review | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
 
 **Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1, PROJ-2 und PROJ-3)
 
@@ -101,6 +101,24 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
 
+
+## QA-Lauf 1 zu PROJ-4 (2026-09-09) — ein High, Status bleibt In Review
+
+Geprüft von **drei unabhängigen `qa-engineer`-Bahnen**, die den Bau nicht kannten (Acceptance · Security · Regression). Ergebnis: **17 von 22 AC vollständig bestanden**, 11 von 12 EC, **keine Regression** — und **ein High**.
+
+**BUG-4-1 — die E-Mail-Adresse überlebt die Löschung.** `auth.audit_log_entries` behält sie im Klartext, darunter eine Zeile, die **der Löschvorgang selbst schreibt** (`{"action":"user_deleted","traits":{"user_email":"…"}}`). Zwei Bahnen haben das unabhängig voneinander gefunden. Es bricht **AC-17 und AC-22 im Wortlaut** — bei einem Feature, dessen Zweck das Löschen ist. Kein Aufräum-Job vorhanden; die Tabelle wächst unbegrenzt. Nicht über PostgREST erreichbar, also kein Angriffsweg von außen.
+
+**Zwei Vertragsfragen statt Codefehler:** BUG-4-2 (die Drosselungsmeldung nennt keine Minuten, AC-15 verlangt sie — der Code kann es nicht, `registerAttempt` gibt keine Restzeit zurück) und BUG-4-3 (Klick neben den Dialog schließt ihn nicht; Radix unterdrückt das bei unumkehrbaren Handlungen absichtlich, AC-14 verlangt es trotzdem). Beide sind mit **einem** `/refine PROJ-4` billiger zu lösen als mit Code.
+
+**Drei Medium gehören zu bereits bekannten Deploy-Blockern**, treffen jetzt aber einen unumkehrbaren Pfad bzw. die einzige Seite, die eine E-Mail-Adresse rendert: BUG-4-4 (`x-forwarded-for`, BUG-61-Klasse — **die Konto-Hälfte trägt hier und wurde gemessen**), BUG-4-7 (Security-Header, BUG-12-Klasse) und BUG-4-8 (`X-Forwarded-Host`, BUG-18-Klasse).
+
+**Neu von PROJ-4 eingeführt und der Aufmerksamkeit wert:** `/account` steht jetzt als **zweiter** Pfad in `ACTION_HOST_PATHS` (BUG-4-5). Der PROJ-1-Lauf hatte diese Ausnahme als BUG-21 ausdrücklich auf `/` eingeengt. Ohne den Eintrag sind EC-1 und EC-4 kaputt — die Ausnahme ist also nötig, aber ihre Begründung gehört in den Vertrag statt nur in einen Codekommentar. Die Bahnen sind sich über die Schwere uneins (Medium vs. Low); das steht im Bericht bewusst so.
+
+**Ein Nebenbefund trifft PROJ-3:** Seit Migration `0018` pinnt **kein Test mehr irgendein Spaltenrecht** (BUG-4-9), und `features/PROJ-3-leaderboard/qa-report.md:156` führt eine Härtung als geprüft, die seit dem 2026-09-09 nicht mehr gilt. Die tragende Zusage ist nicht geschwächt — das Netz darunter schon.
+
+**Restrisiko, ausdrücklich benannt:** Die Drosselung ist serverseitig von zwei Bahnen über HTTP ausgelöst und greift exakt an der Vertragszahl. **Ungeprüft bleibt, ob ein Mensch auf einem echten iPhone die Sperrmeldung zu sehen bekommt** — in WebKit löst der sechste Klick kein Absenden aus, weshalb `tests/PROJ-4-delete-throttle.spec.ts:41` dort überspringt. Der Lauf unterscheidet nicht zwischen „nur die Automatisierung stolpert" und „der Dialog reagiert nach fünf Fehlversuchen nicht mehr".
+
+Vollständig in `features/PROJ-4-account-deletion/qa-report.md`.
 
 ## PROJ-2 steht seit dem 2026-09-08 wieder auf `Planned` — warum
 
