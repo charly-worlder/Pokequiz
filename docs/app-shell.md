@@ -22,6 +22,7 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 | Neues Passwort | `/reset-password` | Neues Passwort setzen, nur über den E-Mail-Link erreichbar (nicht verlinkt) | ausgeloggt und eingeloggt | PROJ-1 |
 | Spiel | `/` | Runde starten, spielen, Ergebnis sehen | nur angemeldet | PROJ-2 |
 | Weltrangliste | `/leaderboard` | Die globale Top-5 ansehen | nur angemeldet | PROJ-3 |
+| Konto | `/account` | Sehen, was gespeichert ist; das eigene Konto löschen | nur angemeldet | PROJ-4 |
 | Rechtliches | `/privacy`, `/imprint` | Datenschutzerklärung, Impressum | **alle**, auch ausgeloggt | PROJ-4 |
 
 **Start, Quiz und Ergebnis bleiben eine Route.** Es ist ein durchgehender Spielfluss; ein Reload mitten in der Runde verliert den Zustand ohnehin, und drei Routen würden vortäuschen, er sei wiederherstellbar. Ob der Fluss intern als Client-State oder anders abgebildet wird, entscheidet `/architecture`.
@@ -52,7 +53,7 @@ Es gibt **kein** eigenes App-Shell-Feature: Mit nur zwei navigierbaren Bereichen
 ## Auth-Zustände
 
 - **Ausgeloggt:** Erreichbar sind nur `/login`, `/reset-password`, `/privacy` und `/imprint`. Jeder andere Aufruf leitet auf `/login`. Die Kopfzeile zeigt rechts die Zeile „Deutsche Namen · Serie · Weltrangliste".
-- **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Nutzer-Chip mit Initiale und Trainername — dazu den Button „Bestenliste", **sobald `/leaderboard` existiert**. Solange PROJ-3 die Seite nicht gebaut hat, fehlt der Button ganz, statt auf eine 404 zu führen (dieselbe Regel wie bei der Fußzeile, siehe Layout-Regionen). Der Schalter dafür liegt in `src/lib/site-pages.ts` und gilt zugleich für den Ergebnis-Screen des Quiz.
+- **Angemeldet:** Alle Bereiche erreichbar. Die Kopfzeile zeigt rechts den Nutzer-Chip mit Initiale und Trainername — **und der Chip ist zugleich der Weg zum Kontobereich** (`/account`, PROJ-4, dort AC-1). Das ist bewusst kein vierter Knopf: Die Kopfzeile trägt bei 320 px bereits drei Bedienelemente und wurde am 2026-09-08 genau auf diese Breite gebracht; ein weiteres hätte den Fix sofort wieder gebrochen. Der Chip trägt dafür einen sichtbaren Hover- und Fokuszustand und ein `aria-label`, das sein Ziel benennt — er wird nicht heimlich klickbar — dazu den Button „Bestenliste", **sobald `/leaderboard` existiert**. Solange PROJ-3 die Seite nicht gebaut hat, fehlt der Button ganz, statt auf eine 404 zu führen (dieselbe Regel wie bei der Fußzeile, siehe Layout-Regionen). Der Schalter dafür liegt in `src/lib/site-pages.ts` und gilt zugleich für den Ergebnis-Screen des Quiz.
 - **Rollen:** keine. Alle angemeldeten Nutzer sind gleichberechtigt.
 
 ## Shell-Komponenten

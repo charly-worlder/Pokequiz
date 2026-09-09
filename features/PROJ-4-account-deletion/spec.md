@@ -98,6 +98,8 @@ _Diese Kriterien stammen aus der Prüfung mit `/dsgvo PROJ-4`, nicht aus dem Int
 _Zwei Punkte, die hier standen, sind am 2026-09-09 entschieden worden und in den Decision Log gewandert: der Verantwortliche (Worlder, Felder mit Platzhaltertext) und der Wegfall des Art.-20-Exports._
 
 - [ ] **Aufbewahrungsfrist der Sicherungskopien ist unbekannt** (EC-9). Steht erst fest, wenn Hosting-Anbieter und Supabase-Tarif beim `/deploy` feststehen. Die Zahl gehört danach in die Datenschutzerklärung — **und damit erst in den Moment, in dem die App tatsächlich live gehen soll**.
+- [ ] **Verhalten des Auth-Dienstes bei fehlgeschlagener Kaskade** (aus `/architecture`, betrifft EC-3). Erwartet wird: Der Löschaufruf meldet einen Fehler und nichts ist gelöscht. Beim Bau zu belegen, indem die Kaskade künstlich zum Scheitern gebracht wird — sonst bleibt EC-3 eine begründete Annahme statt einer gemessenen Eigenschaft.
+- [ ] **Soll `/account` mit einer Recovery-Sitzung erreichbar bleiben?** (aus `/architecture`.) Heute wäre es das. Für die Löschung ist trotzdem das Passwort nötig, der Schutz greift also. **Empfehlung: so lassen** — sonst könnte jemand direkt nach einem Passwort-Reset sein Konto nicht löschen.
 - [ ] **Bestätigungs-E-Mail nach der Löschung** — heute nicht zusagbar (kein eigener SMTP-Dienst). Sobald einer steht: nachrüsten oder bewusst verwerfen? Ohne sie merkt ein Kontoinhaber nicht, wenn jemand anderes sein Konto gelöscht hat.
 - [ ] **Die Minderjährigen-Frage aus `docs/privacy.md` bleibt offen.** Die Löschung ist ab jetzt der einzige Weg, einen versehentlich echten Namen aus der Rangliste zu bekommen. Ob das genügt oder der Trainername (einmalig) änderbar sein sollte, entscheidet dieses Feature nicht — es wäre `/refine PROJ-1`.
 
