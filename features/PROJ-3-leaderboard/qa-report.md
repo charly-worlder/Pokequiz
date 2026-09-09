@@ -262,7 +262,53 @@ Kein Regress an PROJ-1 oder PROJ-2. Genau eine Kopfzeile und eine Fußzeile auf 
 
 ## E2E-Tests
 
-Vorhandene Suite als Regression gelaufen (150/150). Neue End-to-End-Tests schreibt `/e2e-tests` — und dort gehören AC-18 und EC-9 hin.
+**Geschrieben am 2026-09-09 mit `/e2e-tests`. Vier kritische Journeys, alle grün — und alle rot gegengeprüft.**
+
+Die Auswahl folgt der Testpyramide: nicht ein Test je Kriterium, sondern die Reisen, deren stilles Brechen das Produkt kostet. Die Riegel (Zugangsschutz, Datenschicht, Spaltengeometrie) lagen bereits als Playwright-Dateien aus Bau und QA vor; **was fehlte, war jede einzelne echte Nutzerreise** — kein Test hat je eine Runde gespielt und danach in der Rangliste nachgesehen.
+
+| Journey | Datei | Deckt | Ergebnis |
+|---|---|---|---|
+| **J1 — Von der Runde in die Rangliste** | `tests/PROJ-3-journey-run-to-leaderboard.spec.ts` | AC-1, AC-10, AC-11, AC-14, AC-15 | ✅ 3/3 Engines |
+| **J2 — Der neue Spieler ohne gewerteten Lauf** | `tests/PROJ-3-journey-new-player.spec.ts` | AC-9, AC-14, AC-15 | ✅ 3/3 Engines |
+| **J3 — Außerhalb der Top-5** | `tests/PROJ-3-journey-below-top-five.spec.ts` | AC-4, AC-6, AC-7, AC-10, EC-2 | ✅ 3/3 Engines |
+| **J4 — 320 px mit 20-Zeichen-Name** | `tests/PROJ-3-journey-narrow-name.spec.ts` | **AC-18, EC-9** | ✅ 3/3 Engines |
+
+### Die Lücke aus beiden QA-Läufen ist geschlossen
+
+**AC-18 und EC-9 sind erstmals in einem Browser belegt.** Beide Läufe führten sie als `[!] NICHT GEPRÜFT` und verwiesen hierher. J4 registriert einen Spieler mit einem Namen, der die erlaubten 20 Zeichen voll ausschöpft (im Test zugesichert — ein kürzerer Name prüfte den Fall aus EC-9 gar nicht mehr), sät ihm einen gewerteten Lauf und liest die Zeile bei 320 px:
+
+- Der Name kürzt **nachweislich** — gemessen als `scrollWidth > clientWidth` an der Namenszelle, nicht am Vorhandensein einer CSS-Klasse. Der vollständige Name hängt als `title` daran.
+- Platz, Serie und Zeit liegen **vollständig** im Bild (Rechteck-Messung gegen die 320 px), und ihre Werte stehen inhaltlich noch da — eine Spalte, die im Bild liegt, aber leer ist, wäre von einer reinen Geometrie-Messung nicht zu unterscheiden.
+- Die Seite lässt sich nicht waagerecht scrollen (`document.documentElement.scrollWidth`).
+
+### Jede Journey ist einmal absichtlich gebrochen worden
+
+Vier grüne Tests im ersten Anlauf sind der Zustand, dem man nicht trauen darf. Jeder Bruch wurde einzeln eingebaut, gemessen und zurückgedreht; der Baum war danach wieder sauber (`git status` zeigte ausschließlich die vier neuen Dateien).
+
+| Bruch | Wirkung | Meldung des Tests |
+|---|---|---|
+| J1 · `queries.ts` gibt die eigene Zeile nicht mehr heraus | AC-11 verletzt: der gerade gespielte Lauf fehlt | „Die eigene Zeile ist nicht auffindbar — weder in der Top-5 noch darunter" (Zeile 64) |
+| J2 · Hinweistext auf „eine Runde spielen" geändert | AC-9 verletzt: die Bedingung wäre falsch benannt | Treffer auf `/eine Frage richtig/` fehlt (Zeile 46) |
+| J3 · Wortlaut „noch X **Plätze** bis Top 5" (= BUG-C wiederhergestellt) | EC-2 im Wortlaut verletzt | „Der Satz ‚Platz N — noch X bis Top 5' steht nicht in dieser Form da" (Zeile 135) |
+| J3 · `ranksToTopFive` rechnet `rank` statt `rank − 5` | EC-2 in der Rechnung verletzt | „Bei Platz 151 müssten 146 Plätze bis Top 5 fehlen, angezeigt sind 151" (Zeile 145) |
+| J4 · `truncate` an der Namenszelle entfernt | EC-9 verletzt | „Der 20-Zeichen-Name wird bei 320 px nicht gekürzt — er sprengt seine Spalte" (Zeile 98) |
+| J4 · Zeitspalte auf 13 rem verbreitert | AC-18 verletzt | „Die Spalte Zeit endet bei 328 px und ragt damit über die 320 px hinaus" (Zeile 113) |
+
+Jede Meldung nennt den gebrochenen Schritt, keine ist eine Zeitüberschreitung drei Zeilen später.
+
+### Was die Journeys bewusst **nicht** zusichern
+
+**Keine absoluten Plätze.** Die Suite läuft parallel in drei Browser-Projekten gegen **eine** Datenbank, in der die Nachbar-Journeys gleichzeitig Runden schreiben. „Platz 3" wäre eine Aussage über die Nachbartests, nicht über die App. J1 findet die eigene Zeile deshalb über das „Du"-Abzeichen — das sie nach AC-10 in der Top-5 **wie** in der abgesetzten Zeile trägt; J3 sät fünf unschlagbare Läufe (Serie 386) und sichert damit `Platz > 5` zu, prüft aber die **Form** des Satzes und die **Rechnung** `X = N − 5` statt der in EC-2 wörtlich genannten 6. Der Rot-Lauf hat das bestätigt: Der Platz lag bei 151.
+
+**Der Leerzustand aus AC-17** ist keinem Browser-Test zugänglich, weil er am globalen Datenbestand hängt, den parallele Tests mitfüllen. Er ist in `src/app/leaderboard/page.test.tsx` auf Unit-Ebene gepinnt — bewusst dort, wie im Fix-Lauf zu QA-Lauf 1 festgehalten. J2 sichert stattdessen die Aussage zu, die `design.md` **beiden** Trägerkomponenten gemeinsam gibt.
+
+**Der Pixel-Versatz zu AC-16** bleibt ungemessen. Er stand als „gehört zu `/e2e-tests`" im Fix-Lauf, ist aber im QA-Lauf 2 als bewusst getragenes Low eingeordnet worden („ein Skelett kann nicht alle vier Ausgänge gleichzeitig treffen"). Ihn jetzt zu pinnen hieße, eine Zahl festzuschreiben, die der Vertrag gar nicht fordert.
+
+### Prüfungen dieses Laufs
+
+`npx playwright test` **162/162** über Chromium, Firefox und Mobile Safari (vorher 150 — vier Journeys mal drei Engines) · `npm run lint` Exit 0 · `npx tsc --noEmit` Exit 0.
+
+**Keine Regression und kein neuer Befund.** Kein zuvor bestandenes Kriterium ist gebrochen; der Status bleibt **Approved**.
 
 ## Unit-Tests dieses Laufs
 

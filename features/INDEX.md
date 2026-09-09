@@ -133,6 +133,14 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
+## E2E-Schicht für PROJ-3 steht (2026-09-09)
+
+`/e2e-tests PROJ-3` hat vier kritische Journeys geschrieben — von der gespielten Runde in die Rangliste, der neue Spieler ohne gewerteten Lauf, die eigene Zeile außerhalb der Top-5, und die Zeile bei 320 px mit einem 20 Zeichen langen Trainernamen. Alle grün in drei Engines, jede einmal absichtlich gebrochen und mit der richtigen Diagnose rot gesehen. Vollständiger Nachweis in `features/PROJ-3-leaderboard/qa-report.md` → E2E-Tests.
+
+**Damit ist die einzige benannte Prüf-Lücke von PROJ-3 geschlossen:** AC-18 und EC-9 (Responsive unter 640 px, Kürzung eines 20-Zeichen-Namens) standen in **beiden** QA-Läufen als `NICHT GEPRÜFT` und sind jetzt im Browser belegt. Status von PROJ-3 unverändert **Approved** — kein neuer Befund, keine Regression (Playwright 162/162, Lint 0, `tsc` 0).
+
+**Die gleichartige Lücke bei PROJ-2 bleibt offen** (Abschnitt darüber): Sie betrifft die Quiz-Kernschleife und schließt erst ein eigener `/e2e-tests PROJ-2`.
+
 ## Next Available ID: PROJ-5
 
 ## Offen aus dem QA-Lauf 6 zu PROJ-2 (2026-09-08)
