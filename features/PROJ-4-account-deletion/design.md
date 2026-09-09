@@ -148,7 +148,9 @@ Eingang: eine Server Action. Sie nimmt GENAU EIN Feld entgegen: das Passwort.
     alle Runden, den laufenden Rundenzustand — und der Trigger die
     Zählerzeilen der Adresse.                                     → AC-10, AC-17
     Scheitert der Aufruf → NICHTS ist gelöscht, Nutzer bleibt
-    angemeldet, Fehler in der Karte mit "Erneut versuchen".       → EC-3
+    angemeldet, Fehler in der Karte mit "Erneut versuchen"        → EC-3
+    UND der in Schritt 1 gezählte Versuch wird erstattet
+    (genau einer, siehe unten).                                   → siehe „Der Fehlerfall"
 
  5. Sitzung örtlich beenden. Die Auth-Cookies werden gelöscht,
     ohne den Auth-Dienst zu fragen — dort gibt es das Konto nicht
@@ -185,6 +187,29 @@ Die Skill-Regel verlangt, für jeden Edge Case über Gleichzeitigkeit, Zustandsw
 | **EC-2** — Runde in anderem Tab | Der Rundenzustand ist mitgelöscht (Kaskade). Der andere Tab bekommt bei der nächsten Handlung entweder die Umleitung auf `/login` (Sitzung ungültig) oder den bereits gebauten `no-round`-Zustand aus PROJ-2. Beide Wege existieren schon; PROJ-4 baut hier nichts |
 | **EC-3** — Teilausfall | **Eine** Transaktion. Die Kaskade ist Teil des DELETE, nicht eine Folge von Aufrufen. Es gibt keinen Zwischenstand, in dem das Profil weg und die Runden noch da wären — er ist nicht herstellbar, nicht nur unwahrscheinlich |
 | **EC-8** — Verbindungsabbruch | Dieselbe Transaktion. Sie ist entweder festgeschrieben oder zurückgerollt; ein abgebrochener Browser ändert daran nichts. Der Nutzer sieht beim nächsten Aufruf einen der beiden eindeutigen Zustände |
+
+### Der Fehlerfall — was genau scheitern kann, und was der Nutzer dann sieht
+
+**Ein Teilzustand ist nicht der Fehlerfall.** „Profil gelöscht, Runden noch da" kann nicht entstehen: Die Kaskade ist Teil desselben DELETE. Was scheitern kann, ist die **ganze Transaktion** — sie rollt dann vollständig zurück. Realistische Auslöser sind genau drei: die Datenbank ist nicht erreichbar, der Auth-Dienst antwortet nicht, oder einer der Trigger auf `auth.users` wirft einen Fehler (der Aufräum-Trigger läuft *nach* dem Löschen, in derselben Transaktion — wirft er, ist auch die Löschung zurückgerollt).
+
+**Der Zustand danach ist in allen drei Fällen derselbe und vollständig unverändert:** Konto, Profil, Runden, Rundenzustand und Sitzung existieren wie vorher. Der Nutzer ist weiterhin angemeldet.
+
+```
+Was der Nutzer sieht:
+- Der Dialog bleibt offen, das Passwortfeld wird geleert.
+- Im Dialog erscheint: "Das hat gerade nicht geklappt — technisch, nicht
+  wegen deines Passworts. Dein Konto ist unverändert." plus [Erneut versuchen].
+- Ausdrücklich NICHT die Meldung für ein falsches Passwort. Sonst tippt der
+  Nutzer sein richtiges Passwort neu ein und glaubt, er habe sich vertan.
+```
+
+**Ist ein erneuter Versuch sicher? Ja — zweimal ja.** Fachlich, weil nichts geschehen ist: Der Vorgang ist von Natur aus wiederholbar, es gibt keinen halben Zustand, auf den ein zweiter Versuch aufsetzen müsste. Und praktisch, weil er **kein Drosselungs-Budget verbraucht**:
+
+> **Erstattung im technischen Fehlerfall.** Schritt 1 zählt vor der Prüfung hoch (fail closed, das bleibt). Scheitert Schritt 4, **nachdem** das Passwort in Schritt 3 als richtig erkannt wurde, wird genau ein Versuch auf beiden Schlüsseln erstattet — mit der bereits vorhandenen Erstattungsfunktion aus Migration `0004`, die um genau eins herunterzählt statt den Zähler zu leeren.
+>
+> **Warum das keinen Angriffsweg öffnet:** Der Erstattungszweig liegt **hinter** der bestandenen Passwortprüfung. Wer das Passwort nicht kennt, erreicht ihn nie — für ihn zählt jeder Versuch weiter voll. Das ist dieselbe Logik wie beim Login (BUG-54): Ein bewiesener Eigentümer bekommt seinen eigenen Versuch zurück, mehr nicht.
+>
+> **Ohne diese Erstattung** wäre eine fünfminütige Datenbankstörung eine 15-Minuten-Sperre für jemanden, der sein Konto löschen will und alles richtig gemacht hat — der Schutz träfe ausschließlich den legitimen Nutzer.
 
 ### Der Punkt, an dem AC-21 wirklich hängt
 
@@ -226,7 +251,7 @@ Bemerkenswert: Der Kommentar in `src/proxy.ts` hält fest, dass dort früher die
 | **Der Aufräum-Trigger vergleicht künftig ein Muster statt drei feste Schlüssel** | Sonst überlebt der neue Scope `account-delete` die Löschung, die ihn erzeugt hat (AC-17). Wichtiger als dieser eine Fall: **Jeder künftige Scope ist automatisch abgedeckt**, statt dass ihn jemand hier nachträgt — die Aufzählung war eine Falle, die genau einmal zuschnappt und dann unbemerkt bleibt | Den vierten Schlüssel zur Aufzählung hinzufügen | Der Mustervergleich nutzt keinen Index und liest die Tabelle durch. Folgenlos: Die Tabelle ist durch das laufende Aufräumen klein, und der Vorgang läuft einmal je Kontolöschung | 2026-09-09 |
 | **Passwortprüfung durch einen Anmeldeversuch auf einem sitzungslosen Client** | Es gibt keine Schnittstelle „prüfe dieses Passwort". Der eingebaute Wiederanmelde-Weg (`reauthenticate`) verschickt einen Code **per E-Mail** und ist damit für dieses Projekt unbrauchbar — es hat bewusst keinen funktionierenden Mailversand (`docs/PRD.md`). Ein Client ohne Sitzungsspeicherung prüft das Passwort, ohne die Cookies des Nutzers anzufassen | Die Wiederanmeldung per E-Mail-Code; oder ganz auf die Passwortprüfung verzichten | Der Versuch zählt gegen das **gemeinsame** Anmeldekontingent des Auth-Dienstes, das wegen der Server-Action-Architektur für alle Spieler an derselben Server-IP hängt (BUG-21). Genau deshalb sitzt die eigene Drosselung **davor** und nicht dahinter | 2026-09-09 |
 | **Eigener Zähler-Scope `account-delete`, 5 je 15 Minuten, beide Hälften** | Aus AC-15. Ein eigener Scope statt Mitbenutzung von `credentialsPerAccount` (20/15 min), weil sonst ein misslungener Löschversuch den Login des Nutzers mit verbraucht und umgekehrt — zwei Vorgänge mit verschiedenem Zweck an einem Zähler ist genau der Fehler, den BUG-76 beim Passwort-Reset behoben hat | Den bestehenden Login-Zähler mitbenutzen | Ein weiterer Grenzwert, der gepflegt werden will. Deshalb steht er **im Vertrag** (AC-15) und nicht nur im Code — das war bei `password-update` anders und ist dort als offener Punkt gelandet | 2026-09-09 |
-| **Kein Zurücksetzen des Zählers bei Erfolg** | Bei den anderen Pfaden wird der Konto-Zähler nach geglücktem Login geleert, damit ein Vertipper nicht nachhängt. Hier ist das gegenstandslos: Bei Erfolg gibt es das Konto nicht mehr, und der Trigger räumt die Konto-Schlüssel ohnehin ab. Der IP-Schlüssel bleibt bewusst stehen (dieselbe Regel wie in `0005`) | Zähler bei Erfolg leeren, wie beim Login | Keiner | 2026-09-09 |
+| **Keine Erstattung bei Erfolg — aber Erstattung im technischen Fehlerfall** | Bei **Erfolg** ist eine Erstattung gegenstandslos: Das Konto ist weg, und der Trigger räumt die Konto-Schlüssel ohnehin ab. Beim **technischen Fehlschlag nach richtigem Passwort** ist sie dagegen nötig, sonst macht eine Datenbankstörung aus dem Missbrauchsschutz eine Sperre gegen den rechtmäßigen Eigentümer — fünf Fehlversuche der Infrastruktur, und er kommt 15 Minuten lang nicht an die Löschung. Der Zweig liegt hinter der bestandenen Passwortprüfung, ist für einen Angreifer also unerreichbar (dieselbe Abwägung wie BUG-54 beim Login). Der IP-Schlüssel bleibt bei Erfolg stehen (Regel aus `0005`) | Gar nicht erstatten und die Sperre in Kauf nehmen; oder bei Erfolg leeren wie beim Login | Ein zusätzlicher Zweig, der geprüft gehört: Die Erstattung darf **nur** nach richtigem Passwort greifen. Ein Test muss rot werden, wenn sie vor die Passwortprüfung rutscht | 2026-09-09 |
 | **Die Kontoanzeige liest über die Nutzersitzung, nicht über den Admin-Client** | Die drei Quellen sind bereits per Row Level Security auf den Eigentümer beschränkt. Den Generalschlüssel hier zu benutzen, wäre bequemer und würde die zweite Schutzschicht wegnehmen, die `.claude/rules/security.md` ausdrücklich verlangt | Alles mit dem Admin-Client holen, spart eine Überlegung | Keiner. Die Daten sind für den Eigentümer ohnehin lesbar | 2026-09-09 |
 | **Der Nutzer-Chip in der Kopfzeile wird zum Link auf `/account`** | Die Kopfzeile trägt bei 320 px bereits drei Elemente und wurde am 2026-09-08 mühsam auf diese Breite gebracht (PROJ-2, AC-43). Ein vierter Knopf hätte den Fix sofort gebrochen. Der Chip ist bereits da und ungenutzt | Ein vierter Knopf „Konto"; oder ein Aufklappmenü am Chip | Ein Klickziel, das nicht wie eines aussieht. Gegenmittel: sichtbarer Hover- und Fokuszustand und ein `aria-label`, das das Ziel benennt — der Chip wird nicht heimlich klickbar | 2026-09-09 |
 | **Die Kaskade wird beim Bau gemessen, nicht angenommen** | Die ganze Atomaritäts-Zusage (AC-10, EC-3) und AC-17 ruhen auf Fremdschlüsseln, die in drei verschiedenen Migrationen stehen und **nie zusammen im Löschfall geprüft wurden** — sie waren bisher totes Kapital. Ein Kommentar in `0002` sagt zu, dass die Löschung die Runden erreicht; dieses Projekt hat mit BUG-36 und BUG-56 zweimal erlebt, dass eine Zusage im Kommentar keinen Code hinter sich hatte | Auf die Fremdschlüssel vertrauen — sie stehen ja da | Ein Prüfschritt mehr. Er ist billig und deckt den einzigen Fall ab, in dem dieses Feature schweigend falsch sein könnte | 2026-09-09 |
@@ -248,5 +273,14 @@ Vier Stellen, an denen ein Test leicht grün wird, ohne etwas zu belegen — die
 
 ## Open Questions
 
-- [ ] **Wie verhält sich der Auth-Dienst, wenn die Kaskade fehlschlägt?** Erwartet wird: Der Löschaufruf meldet einen Fehler und **nichts** ist gelöscht (EC-3). Zu belegen ist das beim Bau, indem die Kaskade künstlich zum Scheitern gebracht wird — sonst bleibt EC-3 eine begründete Annahme statt einer gemessenen Eigenschaft.
-- [ ] **Soll `/account` auch mit einer Recovery-Sitzung erreichbar sein?** Heute wäre es das (`getUser()` unterscheidet nicht). Wer über den Reset-Link kam, kennt das Postfach, muss aber für die Löschung trotzdem das Passwort eingeben — der Schutz greift also. Die Frage ist, ob es zusätzlich enger sein soll; die Bausteine dafür liegen mit `hasRecoverySession()` bereit. **Empfehlung: nein**, sonst kann jemand direkt nach einem Passwort-Reset sein Konto nicht löschen.
+- [x] ~~**Soll `/account` auch mit einer Recovery-Sitzung erreichbar sein?**~~ — **Entschieden am 2026-09-09: ja, unverändert erreichbar.** Für die Löschung ist ohnehin das Passwort nötig (AC-9), der Schutz greift also unabhängig davon, wie die Sitzung entstanden ist. Eine zusätzliche Enge hätte den Fall bestraft, in dem jemand sein Passwort gerade zurückgesetzt hat und das Konto dann löschen will. `hasRecoverySession()` wird auf diesem Pfad **nicht** benutzt.
+
+- [ ] **Scheitert die Löschung wirklich als Ganzes?** — *Die einzige verbliebene offene Frage, und sie ist eine Messfrage, keine Entwurfsfrage.*
+
+  **Was nicht mehr offen ist:** Ein Teilzustand ist ausgeschlossen (die Kaskade steckt im selben DELETE), der Zustand nach einem Fehlschlag ist vollständig unverändert, die UI-Antwort steht oben unter „Der Fehlerfall", und ein erneuter Versuch ist fachlich wie budgetmäßig sicher.
+
+  **Was offen ist:** ob die Datenbank sich in der Praxis so verhält, wie die Fremdschlüssel es versprechen. Diese vier Kaskaden stehen in drei Migrationen und wurden **nie im Löschfall zusammen ausgelöst** — sie sind bis heute totes Kapital. Zu belegen beim Bau, in beide Richtungen:
+  1. **Gelingt es**, sind hinterher alle fünf Tabellen leer (Auth-Zeile, Profil, Runden, Rundenzustand, Konto-Zählerschlüssel).
+  2. **Scheitert es** — künstlich herbeigeführt, etwa durch einen absichtlich werfenden Trigger auf `auth.users` —, ist hinterher **jede** der fünf Zeilen noch da, und die Sitzung funktioniert weiter.
+
+  Ohne Punkt 2 bleibt EC-3 eine begründete Annahme statt einer gemessenen Eigenschaft. Dieses Projekt hat mit BUG-36 und BUG-56 zweimal erlebt, dass eine Zusage im Kommentar keinen Code hinter sich hatte.
