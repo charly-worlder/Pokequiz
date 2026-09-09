@@ -146,3 +146,20 @@ export function mapUpdatePasswordError(error: AuthErrorLike): ActionState {
 
   return { error: NETWORK_ERROR_MESSAGE }
 }
+
+// PROJ-4 — die Meldungen der Kontolöschung.
+//
+// **Warum sie hier stehen und nicht in `delete-action.ts`:** Aus einer Datei mit
+// der Server-Direktive am Kopf darf ausschließlich Asynchrones exportiert
+// werden — jede Export-Bindung dort wird zu einem öffentlichen Endpunkt. Beim Bau standen sie
+// zunächst in der Action; der Produktions-Build brach mit „The module has no
+// exports at all" ab, und `server-actions.guard.test.ts` meldete drei
+// Zeichenketten als Server Actions ohne Sitzungsprüfung. Beide Male derselbe
+// Befund, und beide Male gefunden statt vermutet.
+export const WRONG_PASSWORD_MESSAGE = 'Das Passwort ist falsch.'
+// EC-3: Ein technischer Fehlschlag darf nicht wie ein falsches Passwort
+// aussehen — sonst tippt der Nutzer sein richtiges Passwort neu ein und hält
+// sich für vergesslich. Die Meldung sagt beides ausdrücklich: woran es nicht
+// lag, und dass nichts passiert ist.
+export const DELETE_FAILED_MESSAGE =
+  'Das hat gerade nicht geklappt — technisch, nicht wegen deines Passworts. Dein Konto ist unverändert.'

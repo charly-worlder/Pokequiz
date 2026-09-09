@@ -98,7 +98,28 @@ export async function proxy(request: NextRequest) {
    * Actions has to be added here** — and if it is forgotten, the symptom is
    * loud: the action answers with a redirect instead of running.
    */
-  const ACTION_HOST_PATHS = ['/']
+  /**
+   * PROJ-4: `/account` kam am 2026-09-09 dazu — die Kontolöschung ist eine
+   * Server Action, und sie muss ausgerechnet dann laufen, wenn die Sitzung
+   * **nicht** mehr gilt.
+   *
+   * Zwei Fälle des Vertrags hängen daran, und beide sind ohne diese Zeile kaputt:
+   * `spec.md` EC-1 (zweiter Tab löscht ein bereits gelöschtes Konto) und EC-4
+   * (die Sitzung läuft ab, während der Dialog offen steht). Beide verlangen eine
+   * ruhige Landung auf `/login`. Ohne den Eintrag antwortet der Proxy der Aktion
+   * mit einer HTTP-Weiterleitung, Next hält das für einen Protokollbruch, und
+   * der Nutzer sieht „Es kam eine unerwartete Antwort vom Server" statt der
+   * Anmeldeseite. **Genau so gemessen** beim Bau: Der zweite Tab blieb auf
+   * `/account` stehen und tat nichts.
+   *
+   * Der Preis ist derselbe wie bei `/` und wird bewusst getragen: Unter diesem
+   * Pfad sind dann auch fremde Action-Kennungen aufrufbar (BUG-21). Was das
+   * abfängt, ist unverändert, dass **jede** Action ihre Sitzung selbst prüft —
+   * bei der Löschung sogar strukturell, weil sie keine Konto-Kennung entgegen-
+   * nimmt (AC-16) — und dass die Datenbank dieselben Regeln ein zweites Mal
+   * durchsetzt.
+   */
+  const ACTION_HOST_PATHS = ['/', '/account']
   const isServerAction =
     request.method === 'POST' &&
     request.headers.has('next-action') &&

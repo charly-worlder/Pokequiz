@@ -284,3 +284,20 @@ Vier Stellen, an denen ein Test leicht grün wird, ohne etwas zu belegen — die
   2. **Scheitert es** — künstlich herbeigeführt, etwa durch einen absichtlich werfenden Trigger auf `auth.users` —, ist hinterher **jede** der fünf Zeilen noch da, und die Sitzung funktioniert weiter.
 
   Ohne Punkt 2 bleibt EC-3 eine begründete Annahme statt einer gemessenen Eigenschaft. Dieses Projekt hat mit BUG-36 und BUG-56 zweimal erlebt, dass eine Zusage im Kommentar keinen Code hinter sich hatte.
+
+---
+
+## Was der Bau geändert hat (2026-09-09)
+
+Sechs Abweichungen vom Entwurf. Keine berührt `spec.md` — der Vertrag steht unverändert.
+
+| # | Abweichung | Warum |
+|---|---|---|
+| 1 | **Neue Migration `0018`** — `grant select (created_at) on profiles to authenticated` | Der Entwurf hielt fest, die drei Quellen seien „bereits per RLS auf den Eigentümer beschränkt", und übersah, dass `0016` eine **zweite** Schicht auf **Spaltenebene** eingezogen hat: Freigegeben waren nur `id` und `trainer_name`. AC-2 verlangt „Dabei seit". Die Kontoseite zeigte deshalb ihren Fehlerzustand — gefunden von `PROJ-4-account-narrow.spec.ts` im ersten Lauf, nicht durch Nachdenken. Die Zeilen-Policy bleibt unangetastet: `created_at` gibt es weiterhin nur in der eigenen Zeile |
+| 2 | **`src/proxy.ts`: `/account` in `ACTION_HOST_PATHS`** | Der Kommentar dort sagt es wörtlich voraus: „A new route that invokes Server Actions has to be added here — und wenn es vergessen wird, ist das Symptom laut." Es war laut: Der zweite Tab in EC-1 blieb stumm auf `/account` stehen, weil der Proxy der Action mit einer HTTP-Weiterleitung antwortete und Next das als Protokollbruch behandelt. Ohne diese Zeile sind **EC-1 und EC-4 kaputt**. Preis wie bei `/` (BUG-21), dort begründet |
+| 3 | **Die Drosselung zählt mit *einem* Aufruf, nicht mit zweien** | Der Entwurf beschrieb ein zweistufiges Zählen (erst Verbindung, dann Konto). `registerAttempt` zählt die Verbindung aber **immer** mit — zwei Aufrufe zählten sie doppelt und halbierten ihre Grenze still. Gefunden vom literalen Grenzwerttest, der die 5 buchstäblich prüft. Ein Aufruf mit Adresse deckt beide Hälften ab; die Sitzungsprüfung davor ist unbedenklich, weil sie keine Zugangsdaten prüft |
+| 4 | **Die Meldungstexte liegen in `error-mapping.ts`, nicht in der Action** | Aus einer Datei mit der Server-Direktive am Kopf darf ausschließlich Asynchrones exportiert werden. Der Produktions-Build brach mit „The module has no exports at all" ab, und `server-actions.guard.test.ts` meldete drei Zeichenketten als Server Actions ohne Sitzungsprüfung — zwei unabhängige Fundstellen für denselben Fehler |
+| 5 | **`tests/PROJ-3-leaderboard-db-guard.spec.ts` angepasst** | Der Wächter sicherte zu, `created_at` sei für eine Nutzersitzung **nicht** lesbar — begründet mit „die Spalte, die kein Anwendungscode liest". PROJ-4 AC-2 hebt diese Prämisse auf. Der Test prüft jetzt die Eigenschaft, die wirklich schützt: `created_at` der **eigenen** Zeile ist lesbar, das einer **fremden** nicht. Die alte Fassung hätte diesen Unterschied gar nicht bemerkt |
+| 6 | **Der Drosselungs-Browsertest läuft nicht in WebKit** | Dort löst der sechste Klick kein Absenden aus (Anzeige bleibt bei Versuch 5, auch nach 20 s und mit nachweislich gefülltem Feld). Die Sperre selbst ist in Chromium und Firefox belegt, und sie sitzt vollständig im Server. **Offen bleibt**, ob ein Mensch auf einem echten iPhone die Sperrmeldung zu sehen bekommt — als Restrisiko zu führen, nicht als erledigt |
+
+**Zwei Fehler steckten im eigenen Entwurf und wurden beim Bau gefunden** (Nummern 1 und 3). Beide hätten ein grünes `npm test` überlebt: Der erste zeigte sich erst im Browser, der zweite nur, weil der Grenzwert **buchstäblich** geprüft wird statt mit „nach vielen Versuchen".

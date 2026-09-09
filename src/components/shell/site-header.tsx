@@ -67,8 +67,23 @@ export async function SiteHeader() {
             )}
 
             {/* AC-24: below 640px the chip shrinks to the initial — never a
-                burger menu, because two items fit in the header either way. */}
-            <span className="flex items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-1 sm:pr-3">
+                burger menu, because two items fit in the header either way.
+
+                PROJ-4 AC-1: Der Chip ist zugleich der Weg zu `/account`.
+                **Bewusst kein vierter Knopf** — die Kopfzeile trägt bei 320 px
+                schon drei Bedienelemente und wurde am 2026-09-08 genau auf diese
+                Breite gebracht (PROJ-2, AC-43); ein weiteres hätte den Fix
+                sofort wieder gebrochen. Der Chip war ohnehin da und ungenutzt.
+
+                Damit er nicht **heimlich** klickbar ist: sichtbarer Hover- und
+                Fokuszustand plus ein `aria-label`, das das Ziel benennt statt
+                nur den Trainernamen vorzulesen. Die Maße bleiben unangetastet —
+                gespart wird hier nichts, es kommt nur ein Link dazu. */}
+            <Link
+              href="/account"
+              aria-label={`Dein Konto${trainerName ? ` — ${trainerName}` : ''}`}
+              className="flex items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-1 transition-colors hover:border-ring hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:pr-3"
+            >
               <span
                 aria-hidden
                 className="grid size-7 place-items-center rounded-full bg-secondary text-[13px] font-bold text-secondary-foreground"
@@ -78,7 +93,7 @@ export async function SiteHeader() {
               <span className="hidden text-[13px] font-semibold text-foreground sm:inline">
                 {trainerName ?? 'Trainer'}
               </span>
-            </span>
+            </Link>
 
             <form action={logoutAction}>
               <Button

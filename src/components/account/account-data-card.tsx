@@ -1,0 +1,75 @@
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { formatLeaderboardDuration } from '@/lib/leaderboard/format'
+import type { AccountData } from '@/lib/account/queries'
+
+/**
+ * Die Kontodaten-Anzeige (spec.md AC-2, AC-3, AC-6, AC-7, AC-19).
+ *
+ * **Nur-Lese, und zwar sichtbar.** Es gibt hier kein Eingabefeld und keine
+ * Speichern-Aktion (AC-3). Trainername und E-Mail zu ändern gehört zu PROJ-1;
+ * ein Feld an dieser Stelle würde eine Möglichkeit vortäuschen, die es nicht
+ * gibt.
+ *
+ * **Der Satz am Ende ist eine Zusage, kein Beiwerk** (AC-19, Art. 15 DSGVO). Er
+ * behauptet Vollständigkeit — er stimmt also genau so lange, wie kein Feature ein
+ * weiteres personenbezogenes Feld einführt, ohne diese Liste mitzuziehen. Genau
+ * dafür prüft der Test die **Feldliste**, nicht die Darstellung.
+ */
+
+/** Registrierdatum als `TT.MM.JJJJ` — bewusst ohne Uhrzeit. */
+function formatJoinDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Europe/Berlin',
+  }).format(date)
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    // Bei 320 px stapelt sich Wert unter Label statt daneben zu quetschen — die
+    // E-Mail-Adresse ist der lange Wert, an dem eine einzeilige Zeile bricht.
+    <div className="flex flex-col gap-0.5 border-b border-border py-3 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+      <dt className="text-[13px] text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 font-medium break-words sm:text-right">{children}</dd>
+    </div>
+  )
+}
+
+export function AccountDataCard({ data }: { data: AccountData }) {
+  return (
+    <Card className="rounded-card">
+      <CardHeader>
+        <CardTitle>Dein Konto</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl>
+          <Row label="E-Mail">{data.email}</Row>
+          <Row label="Trainername">{data.trainerName}</Row>
+          <Row label="Dabei seit">{formatJoinDate(data.createdAt)}</Row>
+          <Row label="Runden gespielt">
+            <span className="tabular">{data.roundsPlayed}</span>
+          </Row>
+          <Row label="Bester Lauf">
+            {data.bestRun ? (
+              <span className="tabular">
+                Serie {data.bestRun.streak} · {formatLeaderboardDuration(data.bestRun.durationMs)}
+              </span>
+            ) : (
+              // AC-6: ein Hinweis, keine leere Zeile und keine Null. „Serie 0"
+              // wäre keine Auskunft, sondern Hohn.
+              <span className="text-muted-foreground">Noch keine gewertete Runde</span>
+            )}
+          </Row>
+        </dl>
+
+        <p className="pt-4 text-[13px] text-muted-foreground">
+          Das ist alles, was wir über dich gespeichert haben.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
