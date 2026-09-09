@@ -84,10 +84,13 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   await expect(page.getByRole('button', { name: 'Weiter zum Ergebnis' })).toBeVisible()
 
   // AC-7 — der Spieler klickt selbst weiter und sieht Serie, Zeit und die
-  // Primär-Aktion. „Zur Bestenliste" erscheint erst, wenn PROJ-3 die Seite
-  // gebaut hat; vorher stand hier ein Link auf eine 404. Dieser Test dreht sich
-  // um, sobald LEADERBOARD_PAGE_EXISTS auf true steht — dann muss der Link da
-  // sein, und wer den Schalter umlegt, sieht sofort, wo nachzuziehen ist.
+  // Primär-Aktion, dazu „Zur Bestenliste" als sekundäre Aktion.
+  //
+  // **Umgedreht am 2026-09-08, als PROJ-3 die Seite gebaut hat.** Bis dahin stand
+  // hier `toHaveCount(0)`, weil der Link sonst auf eine 404 gezeigt hätte. AC-7
+  // ist bedingt formuliert — „genau dann, wenn die Ranglisten-Seite existiert" —,
+  // es ist also dasselbe Kriterium, nur der andere Zweig. Der Test hat als
+  // Stolperdraht ausgelöst, sobald `LEADERBOARD_PAGE_EXISTS` umsprang.
   // **Gespeichert ist zu diesem Zeitpunkt schon.** Seit dem 2026-09-06 schreibt
   // der Server die Zeile, bevor er das Urteil zurückgibt (AC-35) — es gibt keinen
   // Speichern-Aufruf mehr, auf den dieser Test warten könnte. Der Klick führt nur
@@ -96,7 +99,13 @@ test('Kernschleife: Runde spielen bis zum gespeicherten Ergebnis (AC-1, AC-2, AC
   await expect(page.getByText('Runde beendet')).toBeVisible()
   await expect(page.getByText('richtige Antworten in')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Nochmal spielen' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Zur Bestenliste' })).toHaveCount(0)
+  const toLeaderboard = page.getByRole('link', { name: 'Zur Bestenliste' })
+  await expect(toLeaderboard).toBeVisible()
+  // Nur das Ziel prüfen, nicht klicken: Der Test misst danach noch die
+  // persönliche Bestleistung auf dem Startbildschirm, und ein Wechsel auf die
+  // Rangliste würde diesen Faden abschneiden. Dass der Link dort auch ankommt,
+  // prüft `PROJ-3-leaderboard-page-guard.spec.ts` für die Kopfzeile.
+  await expect(toLeaderboard).toHaveAttribute('href', '/leaderboard')
 
   // AC-11 — das Ergebnis wird automatisch gespeichert. Sichtbar wird das über die
   // Gegenprobe: der Hinweis aus EC-3 darf nicht erscheinen, und die Bestleistung

@@ -24,7 +24,7 @@
 |----|---------|-------------|--------|------|---------|
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
-| PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Tasked | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
+| PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Approved | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
 | PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
 
 **Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1)
@@ -133,15 +133,25 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Empfohlen, aber nicht blockierend:** `/e2e-tests` für die Kernschleife — es ist der einzige Weg, die oben benannte Darstellungs-Lücke zu schließen.
 
+## E2E-Schicht für PROJ-3 steht (2026-09-09)
+
+`/e2e-tests PROJ-3` hat vier kritische Journeys geschrieben — von der gespielten Runde in die Rangliste, der neue Spieler ohne gewerteten Lauf, die eigene Zeile außerhalb der Top-5, und die Zeile bei 320 px mit einem 20 Zeichen langen Trainernamen. Alle grün in drei Engines, jede einmal absichtlich gebrochen und mit der richtigen Diagnose rot gesehen. Vollständiger Nachweis in `features/PROJ-3-leaderboard/qa-report.md` → E2E-Tests.
+
+**Damit ist die einzige benannte Prüf-Lücke von PROJ-3 geschlossen:** AC-18 und EC-9 (Responsive unter 640 px, Kürzung eines 20-Zeichen-Namens) standen in **beiden** QA-Läufen als `NICHT GEPRÜFT` und sind jetzt im Browser belegt. Status von PROJ-3 unverändert **Approved** — kein neuer Befund, keine Regression (Playwright 162/162, Lint 0, `tsc` 0).
+
+**Die gleichartige Lücke bei PROJ-2 bleibt offen** (Abschnitt darüber): Sie betrifft die Quiz-Kernschleife und schließt erst ein eigener `/e2e-tests PROJ-2`.
+
 ## Next Available ID: PROJ-5
 
 ## Offen aus dem QA-Lauf 6 zu PROJ-2 (2026-09-08)
 
-**Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
+**Erledigt am 2026-09-08.** Nach dem Merge von `main` in `feat/PROJ-3-leaderboard` liegen Schalter und Fix erstmals gleichzeitig vor; die Messung und die Rot-Gegenprobe stehen in der Tabelle unten bei REG-1. AC-24, AC-43 und EC-16 sind damit am echten dreielementigen Zustand belegt. Der ursprüngliche Text:
+
+> **Nach dem Merge von PROJ-3 nachzuholen — der 320-px-Fix ist nicht unabhängig bestätigt.** AC-24, AC-43 und EC-16 konnten im QA-Lauf nicht geprüft werden: `/qa` hat keinen Browser, **und** der Fall ist auf `feat/PROJ-2-header-320px` gar nicht herstellbar, weil `LEADERBOARD_PAGE_EXISTS` dort auf `false` steht. Die Kopfzeile trägt erst mit PROJ-3 drei Bedienelemente. `tests/PROJ-2-header-narrow.spec.ts` ist elementzahl-unabhängig formuliert und greift dann von selbst — der Lauf ist nach dem Merge einmal auszuführen und das Ergebnis hier festzuhalten.
 
 | # | Punkt | Schwere |
 |---|---|---|
-| REG-1 | Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne: 6 von 7 Tests prüfen eine Kopfzeile mit einem bzw. zwei Bedienelementen. Zeitlich begrenzt, kein Funktionsfehler | Medium |
+| ~~REG-1~~ | ~~Das Regressionsnetz des Kopfzeilen-Fixes hat vor dem PROJ-3-Merge fast keine Zähne~~ — **geschlossen am 2026-09-08** auf `feat/PROJ-3-leaderboard`, nachdem `main` dort hineingemergt wurde. Erstmals liegen Schalter **und** Fix gleichzeitig vor: Die Kopfzeile trägt bei 320 px **drei** Bedienelemente (Wortmarke bis 38, „Bestenliste" bis 183, „Abmelden" bis 310 — alle im Bild), kein waagerechtes Scrollen. **Und der Test kann jetzt scheitern:** Wortmarken-Reduktion entfernt → 2 rot („die Seite ist 334 px breit bei 320 px sichtbar"), zurückgedreht → 7/7 grün | ✅ |
 | BUG-141 | Die Kopfzeilen-Knöpfe sind 36 px hoch; `docs/design-system.md` verlangt 40–46 px (`outline`) bzw. 40 px (`ghost`). Vorbestehend, aber `design.md` und der neue Test schreiben die 36 px jetzt als Untergrenze fest | Low |
 | BUG-142 | Kommentar in `site-header.tsx` behauptet, 13 px sei die kleinste zulässige Textgröße — das gilt nur für Button-Text, nicht allgemein | Low |
 

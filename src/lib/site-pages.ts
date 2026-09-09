@@ -12,13 +12,20 @@
  * Schalter. Deshalb liegt er jetzt hier — **ein** Wert für alle Stellen, die auf
  * dieselbe Seite zeigen.
  *
- * **PROJ-3 baut `/leaderboard` und setzt `LEADERBOARD_PAGE_EXISTS` auf `true`.**
- * Das schaltet Kopfzeile und Ergebnis-Screen gemeinsam frei; es gibt keine
- * zweite Stelle, die dabei vergessen werden könnte.
+ * **PROJ-3 hat `/leaderboard` gebaut; der Schalter steht seit dem 2026-09-08 auf
+ * `true`.** Das schaltet Kopfzeile und Ergebnis-Screen gemeinsam frei; es gibt
+ * keine zweite Stelle, die dabei vergessen werden könnte.
+ *
+ * Beide Kriterien sind bedingt formuliert — PROJ-2 AC-7 und AC-21 sagen „genau
+ * dann, wenn die Ranglisten-Seite existiert". Das Umlegen erfüllt sie also auf
+ * der anderen Seite, statt sie zu brechen. **Geprüft war bis dahin nur der
+ * negative Zweig** (alle QA-Läufe zu PROJ-2 führen `LEADERBOARD_PAGE_EXISTS=false`
+ * ausdrücklich als Beleg); der positive gehört im QA-Lauf zu PROJ-3 belegt —
+ * siehe `features/PROJ-3-leaderboard/tasks.md` → Prüfhinweise.
  *
  * Die Datenschutz- und Impressumsseiten laufen bewusst nicht über diese Datei:
  * Die Fußzeile führt sie in `site-footer.tsx` als Liste (`LEGAL_PAGES`), weil
  * PROJ-4 dort zwei Seiten mit Beschriftung einträgt, nicht einen Schalter
  * umlegt. `register-view.tsx` trägt aus demselben Grund seinen eigenen.
  */
-export const LEADERBOARD_PAGE_EXISTS = false
+export const LEADERBOARD_PAGE_EXISTS = true

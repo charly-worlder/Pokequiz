@@ -244,7 +244,7 @@ Zwei bereits bekannte Deploy-Blocker wirken allerdings auf diese Seite und sind 
 | **Fehler wird als Rückgabewert behandelt, nicht als geworfene Ausnahme** | EC-6 verlangt den Hinweis **innerhalb** der Karte, mit stehender Kopf- und Fußzeile. Eine Ausnahme landet in der Fehlergrenze der Route und ersetzt den ganzen Inhaltsbereich; ein Rückgabewert lässt die Seite entscheiden, welcher Teil ausgetauscht wird | Auf die Fehlergrenze der Route setzen | Der Aufrufer muss den Fehlerzustand behandeln, es gibt keinen stillen Durchfall. Hier ein Vorteil | 2026-09-08 |
 | **„Runde starten" verlinkt auf `/` und startet die Runde nicht selbst** | Der Rundenstart gehört PROJ-2 und ist dort ein serverseitiger Vorgang mit eigenem Zustand. Ihn von der Rangliste aus fernzusteuern hieße, in ein fremdes Feature hineinzuschreiben — über eine Adresse mit Sonderparameter, die dann zwei Features gehört | Ein Parameter an `/`, der die Runde sofort startet | Der Spieler klickt zweimal: einmal hier, einmal auf dem Startbildschirm. AC-14 verlangt die Aktion an dieser Stelle, nicht das Ausbleiben des zweiten Klicks | 2026-09-08 |
 | **Leerzustand und „noch kein gewerteter Lauf" sind eine Karte, nicht zwei** | Ist niemand gewertet, ist auch der Betrachter nicht gewertet — AC-17 und AC-9 beschreiben denselben Bildschirm aus zwei Blickwinkeln. Zwei gestapelte Hinweise sagten dem Spieler zweimal dasselbe | Beide getrennt rendern | Der eine Satz des Leerzustands muss die Aussage von AC-9 tragen („mindestens eine Frage richtig beantworten"). Beim Formulieren nicht wegzukürzen | 2026-09-08 |
-| **Skalierung bleibt bei der einfachen Berechnung; kein Zwischenspeicher** | Die Kosten wachsen mit der **Zahl der Spieler**, nicht mit der Zahl ihrer Runden: Ein Spieler mit dreihundert Läufen trägt eine Zeile bei, weil der vorhandene Index `runs_profile_best_idx` genau in dieser Reihenfolge liegt (Profil, Serie absteigend, Dauer aufsteigend). Das ist EC-7, und es ist derselbe Index, den PROJ-2 schon benutzt — es kommt keiner dazu | Eine gepflegte Ranglisten-Tabelle oder ein Schnappschuss | Ab mehreren zehntausend Spielern würde die Sortierung spürbar. Diese Größenordnung ist weit weg, und **AC-21 verbietet den Schnappschuss ausdrücklich**: Er wäre eine Kopie personenbezogener Daten mit eigener Aufbewahrungsfrage. Wenn es je so weit kommt, ist das ein eigenes Feature mit eigener Datenschutzprüfung | 2026-09-08 |
+| **Skalierung bleibt bei der einfachen Berechnung; kein Zwischenspeicher** | Der vorhandene Index `runs_profile_best_idx` (Profil, Serie absteigend, Dauer aufsteigend) liefert die Reihenfolge, es gibt also **keine Sortierung des gesamten Bestands** — nur eine Nachsortierung innerhalb jeder Spieler-Gruppe. Herauskommt eine Zeile je Spieler, gleichgültig wie viele Runden er hat (EC-7). Es ist derselbe Index, den PROJ-2 schon benutzt — es kommt keiner dazu. **Beim Bau am 2026-09-08 gemessen, nicht angenommen:** 100.000 Runden auf 4.008 Spieler → `Index Scan using runs_profile_best_idx`, `Presorted Key: profile_id, streak, duration_ms`, Gesamtlauf 54 ms, die Funktion selbst dreimal 46,7 / 45,6 / 46,0 ms — gegen eine Zusage von einer Sekunde | Eine gepflegte Ranglisten-Tabelle oder ein Schnappschuss | **Der Scan wandert über jede gewertete Zeile** (gemessen: 99.900 gelesen, 4.008 ausgegeben). Die Kosten wachsen also mit der Zahl der **Runden**, nur mit kleinem Faktor und ohne Sortier-Spitze — eine frühere Fassung dieser Zeile behauptete, sie wüchsen allein mit der Zahl der Spieler; das war zu stark und ist nach der Messung korrigiert. Irgendwann wird das spürbar; diese Größenordnung ist weit weg, und **AC-21 verbietet den Schnappschuss ausdrücklich** — er wäre eine Kopie personenbezogener Daten mit eigener Aufbewahrungsfrage. Wenn es je so weit kommt, ist das ein eigenes Feature mit eigener Datenschutzprüfung | 2026-09-08 |
 | **Kein Zwischenspeichern der Seite, ausdrücklich festgeschrieben** | AC-11 verlangt den Stand im Moment der Anfrage. Die Voreinstellung dieses Projekts liefert das bereits (die Seite liest die Sitzung, und Next 16 cacht ohne `cacheComponents` keine Datenzugriffe). Der Punkt steht trotzdem hier, weil eine später hinzugefügte Zeile ihn lautlos umkehren würde — und der Schaden erst nach einer Rekordrunde auffiele | Auf die Voreinstellung vertrauen und nichts sagen | Eine Zeile mehr im Vertrag zwischen Design und Bau | 2026-09-08 |
 
 ---
@@ -254,3 +254,53 @@ Zwei bereits bekannte Deploy-Blocker wirken allerdings auf diese Seite und sind 
 - [x] **~~Der Vertrag trägt die gestrichene Verifizierung noch.~~** → **Erledigt am 2026-09-08 mit `/refine PROJ-3`**: Die Technical Requirement ist neu gefasst (gewertet wird jeder Lauf mit Serie ≥ 1), die alte Decision-Log-Zeile als aufgehoben markiert und die aufhebende Entscheidung mit Begründung ergänzt. Keine AC- oder EC-ID angefasst.
 - [ ] **Gegen ein echt spielendes Skript hat PROJ-3 kein Mittel.** Die Bilder kommen zwar unter einem Token statt unter der Pokémon-Nummer (PROJ-2, AC-32), aber ein Angreifer kann sie einmalig gegen die öffentlichen Sprites abgleichen und danach fehlerfrei antworten; der Server misst dann eine echte, sehr kurze Zeit. Ein Gegenmittel läge in keinem Fall in PROJ-3, sondern in PROJ-2 (Untergrenze für die Antwortzeit, Drosselung der Runden je Konto, CAPTCHA) — und jedes davon wurde dort bereits einmal bewusst abgelehnt. Zu bewerten, sobald es echte Nutzung gibt und die Rangliste überhaupt etwas zu gewinnen bietet.
 - [ ] **Zwei Zeitformate für dieselbe Dauer.** Ergebnis-Screen `1:23`, Rangliste `01:23,4`. Beide sind vertragsgemäß (PROJ-2 AC-7 bzw. PROJ-3 AC-1). Falls das im Betrieb auffällt, ist die saubere Auflösung ein `/refine PROJ-2` auf das Zehntel — nicht ein stiller Eingriff aus PROJ-3 heraus.
+
+---
+
+## Notizen aus dem Bau (2026-09-08)
+
+Der Bau hat drei Dinge ergeben, die beim Entwurf nicht sichtbar waren. Alle drei
+sind gemessen, nicht vermutet.
+
+**1. Die Skalierungs-Aussage war zu stark und ist korrigiert.** Siehe die Zeile
+„Skalierung bleibt bei der einfachen Berechnung" oben: Der Index liefert die
+Reihenfolge, der Scan wandert aber über jede gewertete Zeile. 100.000 Runden auf
+4.008 Spieler → 46 ms.
+
+**2. Ein E2E-Test kann die zweite Zugangsschranke nicht prüfen.** `src/proxy.ts`
+fängt die ausgeloggte Anfrage ab, bevor `page.tsx` läuft — entfernt man die
+Umleitung in der Seite, bleibt der Browser-Test grün. `design.md` sagt aber zwei
+unabhängige Prüfungen zu, und `.claude/rules/security.md` verlangt sie. Deshalb
+kam `src/app/leaderboard/page.test.tsx` dazu: derselbe Nachweis eine Ebene
+tiefer, mit Rot-Gegenprobe. Die Lehre ist allgemein — **eine Schranke, die hinter
+einer anderen liegt, braucht einen Test auf ihrer eigenen Ebene**, sonst ist ihr
+Vorhandensein eine Behauptung.
+
+**3. Der Bestenlisten-Zugang sprengt die Kopfzeile unter 375 px.** Der Befund
+gehört PROJ-2 (die Shell) und ist mit Messreihe in `tasks.md` → „Befund aus dem
+Bau, der PROJ-2 gehört" festgehalten. Er verletzt kein AC von PROJ-3, trifft aber
+jede Route der App und ist per `/refine PROJ-2` zu entscheiden.
+
+**Ebenfalls beim Zusammensetzen aufgefallen:** Der Leerzustand trägt laut AC-17
+selbst einen „Runde starten"-Button; der zusätzliche Seiten-Button aus AC-14
+hätte daneben zwei identische Primär-Aktionen ergeben. Er entfällt deshalb genau
+in diesem einen Zustand.
+
+## Nachtrag: der Spaltenüberschrift-Fix (2026-09-08)
+
+**Der Befund.** Bei 320 px lief die Spaltenüberschrift „TRAINER" aus ihrer nur rund 45 px breiten Spalte in den Spaltenabstand hinein und berührte „SERIE" — auf dem Bildschirm stand **„TRAINERSERIE"**. Gefunden wurde das auf einem Bildschirmfoto, nicht von einem Test: Beide Suiten waren zu diesem Zeitpunkt grün.
+
+**Der Fix.** Unter 400 px heißt die Spalte **„Name"** statt „Trainer". Zusätzlich steht `truncate` an der Zelle — nicht für diesen Fall, sondern für die Fehlerklasse: Eine andere Schrift oder ein Zoomfaktor verschiebt die Rechnung, und dann soll die Überschrift abgeschnitten werden statt in die Nachbarspalte zu laufen. Gemessen bei 320 px: Text 45 px in 45 px Spalte, Lücke zur Serie-Spalte unverändert 12 px, kein Überlauf.
+
+**Erwogen und verworfen:**
+- *Die Zeitspalte verschmälern,* um der Namensspalte Platz zu geben. Sie ist nicht großzügig — die breiteste darstellbare Zeit („100:00,0") füllt ihre 88 px **exakt** aus, gemessen. Sie zu kürzen hieße Daten abzuschneiden statt einer Beschriftung.
+- *Die Laufweite verringern.* Brachte 8 px; die Überschrift wäre trotzdem abgeschnitten dastehen geblieben (49 px Text in 45 px Spalte).
+- *Die Kopfzeile der Liste unter 400 px ganz ausblenden.* Wäre konsistent mit der Wortmarke, kostet aber die Spaltenbedeutung — und „Serie" und „Zeit" sind beide Zahlen.
+
+### Zwei Lehren aus dem Test dazu
+
+**1. Element-Rechtecke messen den Fehler nicht.** Die erste Fassung des Tests verglich die Rechtecke der Rasterzellen — und blieb grün, als der Fehler zur Gegenprobe wieder eingebaut wurde. Der überlaufende Text wird **außerhalb** seiner Zelle gemalt; die Zelle behält ihre Breite. Erst ein `Range` über den Textinhalt liefert das Rechteck der Glyphen und ragt mit ihnen heraus. Damit meldet die Gegenprobe jetzt: „der Text ‚Trainer' (endet 144) an ‚Serie' (beginnt 144) — die Überschriften berühren sich".
+
+**2. Auf die Überschrift „Weltrangliste" zu warten ist kein Signal, dass die Liste steht.** `loading.tsx` rendert dieselbe Überschrift wie die fertige Seite — bewusst, damit beim Eintreffen der Daten nichts springt (AC-16). Die erste Testfassung hat deshalb die **Skelettzeilen** vermessen und leere Texte der Breite 0 gefunden. Der Test wartet jetzt darauf, dass die Kopfzeile der Liste Text enthält.
+
+**Nebenbefund, nicht behoben:** In der abgesetzten eigenen Zeile konkurriert der „Du"-Marker mit dem Trainernamen um dieselbe Spalte; bei 320 px bleibt vom Namen wenig übrig (beobachtet: „H…"). Kein Kriterienbruch — AC-18 und EC-9 verlangen, dass der Name kürzt und die Zahlen sichtbar bleiben, und das tut er. In der **eigenen** Zeile ist der Name zudem die Information, die der Leser am wenigsten braucht. Als Beobachtung festgehalten, nicht als Mangel.

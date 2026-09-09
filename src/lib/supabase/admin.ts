@@ -12,12 +12,29 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
  * Build abbrechen, falls diese Datei je aus einer Client-Komponente importiert
  * wird.
  *
- * **Wofür er hier gebraucht wird, und wofür nicht.** Einzige Aufgabe ist der
- * Fehlversuchszähler aus `0003_auth_throttle.sql`. Dessen Funktionen sind
- * absichtlich nur für `service_role` ausführbar: Könnte der Browser sie selbst
- * aufrufen, wäre die Drosselung eine Aussperr-Waffe — fünf Aufrufe mit fremder
- * Adresse, und der Betroffene kommt nicht mehr an sein Konto. Alles andere in
- * dieser App läuft weiter über den normalen Client mit RLS.
+ * **Wofür er hier gebraucht wird, und wofür nicht.** Vier Aufrufer, alle mit
+ * demselben Grund: Sie rufen Datenbankfunktionen auf, die absichtlich **nur für
+ * `service_role`** ausführbar sind — könnte der Browser sie selbst aufrufen,
+ * wäre der jeweilige Schutz wirkungslos oder sogar umkehrbar.
+ *
+ *   - `auth/throttle.ts` — der Fehlversuchszähler (`0003`). Aus dem Browser
+ *     aufrufbar wäre die Drosselung eine Aussperr-Waffe: fünf Aufrufe mit fremder
+ *     Adresse, und der Betroffene kommt nicht mehr an sein Konto.
+ *   - `auth/trainer-name.ts` — die Verfügbarkeitsauskunft (`0006`). Freigegeben
+ *     wäre sie ein bequemes Werkzeug, die Trainernamenliste abzuklopfen.
+ *   - `quiz/round-state.ts` — die Rundenfunktionen (`0009`, `0012`, `0013`). Der
+ *     Rundenzustand enthält die **Lösung** der offenen Frage; er ist deshalb für
+ *     niemanden sonst lesbar (AC-32).
+ *   - `leaderboard/queries.ts` — die Ranglisten-Funktion (`0015`). Sie umgeht
+ *     RLS, um fremde Bestläufe herauszugeben; genau deshalb darf nur der Server
+ *     sie aufrufen (PROJ-3, AC-19).
+ *
+ * Alles andere in dieser App läuft weiter über den normalen Client mit RLS.
+ *
+ * *(Diese Aufzählung stand bis zum 2026-09-08 als „Einzige Aufgabe ist der
+ * Fehlversuchszähler" da und war seit den Rundenfunktionen falsch. PROJ-3 → T2
+ * verlangte die Korrektur ausdrücklich, sie unterblieb beim Bau und fiel erst im
+ * QA-Lauf auf.)*
  */
 export function createAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
