@@ -25,9 +25,18 @@
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Approved | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
-| PROJ-4 | Datenschutz & Kontolöschung | Datenschutzerklärung und die Möglichkeit, das eigene Konto samt Ranglisten-Einträgen zu löschen | Roadmap | — | 2026-08-30 |
+| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | Planned | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
 
-**Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1)
+**Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1, PROJ-2 und PROJ-3)
+
+### Zuschnitt von PROJ-4 — geändert am 2026-09-09
+
+PROJ-4 hieß bis dahin „Datenschutz & Kontolöschung" und trug vier Dinge auf einmal. `/write-spec` hat den Zuschnitt auf Entscheidung des Nutzers geändert:
+
+- **Im Spec ist nur noch die Kontolöschung** (samt `/account`). Sie ist der einzige Teil mit Datenbankzugriff, scharfer Aktion und Missbrauchsfläche — also der einzige, den ein AC → Task → Test-Zyklus wirklich absichert.
+- **`/privacy` und `/imprint` werden ohne Spec-Zyklus direkt geschrieben.** Statische Rechtstexte, öffentlich, keine Anmeldung, keine Datenbank. **Preis, bewusst getragen:** `/audit` wird sie als Code ohne Feature melden, und die Zusagen darin (Löschumfang, Sicherungskopien, Rangliste) sind von keinem Test gedeckt — ihre Übereinstimmung mit PROJ-4 ist Handarbeit. Diese Zeile ist der Ort, an dem das festgehalten ist.
+- **Der Datenexport nach Art. 20 DSGVO entfällt** und wird durch die Bildschirmanzeige auf `/account` ersetzt. Im Vertrag als **EC-12** und im Decision Log begründet, damit es eine Entscheidung bleibt und nicht zu einer Lücke verwittert.
+- **Verantwortlicher ist Worlder.** Impressum und Datenschutzerklärung bekommen **Platzhaltertext**, weil die App vorerst nicht live geht — siehe Deploy-Blocker.
 
 <!-- Add features above this line -->
 
@@ -54,6 +63,8 @@
 | PROJ-1 | **Kontoexistenz weiterhin über zwei andere Kanäle bestimmbar** (BUG-88/BUG-89, Medium) — nicht mehr über die Reset-Antwort, aber über die **Antwortzeit** (durch die Server Action gemessen: Median 120,3 vs. 71,1 ms, Blindtest **20/20** bzw. **30/30** bei **einer** Anfrage je Adresse, ~10 Adressen/s) und über das **Registrierungsformular** (deterministisch, **30/30**, 6,72 Adressen/s, ohne Kontoanlage — Folge von AC-3). Kein Codefehler im engeren Sinn; entwertet aber die Low-Einstufung von **EC-9** zum zweiten Mal.<br>**✅ Entschieden am 2026-09-06 durch `/refine`:** EC-9 steht jetzt auf **Medium** statt Low, EC-11 trägt die durch die Server Action gemessenen Zahlen, EC-4 die richtigen Ausheilzeiten je Vorgang. Neu im Vertrag festgehalten: Begründungen für EC-9 dürfen sich **nicht mehr auf die Vertraulichkeit von Adressen stützen** — AC-3 gibt die Kontoexistenz bewusst preis, und genau daran sind drei Begründungen nacheinander gescheitert. **Verhalten unverändert** — bewusst getragen, korrekt benannt | ✅ dokumentiert |
 | PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen. **Am 2026-09-07 zur Laufzeit reproduziert:** mit `Origin: https://evil.example.com` allein → HTTP 500 „Invalid Server Actions request."; **zusätzlich mit `X-Forwarded-Host: evil.example.com`** → Runde gestartet | beim Deploy |
 | PROJ-2 | **Aufbewahrungsfrist aus AC-41 hängt an `pg_cron` im gehosteten Projekt** — die offenen `[user]`-Aufgaben **T36** und **T37**. Zu erledigen: Extension im Dashboard einschalten (Database → Extensions), prüfen, dass das Projekt nicht wegen Inaktivität pausiert ist (Project Settings), danach den Job im gehosteten Projekt nachmessen. **Lokal belegt** (Job lief, `DELETE 1`).<br>~~**BUG-124** — `0010` bricht bei verweigerter Erweiterung die ganze Migration ab~~ — **behoben am 2026-09-07**: Der `create extension` steckt jetzt in einem `do`-Block, der den Fehlschlag zu einer Warnung macht und nur den Aufräum-Lauf überspringt; `supabase db push` scheitert dadurch nicht mehr hart. Die rückwirkende Änderung an `0010` war zulässig, weil kein Feature auf `Deployed` steht. Über zwei vollständige `db reset` von 0001–0013 verifiziert | beim Deploy |
+| PROJ-4 | **Impressum und Datenschutzerklärung tragen nur Platzhaltertext** — bewusste Entscheidung vom 2026-09-09, weil die App vorerst nicht live geht (Verantwortlicher ist Worlder, die Anschrift bleibt ungenannt). Vor einem Livegang **zwingend** durch echte Angaben zu ersetzen: Ein unvollständiges Impressum ist nach DDG abmahnfähig, und eine Datenschutzerklärung mit Platzhaltern erfüllt Art. 13 DSGVO nicht | beim Deploy, **zwingend** |
+| PROJ-4 | **Aufbewahrungsfrist der Sicherungskopien ist unbekannt** (spec.md → EC-9). Die Löschung wirkt sofort im laufenden Betrieb, aber Sicherungskopien werden nicht rückwirkend bearbeitet. Die Datenschutzerklärung darf „vollständig gelöscht" deshalb nicht ohne diesen Zusatz behaupten. Die Zahl steht erst fest, wenn Hosting-Anbieter und Supabase-Tarif gewählt sind | beim Deploy |
 
 
 ## Bekannte Restrisiken — PROJ-1 (Stand 2026-09-06)
