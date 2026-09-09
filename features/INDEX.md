@@ -25,7 +25,7 @@
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Approved | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
-| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | Tasked | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
+| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | In Progress | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
 
 **Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1, PROJ-2 und PROJ-3)
 
