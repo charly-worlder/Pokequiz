@@ -25,7 +25,7 @@ Die beiden Fragen, für die dieser Entwurf angefordert wurde, haben eine erfreul
 |   |   +-- Seitentitel "Dein Konto"        (im Inhaltsbereich, nicht in der Kopfzeile)
 |   |   +-- AccountDataCard                  [neu]  → AC-2, AC-3, AC-6, AC-7, AC-19
 |   |   |   +-- Wertzeile x5   (E-Mail, Trainername, Dabei seit, Runden, Bester Lauf)
-|   |   |   +-- Vollständigkeits-Satz        → AC-19
+|   |   |   +-- Auskunfts-Satz (ohne Vollständigkeitszusage) → AC-19
 |   |   +-- DangerZoneCard                   [neu]  → AC-8
 |   |       +-- Erklärtext (was verschwindet)
 |   |       +-- Button "Konto löschen"  (destructive)
@@ -187,7 +187,7 @@ Die Skill-Regel verlangt, für jeden Edge Case über Gleichzeitigkeit, Zustandsw
 
 | Edge Case | Was die Zusage trägt |
 |---|---|
-| **EC-1** — Doppelklick, zwei Tabs | Der zweite Aufruf findet in Schritt 2 keine gültige Sitzung mehr (das Konto existiert nicht) und leitet auf `/login` um. Es braucht **keinen** Idempotenz-Schlüssel und keine Sperre: Der Zustand „gelöscht" ist selbst die Abwehr, weil er den Vorgang unerfüllbar macht. Gewinnt ein Aufruf das Rennen um die Zeile, bekommt der andere von Postgres den Fehler „nichts gelöscht", was auf denselben Ausgang führt |
+| **EC-1** — Doppelklick, zwei Tabs | **Zwei verschiedene Wege, und der zweite war bis zum 2026-09-10 falsch beschriftet.** *Nacheinander:* Der zweite Aufruf findet in Schritt 2 keine gültige Sitzung mehr und leitet auf `/login` um. *Gleichzeitig:* Beide Aufrufe kommen an Sitzungs- und Passwortprüfung vorbei; der Verlierer bekommt vom Auth-Dienst `404 / user_not_found` — und das wird seit dem 2026-09-10 als **Erfolg** behandelt (abmelden, Bestätigung), nicht als Fehler. Es braucht **keinen** Idempotenz-Schlüssel: Der Zustand „gelöscht" ist selbst die Abwehr |
 | **EC-2** — Runde in anderem Tab | Der Rundenzustand ist mitgelöscht (Kaskade). Der andere Tab bekommt bei der nächsten Handlung entweder die Umleitung auf `/login` (Sitzung ungültig) oder den bereits gebauten `no-round`-Zustand aus PROJ-2. Beide Wege existieren schon; PROJ-4 baut hier nichts |
 | **EC-3** — Teilausfall | **Eine** Transaktion. Die Kaskade ist Teil des DELETE, nicht eine Folge von Aufrufen. Es gibt keinen Zwischenstand, in dem das Profil weg und die Runden noch da wären — er ist nicht herstellbar, nicht nur unwahrscheinlich |
 | **EC-8** — Verbindungsabbruch | Dieselbe Transaktion. Sie ist entweder festgeschrieben oder zurückgerollt; ein abgebrochener Browser ändert daran nichts. Der Nutzer sieht beim nächsten Aufruf einen der beiden eindeutigen Zustände |
@@ -346,3 +346,18 @@ Die Adressvergleiche sind trotzdem geblieben — mit der engeren, zutreffenden B
 | `flow_state`-Trigger entfernt | rot auf „offene Reset-Vorgänge" |
 
 Nach dem Zurückdrehen je 6/6 grün. Vollständiger Durchlauf: Lint 0, `tsc` 0, Unit 310/310, Build Exit 0, E2E **203 grün / 1 übersprungen** in drei Engines, Migrationen 0001–0020 der Reihe nach.
+
+## Nachtrag 3: BUG-4-32 behoben (2026-09-10)
+
+**Der Befund.** Zwei gleichzeitige Löschaufrufe (Doppelklick, zwei Tabs): Beide kommen an Sitzungs- und Passwortprüfung vorbei, einer gewinnt das Rennen — und der Verlierer bekam die Meldung **„Dein Konto ist unverändert"**, während es gelöscht war. QA-Lauf 4 hat das in **2 von 3 Rennen** reproduziert. Eine falsche Auskunft bei einer unumkehrbaren Handlung, und EC-1 verlangt ausdrücklich *keine* Fehlermeldung.
+
+**Die Behebung** unterscheidet jetzt zwei Fehlschläge, die vorher in einen Topf fielen. Der Unterscheider wurde **am laufenden Auth-Dienst gemessen**, nicht angenommen: Die Löschung eines nicht existierenden Kontos ergibt `status 404` und `code 'user_not_found'`; jeder andere Fehler ist ein echter Fehlschlag. Geprüft wird **beides**, weil die zwei Felder aus verschiedenen Ebenen der Bibliothek stammen und eines davon in einer künftigen Fassung wegfallen kann.
+
+| Fall | Verhalten |
+|---|---|
+| Konto war schon weg (`404 / user_not_found`) | Abmelden und `/login?geloescht=1` — **derselbe Ausgang wie beim Gewinner**. Keine Erstattung: Es gibt nichts zu wiederholen |
+| Echter Fehlschlag (alles andere) | Unverändert: technische Meldung, ein Versuch erstattet, Konto steht |
+
+**Drei Mutationen, jede einzeln rot geprüft:** Unterscheidung ganz entfernt (der alte Zustand) → die beiden neuen Tests rot · alles gilt als „war schon weg" → die Fehlschlag-Tests rot · nur `status` geprüft, `code` weggelassen → der Code-Test rot.
+
+**Eine Hälfte bleibt bewusst offen und ist keine Nachlässigkeit.** Ruft der zweite Tab die Löschung erst auf, **nachdem** die Sitzung ungültig geworden ist, landet er auf `/login` **ohne** die Bestätigung `?geloescht=1`. Um dort „dein Konto wurde gelöscht" zu zeigen, müsste der Server unterscheiden, ob die Sitzung *abgelaufen* ist (EC-4 — dann wäre die Meldung falsch) oder ob das *Konto* weg ist (EC-1). Das ginge nur, indem er die Kennung aus dem **ungeprüften** Token liest — genau das, was dieses Projekt seit BUG-3 nicht tut und woran AC-21 hängt. Der Preis ist eine fehlende Bestätigung in einem Nebentab; der Gegenwert ist, dass kein Schutzpunkt je wieder einem Token glaubt, ohne zu fragen.

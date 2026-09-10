@@ -10,10 +10,17 @@ import type { AccountData } from '@/lib/account/queries'
  * ein Feld an dieser Stelle würde eine Möglichkeit vortäuschen, die es nicht
  * gibt.
  *
- * **Der Satz am Ende ist eine Zusage, kein Beiwerk** (AC-19, Art. 15 DSGVO). Er
- * behauptet Vollständigkeit — er stimmt also genau so lange, wie kein Feature ein
- * weiteres personenbezogenes Feld einführt, ohne diese Liste mitzuziehen. Genau
- * dafür prüft der Test die **Feldliste**, nicht die Darstellung.
+ * **Der Satz am Ende ist eine Zusage, kein Beiwerk** (AC-19, Art. 15 DSGVO) — und
+ * er behauptet seit dem 2026-09-10 **ausdrücklich keine Vollständigkeit** mehr.
+ * Er zählt auf, was hier steht, und sagt, dass daneben technischer
+ * Betriebszustand existiert, der mit der Löschung verschwindet (AC-17). Die
+ * frühere Fassung („das ist alles") war schlicht falsch; vier QA-Läufe haben an
+ * ihr vier verschiedene Fehler gefunden.
+ *
+ * **Was der Test dazu leistet und was nicht:** Er hält die Feldliste des Typs
+ * `AccountData` fest und schlägt an, wenn sie wächst. Ein neues Feld in der
+ * **Datenbank** sieht er nicht — er kennt sie nicht. Diese Grenze steht so in
+ * `design.md` → Prüfhinweise, damit niemand mehr annimmt, sie sei enger.
  */
 
 /** Registrierdatum als `TT.MM.JJJJ` — bewusst ohne Uhrzeit. */

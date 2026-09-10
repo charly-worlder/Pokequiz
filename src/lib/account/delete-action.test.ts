@@ -44,7 +44,7 @@ function setup(
     user?: { id: string; email: string } | null
     throttle?: { allowed: boolean; blockedBy: 'connection' | 'account' | null }[]
     passwordOk?: boolean
-    deleteError?: { message: string } | null
+    deleteError?: { message: string; status?: number; code?: string } | null
   } = {}
 ) {
   const {
@@ -192,6 +192,48 @@ describe('deleteAccountAction', () => {
     // sonst tippt der Nutzer sein richtiges Passwort neu ein.
     expect(result.error).toContain('nicht wegen deines Passworts')
     expect(result.fieldErrors).toBeUndefined()
+  })
+
+  /**
+   * **BUG-4-32.** Zwei gleichzeitige Aufrufe: Beide kommen an Sitzungs- und
+   * Passwortprüfung vorbei, einer gewinnt. Der Verlierer bekam bis zum
+   * 2026-09-10 „Dein Konto ist unverändert" — während es gelöscht war. Eine
+   * falsche Auskunft bei einer unumkehrbaren Handlung, und EC-1 verlangt
+   * ausdrücklich *keine* Fehlermeldung.
+   */
+  it('behandelt „war schon weg" als Erfolg, nicht als Fehler (EC-1)', async () => {
+    const { calls } = setup({ deleteError: { message: 'User not found', status: 404 } })
+
+    await expect(deleteAccountAction({}, form({ password: 'richtig' }))).rejects.toThrow(
+      'REDIRECT:/login?geloescht=1'
+    )
+
+    // Derselbe Ausgang wie beim Gewinner: abgemeldet, Bestätigung.
+    expect(calls).toContain('signOut:local')
+    // **Keine Erstattung** — es gibt nichts zu wiederholen.
+    expect(calls).not.toContain('refund')
+  })
+
+  it('erkennt „war schon weg" auch am Fehlercode statt am Status (EC-1)', async () => {
+    // `status` und `code` stammen aus zwei Ebenen der Bibliothek; fällt eine
+    // weg, muss die andere weiter tragen.
+    setup({ deleteError: { message: 'User not found', code: 'user_not_found' } })
+
+    await expect(deleteAccountAction({}, form({ password: 'richtig' }))).rejects.toThrow(
+      'REDIRECT:/login?geloescht=1'
+    )
+  })
+
+  it('unterscheidet den echten Fehlschlag weiterhin davon (EC-3)', async () => {
+    // Abgrenzung: Ein Datenbankfehler ist **kein** „war schon weg" — hier muss
+    // die technische Meldung kommen und der Versuch erstattet werden.
+    const { calls } = setup({ deleteError: { message: 'connection refused', status: 500 } })
+
+    const result = await deleteAccountAction({}, form({ password: 'richtig' }))
+
+    expect(result.error).toBe(DELETE_FAILED_MESSAGE)
+    expect(calls).toContain('refund')
+    expect(calls).not.toContain('signOut:local')
   })
 
   it('meldet sich bei fehlender Sitzung ab, statt zu scheitern (EC-1, EC-4)', async () => {

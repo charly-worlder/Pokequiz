@@ -141,12 +141,43 @@ export async function deleteAccountAction(
   // `on_auth_user_deleted` die Zählerzeilen der Adresse. Es gibt keinen
   // Zwischenzustand — belegt in `tests/PROJ-4-deletion-cascade.spec.ts`, in
   // beide Richtungen.
+  //
+  // **Zwei Arten von Fehlschlag, die nichts miteinander zu tun haben** (BUG-4-32,
+  // QA-Lauf 4). Klickt jemand zweimal schnell oder hat er zwei Tabs offen,
+  // laufen zwei Aufrufe gleichzeitig: Beide kommen an der Sitzungsprüfung und an
+  // der Passwortprüfung vorbei, einer gewinnt das Rennen — und der andere bekam
+  // bis zum 2026-09-10 die Meldung „Dein Konto ist unverändert". **Es war
+  // gelöscht.** Gemessen: 2 von 3 Rennen. Eine falsche Auskunft bei einer
+  // unumkehrbaren Handlung, und EC-1 verlangt ausdrücklich *keine*
+  // Fehlermeldung.
+  //
+  // Der Auth-Dienst unterscheidet die Fälle sauber — nachgemessen, nicht
+  // angenommen: ein Konto, das es nicht (mehr) gibt, ergibt
+  // `status 404 / code 'user_not_found'`; alles andere ist ein echter
+  // Fehlschlag. Geprüft wird **beides**, weil `status` und `code` aus zwei
+  // verschiedenen Ebenen der Bibliothek stammen und eine davon in einer
+  // künftigen Fassung wegfallen kann.
   let deleteFailed = false
+  let alreadyGone = false
   try {
     const { error } = await createAdminClient().auth.admin.deleteUser(user.id, false)
-    deleteFailed = Boolean(error)
+    if (error) {
+      alreadyGone = error.status === 404 || error.code === 'user_not_found'
+      deleteFailed = !alreadyGone
+    }
   } catch {
     deleteFailed = true
+  }
+
+  // Das Konto war schon weg — für den Nutzer ist das **kein** Fehler, sondern
+  // genau das Ergebnis, das er wollte. Also derselbe Ausgang wie beim Gewinner
+  // des Rennens: abmelden und mit der Bestätigung auf `/login` (EC-1, AC-12).
+  //
+  // **Keine Erstattung hier.** Sie gehört zum technischen Fehlschlag, bei dem
+  // der Nutzer es erneut versuchen muss. Hier gibt es nichts zu wiederholen.
+  if (alreadyGone) {
+    await supabase.auth.signOut({ scope: 'local' })
+    redirect('/login?geloescht=1')
   }
 
   if (deleteFailed) {

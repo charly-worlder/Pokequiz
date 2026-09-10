@@ -24,11 +24,13 @@ describe('AccountDataCard', () => {
   })
 
   /**
-   * **Der Vollständigkeits-Test, und er prüft die Feldliste — nicht die Optik.**
+   * **Der Feldlisten-Test — er prüft den Typ, nicht die Optik und nicht die Datenbank.**
    *
-   * AC-19 sagt zu, dass diese Seite *alles* zeigt, was gespeichert ist. Diese
-   * Zusage bricht nicht dadurch, dass jemand hier etwas ändert, sondern dadurch,
-   * dass anderswo ein Feld dazukommt und niemand hierher zurückkehrt. Der Test
+   * AC-19 sagt seit dem 2026-09-10 **nicht** mehr zu, dass die Seite alles zeigt.
+   * Was hier festgehalten wird, ist die Feldmenge von `AccountData`: Wächst der
+   * Typ, wird der Test rot und zwingt zur Entscheidung, ob das neue Feld
+   * angezeigt gehört. Ein Feld, das nur in der **Datenbank** dazukommt, sieht er
+   * per Konstruktion nicht. Der Test
    * hält deshalb die Feldmenge von `AccountData` fest: Wächst der Typ, wird er
    * rot und zwingt zur Entscheidung, ob das neue Feld angezeigt gehört.
    */
