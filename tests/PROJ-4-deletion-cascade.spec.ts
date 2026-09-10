@@ -378,7 +378,13 @@ test.describe('PROJ-4 — Löschkette', () => {
       expect(await countRows('active_runs', player.userId), 'laufende Runde bleibt').toBe(1)
       expect(await countThrottleKeys(player.accountKeys), 'Zählerzeilen bleiben').toBe(4)
     } finally {
+      // Trigger **und** Funktion — bis zum 2026-09-10 stand hier nur der
+      // Trigger, und `public.proj4_fail_delete` blieb nach jedem Lauf in der
+      // Datenbank stehen (im QA-Lauf 5 als Low vermerkt). Ein Testaufbau, der
+      // sich nur halb abräumt, hinterlässt in einer geteilten Datenbank auf
+      // Dauer mehr Spuren als das Feature selbst.
       await runSql('drop trigger if exists proj4_fail_delete_trg on auth.users;')
+      await runSql('drop function if exists public.proj4_fail_delete();')
       await admin.auth.admin.deleteUser(player.userId)
     }
   })

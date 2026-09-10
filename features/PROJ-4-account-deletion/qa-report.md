@@ -169,3 +169,46 @@ Eine Bahn hat Zählerzeilen im Bereich `203.0.113.5x` gelöscht und dabei mögli
 **Eine Empfehlung bleibt:** BUG-4-34 — ein Zeichen im Code, das im Zweifel eine falsche Löschbestätigung erzeugt. Es steht als Deploy-Blocker in `features/INDEX.md`, weil die Fehlrichtung „offen" statt „geschlossen" ist.
 
 **Und drei Zusagen sind schneller gewachsen als ihre Prüfung:** Die Drosselungszahl aus AC-15, der Wortlaut aus AC-19 und der echte Fehlerpfad sind von keinem Unit-Test gepinnt — alle drei in diesem Lauf per Mutation gemessen, alle drei blieben grün. Das ist kein aktiver Fehler, sondern das Netz, das beim nächsten Umbau fehlen wird.
+
+---
+
+## Nachtrag vom 2026-09-10 — beim Abschluss gefunden: BUG-4-35
+
+**Anlass war kein Testlauf, sondern das Aufräumen.** Vor dem Löschen der 554 Testkonten aus der Entwicklungsdatenbank wurde nachgezählt, was am Ende der Sitzung noch an personenbezogenen Spuren übrig war. Antwort: 21 Zeilen — und sie stammen alle aus derselben Quelle.
+
+### Der Befund
+
+`auth.audit_log_entries` enthielt **21 `user_deleted`-Zeilen mit E-Mail-Adresse und Konto-Kennung im Klartext**, sämtlich aus den **25 gleichzeitigen Rennen** dieses Laufs (`qa5-race1` bis `qa5-race25`).
+
+**Die Gegenprobe macht den Befund scharf:** Aus allen übrigen rund 530 Löschungen der Sitzung — Einzelpfad, über die Server Action wie über den Administrationszugang — blieb **keine einzige Zeile** stehen. Die Bereinigung aus Migration `0019` arbeitet also korrekt; sie greift nur im gleichzeitigen Fall daneben.
+
+**Mechanismus, derselbe wie bei BUG-4-33:** Der Anmeldedienst schreibt die `user_deleted`-Zeile, **nachdem** der `after delete`-Trigger gelaufen ist. Ein Trigger kann nichts löschen, was zum Zeitpunkt seines Laufs noch nicht existiert. Beim Einzelaufruf liegt die Schreibreihenfolge günstig, bei zwei gleichzeitigen Aufrufen in 21 von 25 Fällen nicht.
+
+### Einordnung
+
+| | |
+|---|---|
+| **Severity** | **Medium** |
+| **Bricht** | AC-17 und AC-22 im Wortlaut — und zwar an der E-Mail-Adresse, dem Datum, um das es AC-17 überhaupt geht |
+| **Erreichbarkeit** | Nicht über PostgREST lesbar (in Lauf 1 gemessen). Kein Angriffsweg von außen |
+| **Heilt es aus?** | **Nein.** Es gibt keinen Aufräum-Lauf für diese Tabelle; die Zeilen bleiben unbegrenzt liegen |
+| **Wie exotisch?** | Nicht exotisch. Es ist genau der Doppelklick- und Zwei-Tabs-Fall, für den **EC-1** geschrieben wurde |
+
+### Warum fünf Läufe daran vorbeigesehen haben
+
+Beide Prüfungen waren für sich richtig und haben sich gegenseitig die Lücke gelassen:
+
+- Der **AC-17-Sweep** über alle Spalten aller Schemata lief gegen eine **einzelne** Löschung — dort ist das Ergebnis tatsächlich sauber, 28 Treffer vorher, 0 nachher.
+- Das **Rennen** wurde auf sein **Antwortverhalten** geprüft (beide Aufrufe landen auf `/login?geloescht=1`, vier Cookies auf `Max-Age=0`), nicht auf seine **Rückstände**.
+
+Niemand hat den Sweep nach dem Rennen laufen lassen. Das ist die Lehre, die über diesen einen Bug hinausgeht: **Eine Zusage über den Endzustand muss nach dem schwierigsten Pfad geprüft werden, nicht nach dem geradlinigen.**
+
+### Was zu tun ist
+
+**Ein Fix deckt BUG-4-33 und BUG-4-35 gemeinsam ab:** ein zeitgesteuerter Aufräum-Lauf für Spuren ohne zugehöriges Konto — verwaiste Konto-Schlüssel in `public.auth_throttle` **und** `user_deleted`-Zeilen in `auth.audit_log_entries`. Er gehört auf dieselbe `pg_cron`-Liste wie T36/T37 und ist damit ohnehin schon eine offene Deploy-Aufgabe. Ein Trigger ist der falsche Ort: Er ist genau das Werkzeug, das hier zu früh feuert.
+
+**Nebenbefund, gleich mit erledigt:** Der Testaufbau in `tests/PROJ-4-deletion-cascade.spec.ts` räumte bisher nur seinen Trigger ab, nicht die Funktion `public.proj4_fail_delete` — im Lauf 5 als Low vermerkt. Jetzt behoben, mit Gegenprobe (Funktion vor dem Lauf entfernt, nach dem Lauf nicht wieder da, 6/6 grün).
+
+### Zustand der Entwicklungsdatenbank nach dem Aufräumen
+
+554 Testkonten gelöscht; `profiles`, `runs`, `active_runs` und `auth.flow_state` sind über die Kaskade auf **0** gegangen — der Löschweg funktioniert also auch im Massenlauf. Stehen geblieben waren **158 verwaiste Konto-Schlüssel** in `public.auth_throttle` (BUG-4-33; im Lauf 5 waren es 66) und die 21 Protokollzeilen aus diesem Nachtrag. Beides wurde beim Abschluss von Hand geleert.
