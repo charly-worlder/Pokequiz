@@ -36,7 +36,7 @@ PROJ-4 hieß bis dahin „Datenschutz & Kontolöschung" und trug vier Dinge auf 
 - **Im Spec ist nur noch die Kontolöschung** (samt `/account`). Sie ist der einzige Teil mit Datenbankzugriff, scharfer Aktion und Missbrauchsfläche — also der einzige, den ein AC → Task → Test-Zyklus wirklich absichert.
 - **`/privacy` und `/imprint` werden ohne Spec-Zyklus direkt geschrieben.** Statische Rechtstexte, öffentlich, keine Anmeldung, keine Datenbank. **Preis, bewusst getragen:** `/audit` wird sie als Code ohne Feature melden, und die Zusagen darin (Löschumfang, Sicherungskopien, Rangliste) sind von keinem Test gedeckt — ihre Übereinstimmung mit PROJ-4 ist Handarbeit. Diese Zeile ist der Ort, an dem das festgehalten ist.
 - **Der Datenexport nach Art. 20 DSGVO entfällt** und wird durch die Bildschirmanzeige auf `/account` ersetzt. Im Vertrag als **EC-12** und im Decision Log begründet, damit es eine Entscheidung bleibt und nicht zu einer Lücke verwittert.
-- **Verantwortlicher ist Worlder.** Impressum und Datenschutzerklärung bekommen **Platzhaltertext**, weil die App vorerst nicht live geht — siehe Deploy-Blocker.
+- **Verantwortlicher ist Worlder.** Impressum und Datenschutzerklärung sollen **Platzhaltertext** bekommen, weil die App vorerst nicht live geht — siehe Deploy-Blocker. **⚠️ Stand 2026-09-10: Beide Seiten existieren nicht.**  und  liefern 404, es gibt keine Routen dafür. Der QA-Lauf 4 zu PROJ-4 hat es gefunden. Die Fußzeile zeigt korrekt keinen Link ( ist leer), es entsteht also kein toter Link — aber **PROJ-4 EC-9 und EC-14 stützen sich darauf, dass die Datenschutzerklärung ihre Grenzen benennt**, und dieses Dokument gibt es nicht.
 
 <!-- Add features above this line -->
 
