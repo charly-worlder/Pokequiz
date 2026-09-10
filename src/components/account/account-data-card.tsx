@@ -66,8 +66,23 @@ export function AccountDataCard({ data }: { data: AccountData }) {
           </Row>
         </dl>
 
+        {/*
+          AC-19, präzisiert am 2026-09-10. Hier stand „Das ist alles, was wir
+          über dich gespeichert haben." — und das war **falsch**: Zu einem
+          lebenden Konto führt die Datenbank zusätzlich `last_sign_in_at`,
+          `updated_at`, `confirmed_at`, die Anmelde-Metadaten (in denen Adresse
+          und Trainername ein zweites Mal stehen), Protokoll- und Zählerzeilen.
+          Drei QA-Läufe haben das nacheinander belegt.
+
+          Der Satz sagt jetzt beides: was aufgezählt ist, und dass es daneben
+          noch etwas gibt, das mit der Löschung verschwindet (AC-17). Prüfbar
+          wahr statt eine Vollständigkeit zu behaupten, die niemand hält.
+        */}
         <p className="pt-4 text-[13px] text-muted-foreground">
-          Das ist alles, was wir über dich gespeichert haben.
+          Das sind deine gespeicherten Kontodaten (E-Mail, Trainername,
+          Registrierungsdatum, Anzahl gespielter Runden, bester Lauf). Technische
+          Zeitstempel und Sicherheitszähler kommen zusätzlich dazu und verschwinden
+          mit der Löschung.
         </p>
       </CardContent>
     </Card>

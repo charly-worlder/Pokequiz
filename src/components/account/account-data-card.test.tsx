@@ -45,7 +45,17 @@ describe('AccountDataCard', () => {
     )
     expect(shown).toHaveLength(Object.keys(BASE).length)
 
-    expect(screen.getByText(/Das ist alles, was wir über dich gespeichert haben/)).toBeInTheDocument()
+    /*
+      AC-19 im Wortlaut seit dem 2026-09-10. Geprüft werden **beide Hälften**
+      der Aussage, nicht nur ihr Anfang: die Aufzählung der fünf Werte **und**
+      der Hinweis, dass daneben noch etwas existiert. Die alte Fassung prüfte
+      einen Satz, der schlicht nicht zutraf („das ist alles") — ein Test, der
+      eine falsche Zusage bewacht, ist schlimmer als keiner.
+    */
+    expect(screen.getByText(/Das sind deine gespeicherten Kontodaten/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Technische Zeitstempel und Sicherheitszähler kommen zusätzlich dazu/)
+    ).toBeInTheDocument()
   })
 
   it('nennt fehlende Bestleistung beim Namen, statt eine Null zu zeigen (AC-6)', () => {

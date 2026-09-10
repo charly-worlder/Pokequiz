@@ -74,7 +74,11 @@ für diese Seite wird **keine** Öffnung gebaut und **kein** Admin-Client benutz
 Aufbewahrung: unverändert — bis zur Kontolöschung.
 ```
 
-**Bewusst nicht angezeigt:** Konto-Kennung (UUID), Zeitstempel der letzten Anmeldung, IP-Adressen, der laufende Rundenzustand. Die UUID ist für den Nutzer bedeutungslos und wäre eine zusätzliche Kennung im Browser; die übrigen speichert die Anwendung gar nicht. Das ist die Datensparsamkeits-Prüfung aus AC-19: **Angezeigt wird alles Gespeicherte, nicht mehr.**
+**Bewusst nicht angezeigt:** Konto-Kennung (UUID), Zeitstempel der letzten Anmeldung und der letzten Änderung, Anmelde-Metadaten, Protokoll- und Zählerzeilen, der laufende Rundenzustand.
+
+> ⚠️ **Diese Stelle war bis zum 2026-09-10 sachlich falsch — und der Fehler war folgenreich.** Hier stand, die nicht angezeigten Werte „speichert die Anwendung gar nicht". Für `last_sign_in_at` ist das nachweislich unzutreffend (gemessen in zwei QA-Läufen), und **auf dieser Begründung ruhte AC-19**: Der Vertrag verlangte einen Satz, der Vollständigkeit behauptet, weil das Design behauptete, es gebe nichts weiter. Beides ist am 2026-09-10 korrigiert worden.
+>
+> Die Werte werden weiterhin nicht angezeigt, aber aus dem **richtigen** Grund: Sie sind technischer Betriebszustand, für den Nutzer ohne Aussagewert, und sie verschwinden mit der Löschung (AC-17). Der Satz auf der Seite sagt genau das, statt Vollständigkeit zu behaupten.
 
 > ⚠️ **AC-19 ist eine Zusage mit Verfallsdatum.** Sie stimmt genau so lange, wie kein Feature ein weiteres personenbezogenes Feld einführt. Wer das tut, muss diese Seite mitziehen. Der Test dazu (siehe Prüfhinweise) prüft deshalb die Liste der Felder, nicht nur ihre Darstellung.
 
