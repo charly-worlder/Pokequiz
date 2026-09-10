@@ -323,3 +323,22 @@ Die Adressvergleiche sind trotzdem geblieben — mit der engeren, zutreffenden B
 **Der Preis, ausgeschrieben:** Die Protokollhistorie des Kontos ist nach der Löschung weg, auch die Zeile „dieses Konto wurde gelöscht". Wer beides will — Nachweis der Löschung *und* AC-22 im Wortlaut — braucht eine anonymisierte Fassung des Eintrags; das wäre eine Vertragsänderung, kein Bugfix. Und: **kein Ausnahmeblock**. Scheitert das Aufräumen, scheitert die ganze Löschung und der Nutzer sieht die EC-3-Meldung. Vor dem Deploy ist zu prüfen, dass `postgres` auch im gehosteten Projekt `DELETE` auf dieser Tabelle hat.
 
 **Nicht behoben, weil eigener Gegenstand:** `auth.audit_log_entries` wächst unbegrenzt und hat keinen Aufräum-Lauf. Das gehört zu `pg_cron`, in dieselbe Liste wie T36/T37 — nicht in einen Bugfix zur Kontolöschung.
+
+## Nachtrag 2: nach dem Refine vom 2026-09-10
+
+**Migration `0020` — `auth.flow_state` wird mitgelöscht.** Der QA-Lauf 2 fand dort die **einzige** in der Datenbank verbliebene Spur: die Konto-Kennung, bei jedem Spieler, der je einen Passwort-Reset angefordert hat (gemessen: 2 von 31). Kein Fremdschlüssel, kein Trigger — die dritte Ausprägung derselben Bauart nach `auth_throttle` und `auth.audit_log_entries`.
+
+**Warum gebaut und nicht als Grenze dokumentiert:** Das Betriebsprotokoll des Auth-Dienstes ist außerhalb der Reichweite dieser Anwendung und deshalb als **EC-14** benannt. Diese Tabelle liegt in derselben Datenbank und kostet denselben Dreizeiler. Etwas im Vertrag aufzugeben, das drei Zeilen kostet, wäre die falsche Richtung — **AC-17 bleibt deshalb ein Allsatz über die ganze Datenbank.**
+
+**Bei der Gelegenheit nachgeholt:** `0019` hatte das `revoke ... from public, anon, authenticated` vergessen, das `0003` und `0005` als Vorbild führen (BUG-4-22, von zwei QA-Bahnen unabhängig bemerkt). `0020` holt es für beide Funktionen nach.
+
+**Der Test, der BUG-4-18 schließt.** Alle bisherigen Kaskadentests riefen die Löschung **direkt** über den Administrationszugang auf und umgingen damit die Server Action; die Browsertests prüften Weiterleitung und Cookie, nicht die Datenbank. Gemessen: Stellt man den Löschmodus von hart auf weich, blieben **12 von 12 Browsertests grün**. Der neue Test geht den echten Weg durch die Oberfläche und zählt danach **jede** Spur einzeln nach — Auth-Zeile, Profil, Runden, laufende Runde, Zählerzeile, Protokollzeilen, offene Reset-Vorgänge.
+
+**Beide Zusagen einzeln rot geprüft:**
+
+| Mutation | Ergebnis |
+|---|---|
+| weiche statt harter Löschung | **nur der neue Test** rot, die fünf anderen grün — genau die Lücke, die BUG-4-18 beschrieb |
+| `flow_state`-Trigger entfernt | rot auf „offene Reset-Vorgänge" |
+
+Nach dem Zurückdrehen je 6/6 grün. Vollständiger Durchlauf: Lint 0, `tsc` 0, Unit 310/310, Build Exit 0, E2E **203 grün / 1 übersprungen** in drei Engines, Migrationen 0001–0020 der Reihe nach.

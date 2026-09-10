@@ -1,5 +1,6 @@
 import { expect, test } from './fixtures'
 import { createClient } from '@supabase/supabase-js'
+import { register } from './helpers'
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 
@@ -175,6 +176,34 @@ async function countAuditRowsFor(email: string) {
   return Number(out.trim())
 }
 
+/**
+ * Offene PKCE-Vorgänge dieses Kontos (AC-17, Migration `0020`).
+ *
+ * `auth.flow_state` trägt keine Adresse, nur die Kennung — deshalb wird hier
+ * danach gezählt und nicht nach der Adresse wie beim Protokoll.
+ */
+async function countFlowStateFor(userId: string) {
+  const out = execFileSync(
+    'docker',
+    [
+      'exec',
+      '-i',
+      dbContainer(),
+      'psql',
+      '-U',
+      'postgres',
+      '-d',
+      'postgres',
+      '-t',
+      '-A',
+      '-c',
+      `select count(*) from auth.flow_state where user_id = '${userId}'`,
+    ],
+    { encoding: 'utf8' }
+  )
+  return Number(out.trim())
+}
+
 test.describe('PROJ-4 — Löschkette', () => {
   test('gelingt sie, ist jede der fünf Spuren weg (AC-10, AC-17, AC-22)', async () => {
     const player = await seedPlayer()
@@ -215,6 +244,68 @@ test.describe('PROJ-4 — Löschkette', () => {
     // die der Löschvorgang selbst schreibt (`user_deleted` mit der Adresse in
     // `traits`).
     expect(await countAuditRowsFor(player.email), 'Protokollzeilen mit der Adresse').toBe(0)
+  })
+
+  test('löscht über die Oberfläche wirklich — jede Spur nachgezählt (BUG-4-18)', async ({ page }) => {
+    /*
+      **Der Test, der im ersten Netz gefehlt hat.**
+
+      Alle anderen Prüfungen dieser Datei rufen die Löschung **direkt** über den
+      Administrationszugang auf und umgehen damit die Server Action; die
+      Browsertests wiederum prüfen Weiterleitung und Cookie, nicht die
+      Datenbank. Gemessen im QA-Lauf 2: Stellt man den Löschmodus von hart auf
+      weich um, bleiben **12 von 12 Browsertests grün**, der Nutzer liest „Dein
+      Konto wurde gelöscht" — und in der Datenbank steht alles noch.
+
+      Dieser Test schließt genau diese Lücke: Er geht den **echten** Weg durch
+      die Oberfläche und zählt danach jede Tabelle einzeln nach.
+    */
+    const { email } = await register(page, 'Echt')
+
+    const { data: me } = await admin.auth.admin.listUsers()
+    const userId = me!.users.find((u) => u.email === email)!.id
+
+    // Etwas zu löschen: zwei Runden, eine laufende Runde, ein Zählerschlüssel.
+    await admin.from('runs').insert([
+      { profile_id: userId, streak: 5, duration_ms: 30_000, round_id: crypto.randomUUID() },
+      { profile_id: userId, streak: 0, duration_ms: 900, round_id: crypto.randomUUID() },
+    ])
+    await admin.from('active_runs').insert({ profile_id: userId, streak: 2, accumulated_ms: 4_000 })
+    await admin.from('auth_throttle').insert({ key: `account-delete:account:${email}`, attempts: 1 })
+
+    // Und ein offener Reset-Vorgang, damit `auth.flow_state` eine Zeile trägt.
+    const pkce = createClient(
+      SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? envFromLocalFile('NEXT_PUBLIC_SUPABASE_ANON_KEY'),
+      { auth: { persistSession: false, autoRefreshToken: false, flowType: 'pkce' } }
+    )
+    await pkce.auth.resetPasswordForEmail(email)
+
+    // Vorher: alles da.
+    expect(await authUserExists(userId), 'Konto vorher').toBe(true)
+    expect(await countRows('runs', userId), 'Runden vorher').toBe(2)
+
+    // **Die Löschung über die Oberfläche**, wie ein Mensch sie auslöst.
+    await page.goto('/account')
+    await page.getByRole('button', { name: 'Konto löschen' }).click()
+    await page.getByLabel(/Passwort/).fill(PASSWORD)
+    await page.getByRole('button', { name: 'Endgültig löschen' }).click()
+    await page.waitForURL(/\/login/)
+    await expect(page.getByText(/Dein Konto wurde gelöscht/)).toBeVisible()
+
+    // Nachher: jede Spur einzeln nachgezählt. **Genau das fängt die weiche
+    // Löschung** — sie ließe das Auth-Konto stehen und alles daran hängen.
+    expect(await authUserExists(userId), 'Auth-Konto').toBe(false)
+    const { count: profileCount } = await admin
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('id', userId)
+    expect(profileCount, 'Profil').toBe(0)
+    expect(await countRows('runs', userId), 'Runden').toBe(0)
+    expect(await countRows('active_runs', userId), 'laufende Runde').toBe(0)
+    expect(await countThrottleKeys([`account-delete:account:${email}`]), 'Zählerzeile').toBe(0)
+    expect(await countAuditRowsFor(email), 'Protokollzeilen').toBe(0)
+    expect(await countFlowStateFor(userId), 'offene Reset-Vorgänge').toBe(0)
   })
 
   test('nimmt Altbestand ohne passende Kennung mit (BUG-4-1)', async () => {
