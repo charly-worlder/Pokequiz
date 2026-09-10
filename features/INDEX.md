@@ -25,7 +25,7 @@
 | PROJ-1 | Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, dazu ein eindeutiger Trainername als öffentlicher Anzeigename | Approved | [Spec](PROJ-1-user-login/spec.md) | 2026-08-30 |
 | PROJ-2 | Pokémon-Quiz | Eine **serverseitig geführte** Runde aus Bild-Fragen mit vier deutschen Namensoptionen, Serien-Zähler und Zeitmessung bis zum ersten Fehler | Approved | [Spec](PROJ-2-pokemon-quiz/spec.md) | 2026-08-30 |
 | PROJ-3 | Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit Eintrag des eigenen Ergebnisses | Approved | [Spec](PROJ-3-leaderboard/spec.md) | 2026-08-30 |
-| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | In Review | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
+| PROJ-4 | Kontolöschung | Ein Kontobereich `/account`, der zeigt was gespeichert ist, und die endgültige Löschung des eigenen Kontos samt Runden und Ranglisten-Eintrag | Approved | [Spec](PROJ-4-account-deletion/spec.md) | 2026-08-30 |
 
 **Build order:** P0 (MVP): PROJ-1 → PROJ-2 → PROJ-3 · P1: PROJ-4 (braucht PROJ-1, PROJ-2 und PROJ-3)
 
@@ -64,6 +64,8 @@ PROJ-4 hieß bis dahin „Datenschutz & Kontolöschung" und trug vier Dinge auf 
 | PROJ-2 | **`X-Forwarded-Host` hebelt die Origin-Prüfung der Server Actions aus** (BUG-18) — aus dem Browser nicht ausnutzbar (`sameSite: lax`, Preflight scheitert), **aber** ein echter CSRF-Vektor, sobald ein Reverse Proxy oder CDN davorsteht, das clientseitige `X-Forwarded-Host`-Header nicht verwirft. Beim gewählten Host prüfen und den Header dort strippen. **Am 2026-09-07 zur Laufzeit reproduziert:** mit `Origin: https://evil.example.com` allein → HTTP 500 „Invalid Server Actions request."; **zusätzlich mit `X-Forwarded-Host: evil.example.com`** → Runde gestartet | beim Deploy |
 | PROJ-2 | **Aufbewahrungsfrist aus AC-41 hängt an `pg_cron` im gehosteten Projekt** — die offenen `[user]`-Aufgaben **T36** und **T37**. Zu erledigen: Extension im Dashboard einschalten (Database → Extensions), prüfen, dass das Projekt nicht wegen Inaktivität pausiert ist (Project Settings), danach den Job im gehosteten Projekt nachmessen. **Lokal belegt** (Job lief, `DELETE 1`).<br>~~**BUG-124** — `0010` bricht bei verweigerter Erweiterung die ganze Migration ab~~ — **behoben am 2026-09-07**: Der `create extension` steckt jetzt in einem `do`-Block, der den Fehlschlag zu einer Warnung macht und nur den Aufräum-Lauf überspringt; `supabase db push` scheitert dadurch nicht mehr hart. Die rückwirkende Änderung an `0010` war zulässig, weil kein Feature auf `Deployed` steht. Über zwei vollständige `db reset` von 0001–0013 verifiziert | beim Deploy |
 | PROJ-4 | **Impressum und Datenschutzerklärung tragen nur Platzhaltertext** — bewusste Entscheidung vom 2026-09-09, weil die App vorerst nicht live geht (Verantwortlicher ist Worlder, die Anschrift bleibt ungenannt). Vor einem Livegang **zwingend** durch echte Angaben zu ersetzen: Ein unvollständiges Impressum ist nach DDG abmahnfähig, und eine Datenschutzerklärung mit Platzhaltern erfüllt Art. 13 DSGVO nicht | beim Deploy, **zwingend** |
+| PROJ-4 | **BUG-4-34 — der Löschpfad kann eine falsche Erfolgsmeldung geben.** `alreadyGone` akzeptiert **jeden** 404 statt nur `user_not_found`; ein 404 aus einer Schicht vor dem Auth-Dienst (Gateway weg, pausiertes Projekt, falsche Basis-URL) führt zu Abmeldung und Löschbestätigung, **während das Konto weiterlebt**. Fix ist ein Zeichen (`&&` statt `||`). Von zwei QA-Bahnen unabhängig gefunden, Schwere zwischen ihnen strittig (Medium/Low) | vor dem Deploy, klein |
+| PROJ-4 | **Im gehosteten Projekt prüfen, ob `postgres` `DELETE` auf `auth.audit_log_entries` UND `auth.flow_state` hat.** Migrationen `0019` und `0020` arbeiten bewusst **ohne Ausnahmeblock** — fehlt eines der Rechte, scheitert dort **jede** Kontolöschung. Lokal belegt, gehostet ungeprüft | beim Deploy, **zwingend** |
 | PROJ-4 | **Aufbewahrungsfrist der Sicherungskopien ist unbekannt** (spec.md → EC-9). Die Löschung wirkt sofort im laufenden Betrieb, aber Sicherungskopien werden nicht rückwirkend bearbeitet. Die Datenschutzerklärung darf „vollständig gelöscht" deshalb nicht ohne diesen Zusatz behaupten. Die Zahl steht erst fest, wenn Hosting-Anbieter und Supabase-Tarif gewählt sind | beim Deploy |
 
 
@@ -101,6 +103,37 @@ Die beiden schwersten Befunde der Vortage sind geschlossen und **von Kontexten b
 
 **Nächster Schritt im Projekt ist nicht PROJ-1, sondern PROJ-2.** Der `/architecture`-Anlauf zu PROJ-3 hatte gezeigt, dass die clientseitig geführte Runde die Rangliste mit einem einzigen manipulierten Aufruf dauerhaft entwertet; `/refine PROJ-2` hat den Vertrag am 2026-09-06 darauf umgestellt (Server vergibt Fragen, prüft Antworten, zählt Serie und misst Zeit — AC-32 bis AC-41). **Stand 2026-09-07:** `/architecture`, `/tasks` und `/build` sind gelaufen, dazu drei QA-Durchgänge auf dem Branch `feat/PROJ-2-server-authoritative-round`. Der dritte hat den Critical und alle Befunde des Vorlaufs als geschlossen bestätigt und **40 von 41 AC** belegt; PROJ-2 steht auf `In Review` mit drei Medium und zwei Low. Reihenfolge von hier: `/build` für die verbliebenen Befunde → `/qa` → dann PROJ-3 und PROJ-4. `/deploy` läuft erst, wenn alle vier stehen.
 
+
+## PROJ-4 ist abgenommen (2026-09-10) — nach fünf QA-Durchgängen
+
+**Status `Approved` nach Entscheidung des Nutzers vom 2026-09-10:** Findet der Abschlusslauf keinen Critical und keinen High, wird der Rest **dokumentiert akzeptiert statt weiter gebaut**. Er fand keinen. Diese Liste ist der Preis dieser Entscheidung — sie steht hier, damit niemand `Approved` für „nichts mehr offen" hält.
+
+**Fünf Läufe, drei unabhängige Bahnen pro Lauf, keine kannte den Bau.** Der Weg war: ein High (Lauf 1) → behoben, zwei Medium (Lauf 2) → behoben, ein gebrochenes AC (Lauf 3) → Vertrag präzisiert, zwei Medium (Lauf 4) → eines behoben, eines getragen, Abschluss (Lauf 5) → kein Critical, kein High.
+
+### Was der Abschlusslauf positiv festgehalten hat
+
+**21 von 22 AC und 13 von 14 EC belegt** — und zwar über die **echte Server Action**, nicht über den Administrationszugang. AC-17 per Sweep über **alle Spalten aller Schemata** (28 Treffer vorher, 0 nachher, mit Rot-Gegenprobe am lebenden Konto). AC-15 mit **beiden Hälften einzeln gepinnt**. AC-16 gegen untergeschobene Felder, manipulierten `prevState` und ein zusätzliches Positionsargument. EC-1 über **25 gleichzeitige Rennen**, 23 davon vollständig sauber.
+
+### Offen, nach Gewicht
+
+| # | Risiko | Severity | Warum es liegen bleibt |
+| --- | --- | --- | --- |
+| **BUG-4-34** | Der Fix für BUG-4-32 ist in die Gegenrichtung zu großzügig: `alreadyGone` akzeptiert **jeden** 404, nicht nur `user_not_found`. Ein 404 aus einer Schicht **vor** dem Auth-Dienst (Gateway weg, pausiertes Projekt, falsche Basis-URL) führt dann zu Abmeldung und Löschbestätigung, **während das Konto weiterlebt** | **Medium** — **Deploy-Blocker**, siehe Tabelle oben. Die Bahnen waren uneins (Medium vs. Low); die strengere Lesart gilt, weil die Fehlrichtung „offen" statt „geschlossen" ist. Fix ist ein Zeichen: `&&` statt `\|\|` |
+| **BUG-4-33** | Rennfenster: Läuft während der Löschung ein Zählvorgang, bleibt die Adresse in `auth_throttle` stehen. Aktuell **66 verwaiste Zeilen** in der Entwicklungsdatenbank | Medium, **vom Nutzer akzeptiert** | Bricht AC-17 im Wortlaut. Aus dem Browser nicht lesbar, heilt im Betrieb aus. Der Fix ist kein Trigger, sondern ein Aufräum-Lauf für Konto-Schlüssel ohne Konto — dieselbe `pg_cron`-Liste wie T36/T37 |
+| **AC-19, zweiter Halbsatz** | „Technische Zeitstempel und Sicherheitszähler … verschwinden mit der Löschung" — der vom eigenen Löschversuch erzeugte IP-Zähler bleibt, und EC-14 räumt im selben Vertrag ein, dass die Adresse im Betriebsprotokoll überlebt | Low, **vom Nutzer akzeptiert** | Vertragsfrage, kein Codefehler. Vier Läufe haben an dieser einen Zusage vier verschiedene Fehler gefunden |
+| **BUG-4-19 · REG-4-1 · N3** | **Drei Zusagen sind von keinem Unit-Test gepinnt**, alle drei per Mutation gemessen: die Drosselungszahl aus AC-15 (`5 → 19` lässt 313/313 grün), der Wortlaut aus AC-19 (eine **falsche** Aufzählung bliebe grün), und der echte Fehlerpfad (nur per Mock gedeckt) | Low, akzeptiert | Dieselbe Klasse wie BUG-81/82/101 in PROJ-1. Kein aktiver Fehler — das Netz, das beim nächsten Umbau fehlt |
+| **BUG-4-4 · BUG-4-7 · BUG-4-8** | `x-forwarded-for` rotiert · keine Security-Header auf `/account` · `X-Forwarded-Host` hebelt die Origin-Prüfung aus | Medium | Bekannte Deploy-Blocker-Klassen (BUG-61, BUG-12, BUG-18), am Host zu schließen. **Entlastung für PROJ-4:** Bei BUG-4-4 trägt die Konto-Hälfte, und sie ist nicht header-umgehbar — die Aktion verlangt eine gültige Sitzung des Zielkontos, Spraying über viele Konten gibt es hier nicht |
+| **Kleinere** | `catch`-Zweig sagt weiterhin ungeprüft „Dein Konto ist unverändert" · sequenzieller Zweitaufruf ohne Bestätigung · Cookie-Löschung hängt am Aufrufpfad · Testartefakt `proj4_fail_delete` bleibt in der DB · Grant-Inkonsistenz bei zwei Trigger-Funktionen · zwei Dokumentationsstellen weiter falsch (`delete-account-dialog.tsx:28-29`, `design.md` → Prüfhinweise) | Low | Sammelposten für den nächsten Aufräum-Durchgang |
+
+### Ein Muster, das benannt gehört
+
+**Sechs Überbehauptungen in der eigenen Dokumentation** sind in diesem Feature nacheinander aufgefallen — der `0019`-Kommentar („hält auch bei einem neuen Feld"), `0020` („für beide Funktionen", es sind drei), `design.md` („speichert die Anwendung gar nicht"), ein Test-Kommentar, ein Prüfhinweis und ein Komponenten-Kommentar. Jede einzeln Low. Zusammen ist es kein Zufall: **Zusagen wurden im selben Atemzug geschrieben wie der Code, aber nicht mit ihm gemessen.** Wer hier weiterbaut, sollte jede Behauptung in einem Kommentar als ungeprüft behandeln, bis eine Mutation sie bestätigt.
+
+### Wie es mit PROJ-4 weitergeht
+
+**Kein weiterer Fix-Zyklus.** Was tatsächlich vor dem Start passieren muss, steht in der **Deploy-Blocker**-Tabelle und nirgends sonst — für PROJ-4 sind das BUG-4-34, die Platzhalter in Impressum und Datenschutzerklärung, BUG-4-7/BUG-4-8 sowie die Frage, ob `postgres` im gehosteten Projekt `DELETE` auf `auth.audit_log_entries` und `auth.flow_state` hat. **Fehlt eines dieser beiden Rechte, scheitert dort jede Kontolöschung** — beide Migrationen arbeiten bewusst ohne Ausnahmeblock.
+
+**Empfohlen, aber nicht blockierend:** `/e2e-tests PROJ-4` für die Kernschleife — es ist der einzige Weg, die Dialog-Interaktion und das WebKit-Restrisiko zu schließen.
 
 ## QA-Lauf 1 zu PROJ-4 (2026-09-09) — ein High, Status bleibt In Review
 
