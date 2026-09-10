@@ -42,7 +42,7 @@ Die beiden Fragen, für die dieser Entwurf angefordert wurde, haben eine erfreul
 
 **Kein neues Rahmenwerk.** `PageFrame`, `SiteHeader`, `SiteFooter` und die shadcn-Bausteine (`Card`, `Button`, `Input`, `AlertDialog`, `Alert`) sind vorhanden und werden unverändert benutzt. Es entsteht keine zweite Navigation (AC-5).
 
-**Der Dialog ist ein `AlertDialog`, kein `Dialog`.** Er unterbricht bewusst und hat keinen Schließen-Kreuz-Ausweg neben den beiden Knöpfen; das ist die shadcn-Komponente für unumkehrbare Handlungen. Escape und Klick daneben schließen ihn trotzdem (AC-14) — die Abbruchmöglichkeit soll leicht sein, nur die Bestätigung schwer.
+**Der Dialog ist ein `AlertDialog`, kein `Dialog`.** Er unterbricht bewusst und hat keinen Schließen-Kreuz-Ausweg neben den beiden Knöpfen; das ist die shadcn-Komponente für unumkehrbare Handlungen. Escape und „Abbrechen" schließen ihn trotzdem (AC-14) — die Abbruchmöglichkeit soll leicht sein, nur die Bestätigung schwer. **Ein Klick daneben schließt ihn nicht**, und das ist seit dem Refine vom 2026-09-10 auch so im Vertrag: Die Komponente unterdrückt es absichtlich, weil ein versehentlicher Klick eine Kontolöschung nicht wegwischen soll.
 
 ---
 
