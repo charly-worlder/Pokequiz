@@ -66,8 +66,12 @@ describe('RegisterView — Hinweis am Trainername-Feld (AC-15)', () => {
  * Vorher zeigte er auf `/privacy` und damit auf eine 404 (BUG-10). Der alte
  * Wortlaut von AC-14 verlangte einen sichtbaren Link, ohne je zu verlangen,
  * dass er irgendwohin führt — der Code erfüllte ihn buchstabengetreu und
- * verfehlte die Absicht. Dieser Test dreht sich um, sobald PROJ-4 `/privacy`
- * baut: dann muss der Link da sein.
+ * verfehlte die Absicht.
+ *
+ * **Am 2026-09-10 hat sich der Test umgedreht**, wie es hier angekündigt war:
+ * PROJ-4 hat `/privacy` gebaut, also muss der Link jetzt da sein — und er muss
+ * auch **dorthin** zeigen. Beide Hälften werden geprüft, weil genau die zweite
+ * bei BUG-10 gefehlt hat.
  */
 describe('RegisterView — Datenschutz-Hinweis (AC-14)', () => {
   it('zeigt den Hinweis auf die Datenschutzerklärung', () => {
@@ -76,10 +80,10 @@ describe('RegisterView — Datenschutz-Hinweis (AC-14)', () => {
     expect(screen.getByText(/Datenschutzerklärung/)).toBeInTheDocument()
   })
 
-  it('verlinkt ihn nicht, solange die Seite nicht existiert', () => {
+  it('verlinkt ihn auf /privacy, seit die Seite existiert', () => {
     render(<RegisterView onSwitchToLogin={() => {}} />)
 
-    expect(screen.queryByRole('link', { name: 'Datenschutzerklärung' })).not.toBeInTheDocument()
-    expect(document.querySelector('a[href="/privacy"]')).toBeNull()
+    const link = screen.getByRole('link', { name: 'Datenschutzerklärung' })
+    expect(link).toHaveAttribute('href', '/privacy')
   })
 })

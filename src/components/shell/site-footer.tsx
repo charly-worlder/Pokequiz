@@ -3,12 +3,21 @@ import Link from 'next/link'
 /**
  * spec.md AC-23 — on every page, signed in or out.
  *
- * The footer shows a legal link only once its page actually exists. PROJ-4
- * builds /privacy and /imprint; until then this list stays empty and the footer
- * renders no link rather than a dead one (docs/app-shell.md → Layout-Regionen).
- * PROJ-4's job is to add the entries here.
+ * The footer shows a legal link only once its page actually exists. The list
+ * stayed empty until 2026-09-10 so the footer would render no link rather than a
+ * dead one (docs/app-shell.md → Layout-Regionen); both pages exist since then
+ * (`src/app/privacy/page.tsx`, `src/app/imprint/page.tsx`) and are public in
+ * `src/proxy.ts` → PUBLIC_PATHS, so a signed-out visitor reaches them too.
+ *
+ * Both pages carry placeholder text on purpose — see the notice at the top of
+ * each one and features/INDEX.md → Deploy-Blocker. That is a reason to fill them
+ * in before going live, not a reason to hide the links: a footer without them is
+ * itself a defect under DDG § 5 and Art. 13 GDPR.
  */
-const LEGAL_PAGES: { href: string; label: string }[] = []
+const LEGAL_PAGES: { href: string; label: string }[] = [
+  { href: '/privacy', label: 'Datenschutz' },
+  { href: '/imprint', label: 'Impressum' },
+]
 
 export function SiteFooter() {
   return (

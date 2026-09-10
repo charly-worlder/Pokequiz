@@ -29,10 +29,13 @@ type RegisterValues = { trainerName: string; email: string; password: string }
  * Wortlaut des alten AC erfüllt, in der Absicht verfehlt. `site-footer.tsx`
  * folgt derselben Regel seit PROJ-2 mit einer leeren `LEGAL_PAGES`-Liste.
  *
- * **PROJ-4 baut `/privacy` und setzt dieses Flag auf `true`** — zusammen mit
- * dem Eintrag in `LEGAL_PAGES`. Zwei Stellen, dieselbe Konvention.
+ * **Seit dem 2026-09-10 gibt es `src/app/privacy/page.tsx`**, deshalb steht das
+ * Flag auf `true` — zusammen mit dem Eintrag in `LEGAL_PAGES`. Zwei Stellen,
+ * dieselbe Konvention. Die Seite trägt Platzhaltertext (siehe den Hinweis ganz
+ * oben auf ihr); das ist ein Grund, sie vor dem Livegang zu vervollständigen,
+ * kein Grund, den Link wieder zu verstecken.
  */
-const PRIVACY_PAGE_EXISTS = false
+const PRIVACY_PAGE_EXISTS = true
 
 export function RegisterView({ onSwitchToLogin }: { onSwitchToLogin: () => void }) {
   const form = useForm<RegisterValues>({

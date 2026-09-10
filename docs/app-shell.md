@@ -71,6 +71,8 @@ Die genauen Dateipfade legt `/architecture` fest; die Aufteilung steht hier, dam
 
 Die Design-Canvas kennt **keine Fußzeile** und keinen Weg zu Datenschutzerklärung und Impressum. Beides muss von jeder Seite aus erreichbar sein, auch im ausgeloggten Zustand, bevor die App öffentlich gehen kann. Die Fußzeile oben schließt diese Lücke: Der Rahmen gehört zu PROJ-2, die Inhalte der beiden Seiten zu PROJ-4.
 
+**Geschlossen am 2026-09-10.** `/privacy` und `/imprint` existieren, sind ohne Anmeldung erreichbar (`src/proxy.ts` → `PUBLIC_PATHS`) und stehen als Links in der Fußzeile; `tests/PROJ-2-access-guard.spec.ts` prüft beides ausgeloggt. Sie tragen bewusst Platzhaltertext, sichtbar markiert — siehe `features/INDEX.md` → Deploy-Blocker. Als einzige Seiten der App gehören sie ausdrücklich **in** den Suchindex.
+
 ---
 
 _Dies ist ein lebendes Dokument. Wenn `/architecture` ein Feature entwirft, das einen Navigationseintrag, eine Layout-Region oder ein neues Seiten-Muster hinzufügt, aktualisiert es zuerst diese Karte. Verhaltensänderungen am Rahmen gehen über `/refine` auf das besitzende Feature — nie direkt in das `design.md` eines Features._
