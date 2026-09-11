@@ -160,9 +160,41 @@ test.describe('PROJ-3 — Zugriff auf die Ranglisten-Daten', () => {
       .eq('id', other.id)
     expect(fremd ?? []).toHaveLength(0)
 
-    // Die Spalte, die kein Anwendungscode liest, ist gar nicht erst freigegeben.
-    const { error: spalte } = await asUser.from('profiles').select('created_at').eq('id', mine.id)
-    expect(spalte, 'created_at darf für eine Nutzersitzung nicht lesbar sein').not.toBeNull()
+    /*
+      **Am 2026-09-09 geändert, und zwar bewusst.**
+
+      Hier stand: „Die Spalte, die kein Anwendungscode liest, ist gar nicht erst
+      freigegeben" — `created_at` musste für eine Nutzersitzung einen Fehler
+      geben. Diese Zusage stützte sich auf eine Prämisse, die Migration `0016`
+      ausdrücklich benennt: dass die Spalte niemand braucht.
+
+      **PROJ-4 braucht sie.** AC-2 verlangt „Dabei seit" im Kontobereich — die
+      Auskunft des Eigentümers über seine eigenen Daten (Art. 15 DSGVO).
+      Migration `0018` gibt deshalb genau diese eine Spalte frei, für
+      `authenticated`, ohne die Zeilen-Policy anzufassen.
+
+      **Was hier weiterhin geprüft wird, ist die Eigenschaft, die wirklich
+      schützt** — und die ist unverändert: Auch `created_at` gibt es nur in der
+      **eigenen** Zeile. Die alte Fassung hätte den Unterschied nicht bemerkt:
+      Sie prüfte, ob die Spalte gesperrt ist, nicht ob fremde Daten
+      herauskommen.
+    */
+    const { data: eigenesDatum, error: spalte } = await asUser
+      .from('profiles')
+      .select('created_at')
+      .eq('id', mine.id)
+      .maybeSingle()
+    expect(spalte, 'created_at der eigenen Zeile muss lesbar sein (PROJ-4, AC-2)').toBeNull()
+    expect(eigenesDatum?.created_at, 'und einen Wert haben').toBeTruthy()
+
+    const { data: fremdesDatum } = await asUser
+      .from('profiles')
+      .select('created_at')
+      .eq('id', other.id)
+    expect(
+      fremdesDatum ?? [],
+      'das Anlegedatum eines FREMDEN Kontos bleibt unerreichbar'
+    ).toHaveLength(0)
 
     // **Gegenprobe, damit die Verengung nicht zu weit geht:** Die Kopfzeile liest
     // genau so — eigene Zeile, Spalte `trainer_name`. Das muss weiter gehen.

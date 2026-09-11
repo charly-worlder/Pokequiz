@@ -27,11 +27,35 @@ test('Ohne Anmeldung führt jede geschützte Route nach /login (AC-13, AC-22, AC
   await expect(page.getByRole('banner')).toContainText('Deutsche Namen · Serie · Weltrangliste')
   await expect(page.getByRole('banner').getByText('Abmelden')).toHaveCount(0)
 
-  // AC-23 — die Fußzeile steht auch ausgeloggt, und sie zeigt keinen toten
-  // Rechts-Link, solange PROJ-4 die Seiten nicht gebaut hat.
+  // AC-23 — die Fußzeile steht auch ausgeloggt, und sie zeigt ihre Rechts-Links,
+  // seit die zugehörigen Seiten existieren.
+  //
+  // **Umgedreht am 2026-09-10, als PROJ-4 `/privacy` und `/imprint` gebaut hat.**
+  // Bis dahin stand hier `toHaveCount(0)`: Die Links durften nicht da sein, weil
+  // sie auf eine 404 geführt hätten. AC-23 ist bedingt formuliert — „zeigt einen
+  // Rechts-Link nur, wenn die zugehörige Seite bereits existiert" —, es ist also
+  // dasselbe Kriterium, nur der andere Zweig, genau wie bei AC-21 am 2026-09-08.
+  // Der Test war als Stolperdraht für diesen Moment gebaut und hat ausgelöst: Er
+  // wurde rot, sobald `LEGAL_PAGES` gefüllt war.
+  //
+  // Geprüft wird auch, **wohin** sie führen — und ausgeloggt erreichbar müssen
+  // sie sein, sonst wäre die Fußzeile für genau die Person nutzlos, die noch kein
+  // Konto hat.
   const footer = page.getByRole('contentinfo')
   await expect(footer).toBeVisible()
-  await expect(footer.getByRole('link')).toHaveCount(0)
+  await expect(footer.getByRole('link', { name: 'Datenschutz' })).toHaveAttribute(
+    'href',
+    '/privacy'
+  )
+  await expect(footer.getByRole('link', { name: 'Impressum' })).toHaveAttribute('href', '/imprint')
+
+  await page.goto('/privacy')
+  await expect(page).toHaveURL(/\/privacy$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Datenschutzerklärung' })).toBeVisible()
+
+  await page.goto('/imprint')
+  await expect(page).toHaveURL(/\/imprint$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Impressum' })).toBeVisible()
 })
 
 test('Angemeldet ins Spiel, nach dem Abmelden wieder gesperrt (AC-13, AC-21)', async ({ page }) => {

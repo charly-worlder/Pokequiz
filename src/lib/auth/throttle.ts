@@ -95,6 +95,33 @@ export const LIMITS = {
    * es ein- oder zweimal; die Grenze ist für einen Menschen unerreichbar weit.
    */
   passwordUpdatePerIp: { limit: 10, windowSeconds: 900 },
+  /**
+   * Die Kontolöschung (PROJ-4, spec.md AC-15) — **beide Hälften gleich eng**.
+   *
+   * **Warum enger als `password-update` (10):** Die Löschung ist unumkehrbar.
+   * Wer sie auslöst, ist bereits angemeldet — der Angriff, gegen den das hier
+   * steht, ist nicht das Erraten eines Zugangs, sondern jemand, der an einem
+   * unbeaufsichtigten, angemeldeten Gerät sitzt und das Passwort durchprobiert.
+   * Sitzungen laufen laut PROJ-1 AC-5 bis zu 400 Tage, und PROJ-1 EC-12 hält
+   * fest, dass ein geteiltes Gerät genau dieses Risiko trägt. Fünf Versuche
+   * reichen keinem Rater und keinem legitimen Nutzer fehlen sie: Wer sein
+   * eigenes Passwort eingibt, tippt es nicht fünfmal falsch.
+   *
+   * **Warum ein eigener Scope und nicht `credentialsPerAccount` mitbenutzt:**
+   * Sonst verbraucht ein misslungener Löschversuch das Login-Budget desselben
+   * Nutzers und umgekehrt — zwei Vorgänge mit verschiedenem Zweck an einem
+   * Zähler. Genau das hat BUG-76 beim Passwort-Reset behoben.
+   *
+   * **Anders als bei `password-update` ist die Adresse hier bekannt**, bevor
+   * das Passwort geprüft wird: Die Sitzung liefert sie. Deshalb zählt hier
+   * wirklich **beides** — Verbindung und Konto —, statt nur die Verbindung.
+   *
+   * Diese Zahlen stehen in `spec.md` AC-15 **im Vertrag**, nicht nur hier. Dass
+   * sie bei `password-update` ausschließlich im Code standen, ist in
+   * `features/INDEX.md` als offener Punkt gelandet.
+   */
+  accountDeletePerIp: { limit: 5, windowSeconds: 900 },
+  accountDeletePerAccount: { limit: 5, windowSeconds: 900 },
 } as const
 
 type Limit = { limit: number; windowSeconds: number }
@@ -145,6 +172,7 @@ export type ThrottleScope =
   | 'password-reset'
   | 'token-confirm'
   | 'password-update'
+  | 'account-delete'
 
 /** Welche Grenze für welchen Vorgang gilt — an einer Stelle, statt verstreut. */
 function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
@@ -161,6 +189,11 @@ function limitsFor(scope: ThrottleScope): { ip: Limit; account: Limit } {
       // nachdem die Sitzung geprüft wurde — und diese Prüfung liegt bewusst
       // **hinter** der Drosselung. Der Konto-Wert bleibt ungenutzt.
       return { ip: LIMITS.passwordUpdatePerIp, account: LIMITS.credentialsPerAccount }
+    case 'account-delete':
+      // Hier wird der Konto-Wert **wirklich benutzt** — anders als bei den
+      // beiden Fällen darüber steht die Adresse vor der Passwortprüfung fest,
+      // weil die Sitzung sie liefert (PROJ-4, design.md → Behaviors & Access).
+      return { ip: LIMITS.accountDeletePerIp, account: LIMITS.accountDeletePerAccount }
     default:
       return { ip: LIMITS.credentialsPerIp, account: LIMITS.credentialsPerAccount }
   }
@@ -255,5 +288,47 @@ export async function settleSuccessfulLogin(email: string): Promise<void> {
   const failure = cleared.error ?? refunded.error
   if (failure) {
     console.error('Zähler konnte nach erfolgreicher Anmeldung nicht bereinigt werden', failure)
+  }
+}
+
+/**
+ * Erstattet **genau einen** Versuch auf beiden Zählern der Kontolöschung —
+ * ausschließlich, wenn das Passwort richtig war, die Löschung danach aber
+ * technisch fehlgeschlagen ist (PROJ-4, design.md → „Der Fehlerfall").
+ *
+ * **Warum es das braucht.** Gezählt wird vor der Prüfung (fail closed, wie
+ * überall hier). Ohne Erstattung machte eine fünfminütige Datenbankstörung aus
+ * dem Missbrauchsschutz eine Sperre gegen den rechtmäßigen Eigentümer: fünf
+ * Fehlversuche der Infrastruktur, und er kommt 15 Minuten lang nicht an die
+ * Löschung seines eigenen Kontos. Der Schutz träfe dann ausschließlich den, der
+ * alles richtig gemacht hat.
+ *
+ * **Warum es keinen Angriffsweg öffnet.** Der Aufrufer erreicht diese Funktion
+ * nur **hinter** der bestandenen Passwortprüfung. Wer das Passwort nicht kennt,
+ * kommt nie hierher — für ihn zählt jeder Versuch voll. Dieselbe Abwägung wie
+ * bei `settleSuccessfulLogin` (BUG-39/BUG-54): Ein bewiesener Eigentümer
+ * bekommt seinen eigenen Versuch zurück, mehr nicht.
+ *
+ * **Erstattung, nicht Löschung — auch beim Konto-Zähler.** `settleSuccessfulLogin`
+ * *löscht* den Konto-Schlüssel, weil dort ein geglückter Login beweist, dass die
+ * bisherigen Fehlversuche Vertipper waren. Hier beweist nichts dergleichen: Das
+ * Passwort war richtig, aber die vorangegangenen Fehlversuche können sehr wohl
+ * von jemand anderem am selben Gerät stammen. Zurückgegeben wird deshalb nur
+ * dieser eine Versuch.
+ */
+export async function refundAccountDeleteAttempt(email: string): Promise<void> {
+  const admin = createAdminClient()
+  const scope: ThrottleScope = 'account-delete'
+
+  const [ipRefund, accountRefund] = await Promise.all([
+    admin.rpc('refund_auth_attempt', { p_key: `${scope}:ip:${await clientIp()}` }),
+    admin.rpc('refund_auth_attempt', { p_key: accountKey(scope, email) }),
+  ])
+
+  // Wie bei `settleSuccessfulLogin`: Ein Fehler hier lässt nur den Zähler
+  // stehen. Das ist die sichere Richtung, also kein Wurf.
+  const failure = ipRefund.error ?? accountRefund.error
+  if (failure) {
+    console.error('Zähler konnte nach fehlgeschlagener Kontolöschung nicht erstattet werden', failure)
   }
 }
