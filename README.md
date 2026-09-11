@@ -40,10 +40,12 @@ Erneut abrufen lassen sie sich jederzeit mit `npx supabase status`.
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key aus Schritt 1>
-SUPABASE_SERVICE_ROLE_KEY=<service_role key aus Schritt 1>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key aus deiner eigenen Ausgabe in Schritt 1>
+SUPABASE_SERVICE_ROLE_KEY=<service_role key aus deiner eigenen Ausgabe in Schritt 1>
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
+
+**Die Schlüssel stammen aus deiner eigenen lokalen Instanz**, nicht aus diesem Repository — deshalb stehen sie hier nicht. `supabase start` erzeugt sie auf deinem Rechner; `npx supabase status` zeigt sie jederzeit wieder an. Es sind **Entwicklungswerte, keine Geheimnisse**: Die lokale Instanz signiert sie mit dem öffentlich dokumentierten Standard-Secret der Supabase-CLI, sie gelten nur für `127.0.0.1` und öffnen nichts außerhalb deines Rechners. Trotzdem ist `.env.local` per `.gitignore` ausgeschlossen — damit später niemand aus Gewohnheit echte Zugangsdaten committet.
 
 > **`SUPABASE_SERVICE_ROLE_KEY` trägt bewusst kein `NEXT_PUBLIC_`-Präfix.** Der Schlüssel hebt Row Level Security vollständig auf; mit dem Präfix würde Next.js ihn in das ausgelieferte JavaScript backen und an jeden Besucher ausliefern. Die vollständige Beschreibung jeder Variablen steht in `.env.local.example`.
 
