@@ -1,254 +1,170 @@
-# AI Engineering Kit
+# Pokémon Quiz — deutsche Namen
 
-> A spec-driven workflow for [Claude Code](https://docs.anthropic.com/en/docs/claude-code): turn an idea into a production-ready web app, one feature at a time — Requirements → Architecture → Tasks → Build → QA → Deploy.
+Ein Web-Quiz, in dem Spieler Pokémon am Bild erkennen und den richtigen **deutschen** Namen aus vier Optionen wählen. Jede richtige Antwort verlängert eine Serie, ein Fehler beendet den Lauf. Eine globale Weltrangliste macht aus dem Solo-Spiel einen Wettbewerb.
 
-This project was created with `npx create-ai-eng-app`. It ships a complete Next.js stack plus a set of Claude Code **Skills**, **Rules**, and **Sub-Agents** that drive each phase of the work. You steer; the skills do the heavy lifting and keep everything traceable.
+Warum es das gibt: Fast jedes Pokémon-Quiz im Netz fragt die **englischen** Namen ab — obwohl eine ganze Generation deutschsprachiger Fans ausschließlich „Glurak" und „Relaxo" kennt.
 
-**The AI Engineering Kit is the exclusive framework of the AI Engineering Accelerator** — Alex Sprogis' program that takes you from vibe-coder to AI engineer: shipping SaaS applications that are production-ready, secure, and good enough to sell.
+Gebaut als Praxisprüfung des **Accelerator-Kurses**, ausschließlich mit dem spec-getriebenen Workflow des AI Engineering Kits.
 
 ---
 
-## Quick Start
+## Schnellstart
 
-The scaffolder already ran `npm install` and a setup check. Open this project in the coding agent you installed it for — `.ai-eng-kit` → `agents` says which — and:
+Getestet unter Windows 11 mit Node 24 und Docker Desktop. Linux und macOS funktionieren identisch.
 
-```
-/verify-setup     Confirm the stack is wired and finish anything missing
-/init             Define your product and a prioritized feature map
-```
-
-> **Codex writes these differently:** `$verify-setup`, `$init` — or pick them from the `/skills` menu.
-> Every other agent uses `/`. Unsure? Run `/help` (or `$help`); it prints the syntax for this project.
-
-`/init` runs a **discovery interview**, one question at a time (always with a recommended answer you confirm or correct), then writes your **PRD** (`docs/PRD.md`) and a prioritized **feature map** (`features/INDEX.md`). From there you build feature by feature.
+**Voraussetzungen:** Node.js ≥ 20.9 (Anforderung von Next 16), Docker Desktop (läuft), Git.
 
 ```bash
-npm run dev       # Start the dev server → http://localhost:3000
+git clone https://github.com/charly-worlder/Pokequiz.git
+cd Pokequiz
+npm install
 ```
 
----
+**1. Supabase lokal starten** — lädt beim ersten Mal einige Container herunter, das dauert ein paar Minuten:
 
-## The Workflow
-
-Development runs in phases, each driven by a skill. Handoffs are always user-initiated — a skill suggests the next step, you run it when ready.
-
-```
-/init  →  /write-spec  →  /architecture  →  /tasks  →  /build  →  /qa  →  /deploy
-
-         /refine PROJ-X   revisit any spec, anytime
-         /e2e-tests        after /qa, lock in critical user journeys (optional)
-         /help             where am I, what's next?
+```bash
+npx supabase start
 ```
 
-| Skill | Command | What it does |
-|-------|---------|--------------|
-| Setup Check | `/verify-setup` | Verifies the stack, auto-fixes what's safe, reports what needs you (e.g. Supabase keys) |
-| Codebase Map | `/map` | For a project that already exists: writes what it is built with, how it is put together, its weak spots and a proposed feature map to `docs/codebase/` — evidence with file paths, read by `/init` |
-| Reverse Spec | `/reverse-spec` | For a feature that already runs: reads the criteria off the code, you confirm them block by block, `/qa` then verifies — the regression net a grown project is missing |
-| Refactor | `/refactor` | Splits one oversized, mixed-responsibility file into modules behind an unchanged facade — only where verified specs can prove behaviour survived |
-| Project Initializer | `/init` | One-time setup: creates the PRD + feature map via the discovery interview |
-| Feature Spec Writer | `/write-spec` | Writes a full spec for one feature (user stories, acceptance criteria, edge cases) |
-| Spec Refiner | `/refine PROJ-X` | Reopens an existing spec to improve, extend, or challenge it |
-| Solution Architect | `/architecture` | Designs a PM-friendly technical approach (decisions, no code) |
-| Task Planner | `/tasks` | Breaks the design into an ordered, leveled, parallelizable task list |
-| Builder | `/build` | Implements the feature end to end — schema, API, UI — working through `tasks.md` |
-| QA Engineer | `/qa` | Tests against acceptance criteria, writes unit tests, re-runs the build's integration tests as regression, runs a security audit |
-| E2E Test Engineer | `/e2e-tests` | Optional: Playwright tests for the few critical journeys that must never break |
-| DevOps | `/deploy` | Deploys to your host (Vercel or Hostinger) with production-ready checks and database promotion |
-| Help | `/help` | Context-aware guide: shows where you are and what to do next |
-| Audit | `/audit` | Anytime drift check: confirms INDEX, specs, the AC→Task→Test chain, and code all still match |
-| Security Check | `/security-check` | Non-destructive check of the live app: HTTPS, security headers, protected routes, no exposed secrets, Supabase RLS |
+Am Ende gibt der Befehl die Zugangsdaten der lokalen Instanz aus. Drei davon werden gleich gebraucht — je nach CLI-Version als Liste oder als JSON beschriftet:
 
----
+| gebraucht wird | heißt in der Ausgabe |
+|---|---|
+| die API-Adresse | `API URL` bzw. `API_URL` |
+| der öffentliche Schlüssel | `anon key` bzw. `ANON_KEY` |
+| der Server-Schlüssel | `service_role key` bzw. `SERVICE_ROLE_KEY` |
 
-## Spec-Driven Core
+Erneut abrufen lassen sie sich jederzeit mit `npx supabase status`.
 
-Every feature lives in its own folder `features/PROJ-X-name/`:
+**2. `.env.local` anlegen** — im Projektstammverzeichnis, mit genau diesen vier Zeilen:
 
-| File | Created by | Role |
-|------|-----------|------|
-| `spec.md` | `/write-spec` | The **contract** — WHAT the feature does. Read-only during `/build`. |
-| `design.md` | `/architecture` | The **technical design** — HOW it's built. |
-| `tasks.md` | `/tasks` | The **ordered build plan**, with file-disjoint `[P]` tasks for parallel work. |
-| `qa-report.md` | `/qa` | The **test report**, keyed by acceptance-criterion ID. |
-
-**AC-IDs are the traceability backbone.** Every acceptance criterion in `spec.md` gets a stable ID (`AC-1`, `AC-2`, …; edge cases `EC-1`, …). Tasks reference the AC-IDs they fulfill, and `qa-report.md` reports per AC-ID — chaining **AC → Task → Test**.
-
-**Native parallel build.** `/build` works `tasks.md` level by level. Within a level, file-disjoint `[P]` tasks fan out to parallel sub-agents (each isolated in its own git worktree); the main agent then integrates, verifies against the level's AC-IDs, and advances. No special tool or keyword — it runs in any Claude Code session.
-
----
-
-## Test vs. Live Data (Supabase)
-
-So you never develop against real user data, `/init` asks how you want to separate environments and records the choice in `docs/PRD.md` → Constraints. Every later skill reads it from there.
-
-| Strategy | What it means | Cost |
-|----------|---------------|------|
-| **local** *(recommended, default)* | Supabase runs on your machine via **Docker** while you build; the schema is migrated to a hosted live project at `/deploy`. Needs Docker + the Supabase CLI. | Free |
-| **two-projects** | A separate hosted **dev** project to test in and a **prod** project for real users. No Docker needed. | Free tier covers both |
-| **single** | One hosted Supabase project — test and live are the same. Simplest, but no safety net. | Free |
-| **branching** | One Pro project with an always-on **staging** branch, promoted to live with a Merge. | Supabase Pro (~$35/mo) |
-
-`.env.local` always holds your **test** keys (local Docker instance / dev project / staging branch / the single project) — never live keys. Schema changes are captured as `supabase/migrations/*.sql` and promoted to production during `/deploy` (`supabase db push` for `local`). For `branching`, `/deploy` previews the schema diff in plain language and flags anything destructive before you Merge.
-
-Building frontend-only (no backend)? `/init` records "localStorage only" and skips all of the above.
-
----
-
-## Feature Tracking
-
-All features are tracked in `features/INDEX.md`. Each row links to the feature **folder**:
-
-| ID | Feature | Status | Spec |
-|----|---------|--------|------|
-| PROJ-1 | User Login | Deployed | [Folder](features/PROJ-1-user-login/) |
-| PROJ-2 | Dashboard | In Progress | [Folder](features/PROJ-2-dashboard/) |
-
-Status flow: **Roadmap → Planned → Architected → Tasked → In Progress → In Review → Approved → Deployed**. Every skill reads this file at start and updates it when done, preventing duplicate work.
-
----
-
-## Tech Stack
-
-| Category | Tool | Why |
-|----------|------|-----|
-| **Framework** | Next.js 16 (App Router) | React + Server Components |
-| **Language** | TypeScript | Type safety |
-| **Styling** | Tailwind CSS | Utility-first CSS |
-| **UI Library** | shadcn/ui | Copy-paste, customizable components |
-| **Backend** | Supabase (optional) | PostgreSQL + Auth + Storage |
-| **Deployment** | Vercel or Hostinger | GitHub-connected auto-deploy |
-| **Validation** | Zod + react-hook-form | Runtime validation |
-| **Testing** | Vitest + Playwright | Unit/integration + E2E |
-
----
-
-## Project Structure
-
-```
-.
-├── CLAUDE.md / AGENTS.md           Auto-loaded project context (map + managed block)
-│                                   Exactly one of them carries content — see below
-├── .claude/                        (Claude Code; other agents use their own folder)
-│   ├── settings.json               Permissions (committed)
-│   ├── rules/                      Auto-applied rules
-│   │   ├── general.md                  Git workflow, feature tracking, status updates
-│   │   └── security.md                 Secrets, headers, auth
-│   ├── skills/                     Invocable workflows (/command)
-│   │   ├── verify-setup/SKILL.md
-│   │   ├── init/SKILL.md
-│   │   ├── write-spec/SKILL.md
-│   │   ├── refine/SKILL.md
-│   │   ├── architecture/SKILL.md
-│   │   ├── tasks/SKILL.md
-│   │   ├── build/SKILL.md
-│   │   ├── qa/SKILL.md
-│   │   ├── e2e-tests/SKILL.md
-│   │   ├── deploy/SKILL.md
-│   │   └── help/SKILL.md
-│   └── agents/
-│       └── qa-engineer.md          Sub-agent config (model, tools, limits)
-├── features/                       One folder per feature
-│   ├── INDEX.md                        Status tracking
-│   ├── README.md                       Feature-folder format
-│   └── PROJ-X-name/                    spec.md · design.md · tasks.md · qa-report.md
-├── docs/
-│   ├── PRD.md                       Product Requirements Document
-│   ├── data-model.md                App-wide data model (entities + relationships)
-│   └── production/                  Production setup guides
-├── supabase/
-│   └── migrations/                  Schema changes as .sql files
-├── tests/                          Playwright E2E tests (added by /e2e-tests)
-├── src/
-│   ├── app/                        Pages (Next.js App Router)
-│   ├── components/ui/              shadcn/ui components (never recreate these)
-│   ├── hooks/                      Custom React hooks
-│   └── lib/                        Utilities (supabase.ts, utils.ts)
-└── public/                         Static files
+```bash
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key aus Schritt 1>
+SUPABASE_SERVICE_ROLE_KEY=<service_role key aus Schritt 1>
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
+> **`SUPABASE_SERVICE_ROLE_KEY` trägt bewusst kein `NEXT_PUBLIC_`-Präfix.** Der Schlüssel hebt Row Level Security vollständig auf; mit dem Präfix würde Next.js ihn in das ausgelieferte JavaScript backen und an jeden Besucher ausliefern. Die vollständige Beschreibung jeder Variablen steht in `.env.local.example`.
+
+**3. Datenbankschema anlegen** — spielt die 20 Migrationen aus `supabase/migrations/` ein:
+
+```bash
+npx supabase db reset
+```
+
+**4. Starten:**
+
+```bash
+npm run dev
+```
+
+→ **http://localhost:3000**
+
+Es gibt **keine E-Mail-Bestätigung** bei der Registrierung. Eine erfundene Adresse wie `test@example.com` genügt, Passwort mindestens 8 Zeichen. Danach kann sofort gespielt werden.
+
+### Passwort-Reset testen
+
+Die Mail wird **nicht versendet**, sondern von Mailpit abgefangen, das mit `supabase start` mitläuft:
+
+→ **http://localhost:54324**
+
+Dort liegt die Nachricht mit dem Reset-Link. Ein echter Versand bräuchte einen eigenen SMTP-Dienst und eine verifizierte Absenderdomain — siehe `features/INDEX.md` → Deploy-Blocker.
+
+### Auf dem Handy testen
+
+Der Dev-Server ist im lokalen Netz erreichbar, die Ausgabe von `npm run dev` nennt die Adresse unter „Network". Damit Next die Anfragen nicht als fremden Ursprung blockiert, muss diese IP in `next.config.ts` unter `allowedDevOrigins` stehen — dort ist aktuell `192.168.0.165` eingetragen und muss gegen die eigene getauscht werden.
+
 ---
 
-## How It Works Under the Hood
+## Zum Supabase-Setup
 
-- **Skills** are structured workflows your agent discovers automatically. Most run inline (live interview / oversight); `/build` forks isolated sub-agents for parallel tasks and `/qa` fans out verification lanes. Where your agent has no sub-agents, the skills say so and work sequentially instead.
-- **Rules** are the project-wide standards — workflow discipline, git conventions, working language, security. They are loaded in every session, so they apply to every skill without anyone loading them by hand.
-- **The memory file** is auto-loaded every session with the tech stack, conventions, and pointers to the PRD and feature index.
+**Die Entwicklung läuft gegen eine lokale Supabase-Instanz in Docker.** Das ist die in `docs/PRD.md` festgelegte Environment-Strategie (`local`) und der Weg, den die Anleitung oben beschreibt.
 
-**Where those live depends on your agent** — same content, each in the place that agent reads:
+**Zusätzlich existiert ein kostenloses Supabase-Cloud-Projekt** (`Pokequiz-PRO`, Region eu-central-1 / Frankfurt). Es trägt seit dem 2026-09-11 dasselbe Schema, eingespielt mit `supabase db push` — vier Tabellen mit Row Level Security, alle Trigger, `pg_cron`. Verifiziert über einen Schema-Dump, nicht über die Erfolgsmeldung des Befehls.
 
-| agent | skills | rules |
+**Die App verbindet sich zur Laufzeit nicht dorthin**, und das ist Absicht. Für einen Prüfer ist die lokale Variante die vollständigere: Der Passwort-Reset funktioniert dort über Mailpit, während der eingebaute Versand eines Free-Tier-Projekts nur an Adressen im Projektteam zustellt — bei 2 Mails pro Stunde. Umgeschaltet würde allein über `NEXT_PUBLIC_SUPABASE_URL`; einen Schalter im Code gibt es nicht.
+
+---
+
+## Was das Produkt kann
+
+| Feature | Beschreibung | Spec |
 |---|---|---|
-| Claude Code | `.claude/skills/` | `.claude/rules/` |
-| Codex | `.codex/skills/` | inside the memory file |
-| Cursor | `.cursor/skills/` | `.cursor/rules/*.mdc` |
-| GitHub Copilot | `.github/skills/` | `.github/instructions/*.instructions.md` |
-| Antigravity | `.agents/skills/` | `.agents/rules/` |
+| **PROJ-1** — Benutzerkonto & Login | Registrierung und Anmeldung per E-Mail/Passwort, eindeutiger Trainername als öffentlicher Anzeigename, Passwort-Reset, zweiteilige Missbrauchs-Drosselung je Verbindung und je Konto | [spec](features/PROJ-1-user-login/spec.md) |
+| **PROJ-2** — Pokémon-Quiz | Eine **serverseitig geführte** Runde: Der Server vergibt die Fragen, prüft die Antworten, zählt die Serie und misst die Zeit. Bilder und deutsche Namen kommen von der PokeAPI | [spec](features/PROJ-2-pokemon-quiz/spec.md) |
+| **PROJ-3** — Weltrangliste | Globale Top-5 nach Serie absteigend, bei Gleichstand nach Zeit aufsteigend, mit dem eigenen Ergebnis auch außerhalb der Top-5 | [spec](features/PROJ-3-leaderboard/spec.md) |
+| **PROJ-4** — Kontolöschung | Kontobereich `/account` mit allem, was gespeichert ist, und der endgültigen Löschung samt Runden und Ranglisteneintrag (Art. 15 und 17 DSGVO) | [spec](features/PROJ-4-account-deletion/spec.md) |
 
-**One file carries your project's context.** In a Claude-Code-only project that is `CLAUDE.md`; with any other agent it is `AGENTS.md`, and the remaining memory files are generated pointers to it. Edit the one with content — the pointers are overwritten on every update.
+Status aller Features: [`features/INDEX.md`](features/INDEX.md).
 
-**One thing is not the same everywhere.** `.claude/settings.json` *blocks* reading `.env*` files and force-pushing. Only Claude Code enforces it. With the other agents the same rules are instructions your agent follows — real, but not a wall it cannot cross.
+### Zuordnung zu den Prüfungsanforderungen
 
-### Recommended (optional): live API docs
+- **Feature 1 (Pflicht) — Sign-up und Login über Supabase, Row Level Security:** PROJ-1. RLS ist auf **vier** Tabellen aktiv (`profiles`, `runs`, `active_runs`, `auth_throttle`).
+- **Feature 2 (Pflicht) — Integration zu einem externen Tool:** die **PokeAPI**, ohne Schlüssel und kostenlos. Im Vertrag als **PROJ-2, AC-20 und AC-31**. Die Anfragen stellt der Server, nicht der Browser: Sonst ginge bei jeder Frage die IP eines Spielers an ein Nicht-EU-CDN. Bereits Abgerufenes wird zwischengespeichert, wie es die Fair-Use-Policy der API verlangt.
+- **Feature 3 (frei) — der eigentliche Nutzen:** PROJ-2, das Quiz selbst. PROJ-3 und PROJ-4 sind darüber hinausgegangen.
 
-Memorized API knowledge goes stale. Connecting a live-docs MCP server like **[Context7](https://github.com/upstash/context7)** lets `/architecture` and `/build` pull the *current* API surface of libraries (Supabase, Stripe, Next.js, …) instead of relying on memory — fewer outdated-API bugs. It's entirely optional: every skill works without it and never blocks if it's absent. To enable it, add Context7 as an MCP server in your Claude Code settings.
-
-- **State lives in files, not memory.** Every skill re-reads `features/INDEX.md` and the relevant feature folder at start — nothing is lost after a new session or context compaction.
-- **Context is layered.** `CLAUDE.md` + rules (always) → `SKILL.md` (when invoked) → feature spec (on demand) → `docs/production/` (only when referenced).
-- **Context is isolated.** Heavy work runs in forked sub-agents with their own context window, so noise from one task doesn't pollute another.
-- **Always read, never guess.** A global rule enforces reading a file before modifying it and verifying paths/APIs by reading — preventing hallucinated code references.
+PROJ-2 trägt **42 Akzeptanzkriterien** statt der empfohlenen 8–12. Der Grund steht im Decision Log: Die erste Fassung führte die Runde im Browser, und ein einziger manipulierter Aufruf trug eine Serie von 386 in die Rangliste ein (BUG-19). `/refine PROJ-2` hat den Vertrag daraufhin auf eine serverseitig geführte Runde umgestellt — das kostete AC-32 bis AC-43.
 
 ---
 
-## Scripts
+## Technik
+
+| | |
+|---|---|
+| **Framework** | Next.js 16 (App Router), React 19, TypeScript |
+| **Styling** | Tailwind CSS 4 + shadcn/ui |
+| **Backend** | Supabase — PostgreSQL, Auth, Row Level Security |
+| **Validierung** | Zod + react-hook-form |
+| **Tests** | Vitest (Unit) · Playwright (E2E, drei Engines) |
+| **Externe Datenquelle** | PokeAPI (kein API-Key) |
+
+### Befehle
 
 ```bash
-npm run dev          # Development server (localhost:3000)
-npm run build        # Production build
-npm run start        # Production server
-npm run lint         # ESLint
-npm test             # Vitest: unit + integration tests
-npm run test:e2e     # Playwright: E2E tests (added by /e2e-tests)
-npm run test:all     # Both test suites
+npm run dev        # Entwicklungsserver auf localhost:3000
+npm run build      # Produktions-Build
+npm run lint       # ESLint
+npm test           # Unit-Tests (Vitest)
+npm run test:e2e   # E2E-Tests (Playwright) — startet den Dev-Server selbst
+npm run test:all   # beides nacheinander
 ```
 
-> Playwright browsers are **not** installed during setup. The first `/e2e-tests` run installs the browser binary (~300 MB) once — keeping everyday setup fast.
+Für `npm run test:e2e` müssen die Browser einmalig installiert werden: `npx playwright install`. Die Suite läuft in Chromium, Firefox und Mobile Safari.
+
+Stand des letzten vollständigen Laufs: **Lint 0 · TypeScript 0 · Unit 316/316 · Build erfolgreich · E2E 203 bestanden, 1 übersprungen** (ein dokumentierter WebKit-Fall, festgehalten in `features/PROJ-4-account-deletion/qa-report.md`).
 
 ---
 
-## Production Guides
+## Wie dieses Projekt entstanden ist
 
-Standalone guides in `docs/production/`, surfaced by `/deploy` when relevant:
+Ausschließlich über den spec-getriebenen Workflow des AI Engineering Kits. Jedes Feature hat denselben Weg genommen:
 
-| Guide | Setup | What it does |
-|-------|-------|--------------|
-| [Error Tracking](docs/production/error-tracking.md) | 5 min | Sentry integration for automatic error capture |
-| [Security Headers](docs/production/security-headers.md) | 2 min | XSS, clickjacking, MIME-sniffing protection |
-| [Performance](docs/production/performance.md) | 10 min | Lighthouse checks, image optimization, caching |
-| [Database Optimization](docs/production/database-optimization.md) | 15 min | Indexing, N+1 prevention, query optimization |
-| [Rate Limiting](docs/production/rate-limiting.md) | 10 min | Upstash Redis for API abuse prevention |
+```
+/write-spec  →  /architecture  →  /tasks  →  /build  →  /qa
+```
+
+Pro Feature liegen vier Artefakte in `features/PROJ-X-name/`:
+
+| Datei | Inhalt |
+|---|---|
+| `spec.md` | der Vertrag — Akzeptanzkriterien mit stabilen IDs (`AC-1`, `AC-2`, …) und Edge Cases. Während `/build` **read-only** |
+| `design.md` | der technische Entwurf samt Decision Log |
+| `tasks.md` | die geordnete Aufgabenliste, jede Aufgabe auf AC-IDs abgebildet |
+| `qa-report.md` | der Prüfbericht, gegen dieselben AC-IDs |
+
+Die Kette **AC → Task → Test** ist über alle vier Features lückenlos. Verifiziert wurde von `qa-engineer`-Subagenten in Kontexten, die den Bau nicht kannten — bei PROJ-4 in fünf Durchgängen mit je drei unabhängigen Bahnen.
+
+**Die QA-Berichte sind kumulativ:** Ältere Durchgänge bleiben unverändert stehen, samt ihrer offenen Kästchen. Gültig ist immer der **unterste** Abschnitt. Ein Bericht, der nachträglich grün geschrieben wird, wäre nichts mehr wert.
+
+Bekannte, bewusst getragene Restrisiken und die offenen Punkte vor einem echten Livegang stehen gesammelt in [`features/INDEX.md`](features/INDEX.md) → Deploy-Blocker.
+
+> **Impressum und Datenschutzerklärung tragen Platzhaltertext.** Die App geht vorerst nicht live; jede fehlende Angabe ist auf den Seiten sichtbar markiert. Vor einem öffentlichen Start müssen sie zwingend ersetzt werden — ein unvollständiges Impressum ist nach DDG abmahnfähig, und eine Datenschutzerklärung mit Platzhaltern erfüllt Art. 13 DSGVO nicht.
 
 ---
 
-## Customize It
+## Rechtliches
 
-This is your project — adapt it freely:
+Nicht-kommerzielles Fan-Projekt. **Pokémon** sowie die Namen und Abbildungen der Pokémon sind Marken bzw. urheberrechtlich geschützte Werke ihrer jeweiligen Inhaber (Nintendo, Creatures Inc., GAME FREAK Inc., The Pokémon Company). Es besteht keine Verbindung zu diesen Unternehmen.
 
-1. **Your memory file** (`CLAUDE.md` or `AGENTS.md` — the one with content) — project-specific conventions and commands. Keep the managed block between the markers intact; it's refreshed on kit updates.
-2. **docs/PRD.md** — product vision and roadmap
-3. **Your agent's rules folder** — coding standards for your team
-4. **Your agent's skills folder** — tweak the workflows themselves. Note that `npx create-ai-eng-app update` regenerates the kit's own skills; put your own in separate folders, they are kept.
-5. **.claude/settings.json** — permissions (Claude Code)
-
----
-
-## Author
-
-Created by **Alex Sprogis** — AI Product Engineer & Content Creator.
-
-- [YouTube](https://www.youtube.com/@alex.sprogis)
-- [Website](https://alexsprogis.de)
-
-## License
-
-MIT License — free to use for your projects.
+Das AI Engineering Kit, mit dem dieses Projekt gebaut wurde, stammt von **Alex Sprogis** ([YouTube](https://www.youtube.com/@alex.sprogis) · [Website](https://alexsprogis.de)) und steht unter MIT-Lizenz.
